@@ -1,0 +1,10 @@
+<!doctype html><meta charset=utf-8><style>html,body{margin:0;height:100%%}iframe{border:0;width:1440px;height:980px;display:block}</style>
+<iframe id=f sandbox="allow-scripts allow-forms allow-downloads" src="index.html"></iframe>
+<script>
+// 模拟 AstrBot 父窗口：只应答 ready / request，完全不支持开新窗口（与真实环境一致）
+window.addEventListener("message", (e) => {
+  const m = e.data; if (!m || m.channel !== "astrbot-plugin-page") return;
+  if (m.kind === "ready") { e.source.postMessage({channel:"astrbot-plugin-page", kind:"context", context:{isDark:false, locale:"zh-CN", i18n:{}}}, "*"); }
+  if (m.kind === "request") { e.source.postMessage({channel:"astrbot-plugin-page", kind:"response", requestId:m.requestId, ok:true, data:{ok:true}}, "*"); }
+});
+</script>

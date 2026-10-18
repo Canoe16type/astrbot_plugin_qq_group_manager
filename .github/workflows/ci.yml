@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 自检（Python ${{ matrix.python-version }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 安装校验依赖
+        run: python -m pip install --upgrade pip pyyaml
+
+      - name: 语法编译
+        run: python -m compileall -q *.py tools tests
+
+      - name: 元数据与配置校验
+        run: python tools/check_metadata.py
+
+      - name: 词库自检
+        run: python tools/selftest_lexicon.py
+
+      - name: 变体检测自检
+        run: python tools/selftest_variant.py
+
+      - name: 分模块自检（无 AstrBot 环境时自动跳过 B 层）
+        run: |
+          python tools/selftest_mod_integration.py
+          python tools/selftest_admin_register.py
+
+      - name: 仓库卫生检查
+        run: |
+          set -e
+          if git grep -n "/root/" -- '*.py' '*.md' '*.yaml' '*.json'; then
+            echo "::error::提交内容里出现本机绝对路径"
+            exit 1
+          fi
+          if git ls-files | grep -qE '__pycache__|\.pyc$|lexicon_state\.json|plugin_data/'; then
+            echo "::error::误提交了编译产物 / 运行时状态"
+            exit 1
+          fi
+          echo "卫生检查通过"

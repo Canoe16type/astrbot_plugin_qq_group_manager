@@ -1,0 +1,561 @@
+{
+  "basic": {
+    "description": "基础功能",
+    "type": "object",
+    "items": {
+      "enable_mute": {
+        "description": "启用禁言指令",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 /群管 禁言、/群管 解禁、/群管 查禁言 不生效"
+      },
+      "default_mute_reason": {
+        "description": "默认禁言理由",
+        "type": "string",
+        "default": "违反群规",
+        "hint": "/群管 禁言 未写理由时使用"
+      },
+      "target_group_openids": {
+        "description": "生效群范围（OpenID）",
+        "type": "list",
+        "default": [],
+        "hint": "留空＝所有群生效；填入后只管理这些群"
+      },
+      "enable_welcome": {
+        "description": "成员入群欢迎",
+        "type": "bool",
+        "default": true,
+        "hint": "成员入群申请通过后，在本群发一条欢迎语。与机器人自己进群无关"
+      },
+      "enable_group_add_intro": {
+        "description": "机器人入群自我介绍",
+        "type": "bool",
+        "default": true,
+        "hint": "机器人被拉进群时立刻发一条功能介绍（走官方入群事件，不受“24 小时内有人 @ 过我”限制）。发送成功则本群不再重发"
+      },
+      "enable_new_group_welcome": {
+        "description": "机器人入群·首条消息兜底",
+        "type": "bool",
+        "default": true,
+        "hint": "仅当入群事件没收到（重启丢事件 / 插件装到已有群）或事件发送失败时，用本群第一条消息补发一次"
+      }
+    },
+    "hint": "所有指令先经过这里的开关与群范围过滤"
+  },
+  "admin": {
+    "description": "权限判定",
+    "type": "object",
+    "items": {
+      "admin_mode": {
+        "description": "判定模式",
+        "type": "string",
+        "options": [
+          "any",
+          "all"
+        ],
+        "default": "any",
+        "hint": "any＝满足任一条件；all＝全部满足"
+      },
+      "admin_use_astrbot_admin": {
+        "description": "使用 AstrBot 管理员名单",
+        "type": "bool",
+        "default": true,
+        "hint": "WebUI 中配置的管理员 ID"
+      },
+      "admin_use_qq_role": {
+        "description": "使用 QQ 群角色",
+        "type": "bool",
+        "default": true,
+        "hint": "群主 / 群管理员视为管理员"
+      },
+      "admin_openids": {
+        "description": "额外管理员 OpenID",
+        "type": "list",
+        "default": [],
+        "hint": "名单内 OpenID 也视为管理员"
+      }
+    },
+    "hint": "多条件可组合，组合方式由 admin_mode 决定"
+  },
+  "recall": {
+    "description": "撤回功能",
+    "type": "object",
+    "items": {
+      "enable_recall": {
+        "description": "启用撤回指令",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 /群管 撤回 不生效"
+      },
+      "recall_history_max_per_group": {
+        "description": "每群撤回历史上限（条）",
+        "type": "int",
+        "default": 0,
+        "hint": "0＝不限。超限自动裁剪最旧记录"
+      }
+    },
+    "hint": "撤回指令与本地历史留存"
+  },
+  "approval": {
+    "description": "入群审批",
+    "type": "object",
+    "items": {
+      "enable_approval": {
+        "description": "启用审批指令",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 /群管 审批、/群管 通过、/群管 拒绝 不生效"
+      },
+      "enable_join_request_notify": {
+        "description": "新申请群内通知",
+        "type": "bool",
+        "default": true,
+        "hint": "依赖轮询；机器人需为群管理员"
+      },
+      "poll_interval": {
+        "description": "轮询间隔（秒）",
+        "type": "int",
+        "default": 30,
+        "hint": "即时生效。接口限制 30 QPM，建议 ≥ 10 秒，过小会自动兜底为 10 秒"
+      }
+    },
+    "hint": "轮询拉取申请、群内通知与审批指令开关"
+  },
+  "moderation": {
+    "description": "群规审核",
+    "type": "object",
+    "items": {
+      "enable": {
+        "description": "启用举报审核",
+        "type": "bool",
+        "default": true,
+        "hint": "关闭后 /群管 举报 不处理"
+      },
+      "moderation_provider_id": {
+        "description": "审核模型",
+        "type": "string",
+        "_special": "select_provider",
+        "default": "",
+        "hint": "留空＝用「当前对话模型」：群内审核用该群正在用的对话模型，面板试跑也按同一个群解析（面板试跑结果里会显示本次实际用到的模型）"
+      },
+      "vision_provider_id": {
+        "description": "多模态审核模型",
+        "type": "string",
+        "default": "",
+        "_special": "select_provider",
+        "hint": "留空＝用「当前对话模型」。消息含图片时才调用；模型不支持图片时自动降级为纯文本判定"
+      },
+      "default_mute_seconds": {
+        "description": "兜底禁言时长（秒）",
+        "type": "int",
+        "default": 600,
+        "hint": "判定违规但未命中群规时使用。默认 600"
+      },
+      "common_ban": {
+        "description": "通用禁止项（所有群共享）",
+        "type": "text",
+        "default": "",
+        "hint": "群规之前追加，跨群共享更省 token。留空则仅靠群规与模型通用尺度"
+      },
+      "price_per_1k_tokens": {
+        "description": "模型单价（元/千 token）",
+        "type": "float",
+        "default": 0.0,
+        "hint": "仅用于面板统计花费，不影响审核。不填按 0 计"
+      }
+    },
+    "hint": "留空模型＝用当前会话模型；群规、话术、开关按群在管理面板配置（变体检测、待办队列、复犯累进同样在面板「举报设置」里按群独立配置）"
+  },
+  "lexicon": {
+    "description": "词库（关键词维度）",
+    "type": "object",
+    "items": {
+      "upstream_url": {
+        "description": "上游词库地址（一键获取用）",
+        "type": "string",
+        "default": "",
+        "hint": "默认**留空**：插件不内置任何下载链接，词表请自行寻找或自行编写。只支持 http/https、一行一条的纯词表（UTF-8 / GBK 自动识别，单次上限 2 MB）。也可以在面板「词典 → 一键获取上游词库」里临时填地址，只对那一次生效"
+      },
+      "upstream_mirror": {
+        "description": "GitHub 加速地址（可选，直连失败才用）",
+        "type": "string",
+        "default": "",
+        "hint": "填前缀或模板都行：https://ghproxy.net/ 或 https://ghproxy.net/{url}。留空＝不启用。注意加速站是第三方服务，内容理论上有被篡改的可能，只在 GitHub 连不上时兜底；也能把上游地址直接换成 jsDelivr 形式（https://cdn.jsdelivr.net/gh/用户/仓库@分支/路径），不必走加速"
+      },
+      "upstream_force_mirror": {
+        "description": "强制只走加速（跳过直连）",
+        "type": "bool",
+        "default": false,
+        "hint": "GitHub 完全连不上时勾上，省掉一次必然失败的直连等待；能直连就别勾"
+      },
+      "upstream_category": {
+        "description": "拉下来的词条默认归类",
+        "type": "string",
+        "options": [
+          "other",
+          "ad",
+          "abuse",
+          "porn",
+          "illegal",
+          "spam"
+        ],
+        "default": "other",
+        "hint": "词表本身没写分类时按这里归类；文件里写了 ad: 词语 这种前缀则以文件内为准"
+      },
+      "upstream_auto_enable": {
+        "description": "获取后自动启用",
+        "type": "bool",
+        "default": false,
+        "hint": "默认不启用：上游通用词表误伤率通常高于内置库，建议先在「词典 → 命中测试」跑一遍、配好白名单再开"
+      }
+    },
+    "hint": "面板「词典」页负责看/开关/上传词库；这里只决定「一键获取上游词库」从哪儿拉、拉下来归哪类"
+  },
+  "templates": {
+    "description": "消息模板",
+    "type": "object",
+    "items": {
+      "msg_not_admin": {
+        "description": "通用 · 非管理员提示",
+        "type": "text",
+        "default": "抱歉，你没有权限执行群管指令哦～",
+        "hint": "变量：{username}"
+      },
+      "msg_help": {
+        "description": "通用 · 帮助信息",
+        "type": "text",
+        "default": "【QQ 群管指令】\n全部指令都在指令组里，写法是 /群管 + 空格 + 子指令；单独发 /群管 会列出指令树。\n/群管 禁言 @用户 时长 [理由]（如：/群管 禁言 @某人 10分钟 刷屏）\n/群管 解禁 @用户\n/群管 查禁言\n/群管 审批\n/群管 通过 序号\n/群管 拒绝 序号 理由\n/群管 撤回 [消息ID]（先引用目标消息再发 /群管 撤回）\n/群管 举报（先引用违规消息，所有人可用）\n/群管 禁言历史 [条数|汇总] [@用户] 查看禁言记录\n/群管 群规 查看｜/群管 群规 添加 规则名｜说明｜时长｜/群管 群规 删除 序号｜/群管 群规 清空\n/群管 审核 状态｜试跑 开|关｜巡检 开|关｜测试 <内容>\n/群管 群名 刷新本群群名（需群信息接口权限）\n/群管 管理登记 加入提醒名单｜列表｜取消\n/群管 帮助 查看这份完整说明",
+        "hint": "变量：{bot_name}"
+      },
+      "msg_api_error": {
+        "description": "通用 · 接口错误兜底",
+        "type": "text",
+        "default": "调用 QQ 接口失败：{error}",
+        "hint": "变量：{error}"
+      },
+      "msg_mute_success": {
+        "description": "禁言 · 成功",
+        "type": "text",
+        "default": "已禁言 {username}，时长 {duration_text}，理由：{reason}",
+        "hint": "变量：{username} {seconds} {minutes} {duration_text}"
+      },
+      "msg_unmute_success": {
+        "description": "禁言 · 解禁成功",
+        "type": "text",
+        "default": "已解除 {username} 的禁言",
+        "hint": "变量：{username}"
+      },
+      "msg_mute_need_at": {
+        "description": "禁言 · 未 @ 用户",
+        "type": "text",
+        "default": "请 @ 要禁言的用户，例如：/群管 禁言 @某人 10分钟"
+      },
+      "msg_duration_invalid": {
+        "description": "禁言 · 时长格式错误",
+        "type": "text",
+        "default": "禁言时长格式不对哦，支持：30秒 / 5分钟 / 2小时 / 1天 或纯数字（秒）"
+      },
+      "msg_mute_self": {
+        "description": "禁言 · 不能禁言自己",
+        "type": "text",
+        "default": "不能禁言自己哦～"
+      },
+      "msg_mute_failed": {
+        "description": "禁言 · 接口失败",
+        "type": "text",
+        "default": "禁言失败：{error}",
+        "hint": "变量：{error}"
+      },
+      "msg_mute_list": {
+        "description": "禁言 · 当前禁言列表",
+        "type": "text",
+        "default": "当前被禁言成员：\n{list}",
+        "hint": "变量：{list}（每行：昵称 · 到期时间）"
+      },
+      "msg_mute_list_empty": {
+        "description": "禁言 · 列表为空",
+        "type": "text",
+        "default": "当前群内没有成员处于禁言状态"
+      },
+      "msg_mute_history_list": {
+        "description": "禁言 · 历史列表",
+        "type": "text",
+        "default": "【禁言历史】最近 {count} 条（最新在前）：\n{list}",
+        "hint": "变量：{count} {list}"
+      },
+      "msg_mute_history_summary": {
+        "description": "禁言 · 历史汇总",
+        "type": "string",
+        "default": "【禁言历史·汇总】共 {count} 条记录：\n{list}",
+        "hint": "变量：{count} {list}"
+      },
+      "msg_mute_history_empty": {
+        "description": "禁言 · 历史为空",
+        "type": "text",
+        "default": "本群还没有禁言历史记录"
+      },
+      "msg_mute_history_user": {
+        "description": "禁言 · 单用户历史",
+        "type": "text",
+        "default": "【禁言历史·用户 {openid}】最近 {count} 条（最新在前）：\n{list}",
+        "hint": "变量：{openid} {count} {list}"
+      },
+      "msg_mute_history_user_summary": {
+        "description": "禁言 · 单用户汇总",
+        "type": "text",
+        "default": "【禁言历史·用户汇总 {openid}】共 {count} 条记录：\n{list}",
+        "hint": "变量：{openid} {count} {list}"
+      },
+      "msg_mute_history_user_empty": {
+        "description": "禁言 · 单用户无记录",
+        "type": "text",
+        "default": "未找到用户 {openid} 的禁言记录",
+        "hint": "变量：{openid}"
+      },
+      "msg_recall_ok": {
+        "description": "撤回 · 成功",
+        "type": "text",
+        "default": "已撤回该消息 ✅"
+      },
+      "msg_recall_failed": {
+        "description": "撤回 · 接口失败",
+        "type": "text",
+        "default": "撤回失败：{error}",
+        "hint": "变量：{error}"
+      },
+      "msg_recall_invalid_id": {
+        "description": "撤回 · 消息 ID 无效",
+        "type": "text",
+        "default": "撤回失败：该消息的引用索引无法被撤回接口识别。若消息在 2 分钟内，请直接回复(引用)该消息后重试，机器人会按原文匹配真实消息 ID。"
+      },
+      "msg_recall_need_quote": {
+        "description": "撤回 · 未指定消息",
+        "type": "text",
+        "default": "没有找到要撤回的消息。请长按要撤回的那条消息 → 选择「回复」，再发送 /群管 撤回 即可（不用填消息ID，普通人看不到消息ID的）。若你是管理员想用 ID 撤回，ID 可在 AstrBot 的群管面板撤回历史里查看。"
+      },
+      "msg_recall_timeout": {
+        "description": "撤回 · 超过 2 分钟",
+        "type": "text",
+        "default": "撤回失败：该消息发送已超过 2 分钟，无法撤回"
+      },
+      "msg_recall_no_perm": {
+        "description": "撤回 · 无权限",
+        "type": "text",
+        "default": "撤回失败：机器人没有操作权限（需为群管理员才能撤回普通成员消息）"
+      },
+      "msg_recall_group_only": {
+        "description": "撤回 · 仅限群聊",
+        "type": "text",
+        "default": "撤回功能仅支持群聊场景"
+      },
+      "msg_recall_disabled": {
+        "description": "撤回 · 功能已关闭",
+        "type": "text",
+        "default": "撤回功能已在配置中关闭，可在插件设置里重新开启。"
+      },
+      "msg_requests_list": {
+        "description": "审批 · 待处理列表",
+        "type": "text",
+        "default": "待处理的入群申请：\n{list}",
+        "hint": "变量：{list}（每行：序号. 昵称 时间 [验证消息]）"
+      },
+      "msg_requests_empty": {
+        "description": "审批 · 待处理为空",
+        "type": "text",
+        "default": "当前没有待处理的入群申请"
+      },
+      "msg_request_index_invalid": {
+        "description": "审批 · 序号无效",
+        "type": "text",
+        "default": "序号无效，请用 /群管 审批 查看当前待处理列表"
+      },
+      "msg_approve_success": {
+        "description": "审批 · 通过成功",
+        "type": "text",
+        "default": "已通过 {username} 的入群申请",
+        "hint": "变量：{username}"
+      },
+      "msg_reject_success": {
+        "description": "审批 · 拒绝成功",
+        "type": "text",
+        "default": "已拒绝 {username} 的入群申请",
+        "hint": "变量：{username}"
+      },
+      "msg_approve_failed": {
+        "description": "审批 · 操作失败",
+        "type": "text",
+        "default": "审批操作失败：{error}",
+        "hint": "变量：{error}"
+      },
+      "msg_join_request_notify": {
+        "description": "审批 · 新申请群内通知",
+        "type": "text",
+        "default": "📥 收到新的入群申请：\n{list}\n管理员可用 /群管 审批 查看详情，/群管 通过 序号 或 /群管 拒绝 序号 理由 处理",
+        "hint": "变量：{list}（每行：序号. 昵称 [验证消息]）"
+      },
+      "msg_welcome_after_approve": {
+        "description": "成员入群 · 欢迎语",
+        "type": "text",
+        "default": "🎉 欢迎 {username} 加入本群！",
+        "hint": "变量：{username} {group_name} {bot_name}"
+      },
+      "msg_welcome_new_group": {
+        "description": "机器人入群 · 兜底话术（留空＝复用自我介绍）",
+        "type": "text",
+        "default": "",
+        "hint": "变量：{bot_name} {group_name}。留空则直接复用「机器人入群 · 自我介绍」的文案，不会再出现两套说法"
+      },
+      "msg_group_intro": {
+        "description": "机器人入群 · 自我介绍（事件路径）",
+        "type": "text",
+        "default": "👋 我是 {bot_name}，已经在本群就位，可以帮群主和管理员做群管：\n· 违规举报 —— 引用违规消息发 /群管 举报，自动判定后撤回/群管 禁言\n· 群规自定义 —— 可按本群单独写规则和处理时长\n· 禁言管理 —— /群管 禁言、/群管 解禁、/群管 查禁言、/群管 禁言历史\n· 入群审批 —— /群管 审批、/群管 通过、/群管 拒绝\n· 撤回消息 —— /群管 撤回\n管理员在群里直接发指令即可。\n💡 请群主为我开启「接收群全部消息」「主动发言」，并授予我群管理员身份，以获取更好的体验！",
+        "hint": "可用变量：{bot_name} 机器人实例名、{group_name} 群名（入群事件里顺手拉到就用，拉不到则退化成群 openid）"
+      },
+      "msg_member_remove_notify": {
+        "description": "成员事件 · 退群通知",
+        "type": "text",
+        "default": "👋 {username} 离开了本群",
+        "hint": "变量：{username}（查不到昵称时显示「某位成员」）。需先在「群成员事件」分组开启通知"
+      },
+      "mod_hit": {
+        "description": "审核 · 命中违规",
+        "type": "text",
+        "default": "根据{basis}，符合{category}，已被禁言{duration}",
+        "hint": "变量：{basis}（关键词/群管 群规/语义分析/图片识别）{category} {duration} {user} {reason}"
+      },
+      "mod_hit_general": {
+        "description": "审核 · 通配违规（未对应群规）",
+        "type": "text",
+        "default": "根据多重维度评判，符合{category}，已被禁言{duration}",
+        "hint": "留空则回退到「审核 · 命中违规」"
+      },
+      "mod_clean": {
+        "description": "审核 · 未违规",
+        "type": "text",
+        "default": "根据多重维度评判，此消息不涉嫌违规",
+        "hint": "变量：{user}"
+      },
+      "mod_receiving": {
+        "description": "审核 · 受理回执",
+        "type": "text",
+        "default": "已收到举报，正在审核中…"
+      },
+      "mod_quote_lost": {
+        "description": "审核 · 引用消息失联",
+        "type": "text",
+        "default": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报",
+        "hint": "举报时引用的消息过旧、不在缓存中，或未真正引用而只是 @ 人"
+      },
+      "mod_uncertain": {
+        "description": "审核 · 判定未完成",
+        "type": "text",
+        "default": "判定把握不足，本次未自动处理，已记入审核记录",
+        "hint": "用于置信度不足等未执行场景；避免误报「已禁言」；插件无人工审核环节"
+      },
+      "mod_layer_off": {
+        "description": "审核 · 模型层已关闭",
+        "type": "text",
+        "default": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定",
+        "hint": "本群维度开关里关掉了「模型层」时使用"
+      },
+      "mod_failed": {
+        "description": "审核 · 审核失败",
+        "type": "text",
+        "default": "审核未完成（{error}），已记入审核记录",
+        "hint": "变量：{error}；用于引用失联 / 执行失败等"
+      },
+      "mod_exempt": {
+        "description": "审核 · 豁免成员",
+        "type": "text",
+        "default": "该成员在豁免名单中，本次不做处理"
+      },
+      "mod_no_quote": {
+        "description": "审核 · 未引用消息",
+        "type": "text",
+        "default": "请先长按违规消息选择「回复」引用它，再发送 /群管 举报"
+      },
+      "mod_disabled": {
+        "description": "审核 · 本群未开启审核",
+        "type": "text",
+        "default": "本群未开启举报审核"
+      },
+      "mod_dry_run": {
+        "description": "审核 · 试运行提示",
+        "type": "text",
+        "default": "（试运行）根据{basis}，符合{category}，本应禁言{duration}"
+      },
+      "mod_report_limit": {
+        "description": "审核 · 举报过频",
+        "type": "text",
+        "default": "举报太频繁啦，请稍后再试。"
+      },
+      "mod_need_admin": {
+        "description": "审核 · 非管理员改群规",
+        "type": "text",
+        "default": "只有管理员可以修改群规"
+      },
+      "mod_rules_empty": {
+        "description": "审核 · 本群无群规",
+        "type": "text",
+        "default": "本群还没有配置群规。管理员可用：/群管 群规 添加 规则名｜判定说明｜时长"
+      }
+    },
+    "hint": "{变量} 会被替换为实际内容；留空则用默认文案"
+  },
+  "member_event": {
+    "description": "群成员事件（暂不可用）",
+    "type": "object",
+    "items": {
+      "enable_member_remove_notify": {
+        "description": "退群通知",
+        "type": "bool",
+        "default": false,
+        "hint": "暂不可用：官方未推送群成员事件，开启也收不到事件"
+      },
+      "member_remove_try_fetch_name": {
+        "description": "尝试获取退群成员昵称",
+        "type": "bool",
+        "default": true,
+        "hint": "查不到时显示「某位成员」；仅在退群通知可用时有意义"
+      }
+    },
+    "hint": "QQ 官方未推送群成员事件；配置已就绪，官方开放后自动生效"
+  },
+  "log": {
+    "description": "日志",
+    "type": "object",
+    "items": {
+      "log_level": {
+        "description": "日志级别",
+        "type": "string",
+        "options": [
+          "DEBUG",
+          "INFO",
+          "WARNING",
+          "ERROR"
+        ],
+        "default": "DEBUG",
+        "hint": "面板日志页按此级别记录；排障建议 DEBUG"
+      },
+      "log_max_entries": {
+        "description": "内存日志条数上限",
+        "type": "int",
+        "default": 2000,
+        "hint": "超出后覆盖最早的日志"
+      },
+      "log_to_file": {
+        "description": "日志写入文件",
+        "type": "bool",
+        "default": true,
+        "hint": "文件位于 data/plugin_data/astrbot_plugin_qq_group_manager/"
+      },
+      "log_keep_days": {
+        "description": "日志文件保留天数",
+        "type": "int",
+        "default": 14,
+        "hint": "按日期删除超过 N 天的日志文件（astrbot_plugin_qq_group_manager_日期.log）。0＝永久保留不自动删。改动即时生效，无需重启"
+      }
+    },
+    "hint": "排障时可临时调低级别；磁盘日志按「日志文件保留天数」自动清理，面板「清空」会连磁盘文件一起删"
+  }
+}

@@ -1,0 +1,42 @@
+# ==========================================
+# QQ 群管理插件 · 仓库忽略规则
+# ==========================================
+
+# ---------- 运行时状态（本机产生，不进仓库）----------
+data/lexicon_state.json
+data/plugin_data/
+data/lexicons/
+
+# 注意：data/pinyin_map.json 与 data/variant_confusables.json 是变体检测的
+# 必需资源，必须随仓库分发，不要加进忽略列表。
+
+# ---------- Python 编译产物 ----------
+__pycache__/
+*.py[cod]
+*.so
+
+# ---------- 日志 ----------
+*.log
+
+# ---------- 开发备份 ----------
+*.bak
+*.bak_*
+*.modified_*
+_backup/
+
+# ---------- 大词库：不随仓库分发，用 tools/build_lexicons.py 自行生成 ----------
+# 随仓库只留 ad.json / abuse.json（误伤最低、群管最常用），其余类型一律不内置
+lexicons/porn.json
+lexicons/crime.json
+lexicons/drugs.json
+lexicons/politics.json
+lexicons/gambling.json
+lexicons/weapon.json
+lexicons/violence.json
+
+# ---------- 系统 / 编辑器 ----------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

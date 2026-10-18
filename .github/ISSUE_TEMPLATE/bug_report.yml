@@ -1,0 +1,95 @@
+name: 功能异常
+description: 插件没按预期工作（不是安全问题）
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题faq)，很多问题（撤回 2 分钟时限、退群通知不生效、机器人不是群管）都能在那里找到答案。
+
+        ⚠️ **提交前请删掉日志里的 AppID / AppSecret / openid / 群号 / 成员昵称。**
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本
+      description: 在 AstrBot 插件管理页或仓库 Release 里能看到
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: astrbot-version
+    attributes:
+      label: AstrBot 版本
+      placeholder: "4.29.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: deploy
+    attributes:
+      label: 部署方式
+      options:
+        - Docker
+        - 源码 / 虚拟环境
+        - 其他（在补充说明里写明）
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的模块
+      multiple: true
+      options:
+        - 禁言 / 解禁
+        - 消息撤回
+        - 入群审批 / 欢迎
+        - 群规审核（/举报）
+        - 词典 / 词库
+        - 变体检测 / 待办队列
+        - 管理面板（WebUI）
+        - 配置项
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 实际发生了什么
+      description: 越具体越好：谁在哪个群发了什么，机器人回了什么 / 没回什么
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 你期望的结果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 群里发 /禁言 @某人 10分钟
+        2. 机器人回复「…」
+        3. 实际没有禁言成功
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: AstrBot 控制台日志或 `data/plugin_data/qq_group_manager/` 下的日志片段（记得脱敏）
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 自查
+      options:
+        - label: 我确认已删掉日志中的 AppID / AppSecret / openid / 群号 / 昵称
+          required: true
+        - label: 我确认机器人是群管理员，且群消息范围已设为「获取群内全部消息」
+          required: true
+        - label: 我已在最新版本上复现
+          required: true
