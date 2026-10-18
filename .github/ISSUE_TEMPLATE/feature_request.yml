@@ -3,17 +3,25 @@ description: 想要新功能或改进现有行为
 title: "[Feature] "
 labels: ["enhancement"]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先看一眼 README，有些"新功能"其实是配置项。
+        讲清**场景**比直接给方案有用：先说"我在什么情况下做不到什么"。
   - type: textarea
     id: problem
     attributes:
       label: 你遇到的实际问题
-      description: 先讲场景，不要一上来就给方案。「我在 X 情况下做不到 Y」比「加个 Z 按钮」有用得多。
+      description: 越具体越好。「我在 X 情况下做不到 Y」比「加个 Z 按钮」更有用。
+      placeholder: |
+        例：群里有人刷屏，我只能一条条手动禁言，希望能一次性处理连续多条消息。
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
       label: 你设想的做法（可选）
+      description: 有想法就写，没有也行，别为了填而填
     validations:
       required: false
   - type: dropdown
@@ -38,7 +46,9 @@ body:
     attributes:
       label: 边界确认
       options:
-        - label: 我理解本插件只支持 `qq_official` 平台，不打算加其他平台的适配请求
+        - label: 我理解本插件只支持 qq_official 平台，不是拿来适配其他平台的
           required: true
-        - label: 我理解平台限制（撤回 2 分钟、退群通知不可用等）不是 bug
+        - label: 我理解平台限制（撤回 2 分钟时限、退群通知不可用等）不算 bug
           required: true
+    validations:
+      required: true
