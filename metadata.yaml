@@ -24,7 +24,7 @@ help: |
   上游社区维护，可能误伤或漏词，作者不作保证，启用与合规使用由使用者自行判断（详见 lexicons/DISCLAIMER.md）
 support_platforms:
   - qq_official
-version: 1.0.1
+version: 1.0.2
 astrbot_version: ">=4.16.0,<5"
 author: Canoe16type
 repo: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager
