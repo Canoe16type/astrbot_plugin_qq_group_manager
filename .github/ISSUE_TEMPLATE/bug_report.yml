@@ -24,6 +24,14 @@ body:
       placeholder: "4.29.1"
     validations:
       required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python 版本
+      description: 终端执行 python -V 得到；Docker 部署填镜像自带的即可
+      placeholder: "3.12.3"
+    validations:
+      required: true
   - type: dropdown
     id: deploy
     attributes:
@@ -80,6 +88,14 @@ body:
       label: 相关日志
       description: AstrBot 控制台日志或 `data/plugin_data/qq_group_manager/` 下的日志片段（记得脱敏）
       render: shell
+    validations:
+      required: false
+  - type: input
+    id: browser
+    attributes:
+      label: 浏览器与版本（面板问题必填）
+      description: 只有「管理面板（WebUI）」相关问题需要填，其他问题可留空
+      placeholder: "Edge 141"
     validations:
       required: false
   - type: checkboxes
