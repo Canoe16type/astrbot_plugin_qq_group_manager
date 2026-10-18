@@ -607,8 +607,15 @@ TXT / CSV：一行一条，支持 `#` 注释、`[ad]` 分节、`ad: 词语` 单�
 
 ### 12. 反馈 Bug
 
-请提供：AstrBot 与插件版本、平台及适配器版本、复现步骤（指令原文可打码、发生群、期望与实际结果）、
-对应时间点的日志（面板「日志」或 `data/plugin_data/astrbot_plugin_qq_group_manager/` 下的文件）、错误里的 HTTP 状态码与 code。
+开 issue 时选「功能异常」，表单会让你填：插件版本、AstrBot 版本、Python 版本、部署方式、出问题的模块、
+复现步骤、期望与实际结果、对应时间点的日志。
+
+日志位置：插件面板「日志」，或 `data/plugin_data/astrbot_plugin_qq_group_manager/*.log`；
+容器部署再加 `docker logs`。**贴之前先删掉 AppID / AppSecret / openid / 群号 / 成员昵称。**
+
+- 普通 bug：[新建 issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose)
+- 安全漏洞：**不要开公开 issue**，走 [私密报告](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/security/advisories/new)
+  或发邮件到 oc16games@outlook.com（详见 [SECURITY.md](SECURITY.md)）
 
 ---
 
