@@ -202,7 +202,7 @@ class PluginLogger:
                 self._write(40, msg)
 
     def exception(self, msg: str) -> None:
-        """等价于 logging.Logger.exception：ERROR 级 + 完整 traceback。
+        """等价于 Logger.exception：ERROR 级 + 完整 traceback。
 
         插件里多处异常兜底写的是 self.logger.exception(...)，本类早期没有这个方法，
         结果「处理异常」这行自己又抛一个 AttributeError，把真正的异常盖成
@@ -224,7 +224,7 @@ class PluginLogger:
                 self._write(40, text)
 
     def critical(self, msg: str) -> None:
-        """对齐 stdlib logging 的 critical；本插件按 ERROR 处理。"""
+        """对齐标准 Logger 的 critical；本插件按 ERROR 处理。"""
         self.error(msg)
 
     def get_since(self, index: int) -> list:

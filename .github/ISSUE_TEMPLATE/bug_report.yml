@@ -14,7 +14,7 @@ body:
     attributes:
       label: 插件版本
       description: 在 AstrBot 插件管理页或仓库 Release 里能看到
-      placeholder: "1.0.0"
+      placeholder: "1.0.1"
     validations:
       required: true
   - type: input

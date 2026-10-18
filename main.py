@@ -20,7 +20,6 @@
 
 import asyncio
 import ipaddress
-import logging
 import json
 import os
 import re
@@ -33,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
 
-from astrbot.api import AstrBotConfig
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.event.filter import EventMessageType
 from astrbot.api.message_components import At, Plain
@@ -61,9 +60,9 @@ from . import variant as variant_lib
 # AstrBot 找不到该目录、静默跳过删除（"删了数据其实没删"）。此处统一为目录名，
 # 并通过 _migrate_legacy_data_dir() 一次性迁移旧目录。
 PLUGIN_NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__))) or "astrbot_plugin_qq_group_manager"
-# 模块级 logger：初始化早期（self.logger 尚未构造，例如日志目录本身还没算出来）
-# 就用它，AstrBot 的根 logger 会收进 data/logs，不要用 print 把信息扔到 stdout。
-_BOOT_LOG = logging.getLogger(f"astrbot.plugin.{PLUGIN_NAME}")
+# 日志出口统一走 astrbot.api.logger（AstrBot 会按插件路由到 astrbot.plugin.<id>，
+# 收进 data/logs）。初始化早期（self.logger / PluginLogger 还没构造完）也用它，
+# 插件不得使用 stdlib logging，出口只能是 astrbot.api.logger。
 WEB_API_PREFIX = PLUGIN_NAME
 # 旧版数据目录名，仅用于迁移与清理兼容，禁止再用于新路径
 LEGACY_PLUGIN_NAME = "qq_group_manager"
@@ -164,7 +163,7 @@ def _patch_botpy_quote_fields() -> None:
     except Exception as e:  # pragma: no cover
         import sys
 
-        _BOOT_LOG.warning(
+        logger.warning(
             f"botpy 引用字段 patch 失败（引用撤回可能不可用）: {e}"
         )
 
@@ -510,7 +509,7 @@ class QQGroupManager(Star):
             legacy = os.path.join(os.path.dirname(new_dir), LEGACY_PLUGIN_NAME)
             if os.path.isdir(legacy) and not os.path.exists(new_dir):
                 os.replace(legacy, new_dir)
-                _BOOT_LOG.info(f"数据目录已迁移：{LEGACY_PLUGIN_NAME} -> {PLUGIN_NAME}")
+                logger.info(f"数据目录已迁移：{LEGACY_PLUGIN_NAME} -> {PLUGIN_NAME}")
         except Exception:
             pass
 

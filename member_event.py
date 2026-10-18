@@ -27,43 +27,12 @@ AstrBot 重启；重启后插件 initialize 会再次注入，无需额外维护
 """
 
 import asyncio
-import logging
 import types
+
+from astrbot.api import logger as _astrbot_logger
 
 PLATFORM_NAME = "qq_official"  # 平台名（meta().name），非实例 ID
 GROUP_MEMBER_EVENT_INTENT = 1 << 24  # QQ 官方: GROUP_MEMBER_EVENT
-
-_log = logging.getLogger(f"astrbot.plugin.{__package__}.member_event")
-
-
-def _install_botpy_log_hook(plugin) -> None:
-    """把 botpy 网关日志（被 AstrBot 的 bot_log=False 屏蔽）引流到插件日志。
-
-    有了它才能看到：重连 READY、_parser unknown event（事件名）、
-    每条网关原始消息。对排查"事件是否到达/事件名是什么"至关重要。
-    """
-    logger = getattr(plugin, "logger", _log)
-    try:
-        botpy_logger = logging.getLogger("botpy")
-        if getattr(botpy_logger, "_qqgm_hooked", False):
-            return
-
-        class QqgmBotpyHandler(logging.Handler):
-            def emit(self, record):
-                try:
-                    logger.debug(f"[botpy] {record.getMessage()}")
-                except Exception:
-                    pass
-
-        handler = QqgmBotpyHandler()
-        handler.setLevel(logging.DEBUG)
-        botpy_logger.addHandler(handler)
-        botpy_logger.setLevel(logging.DEBUG)
-        botpy_logger._qqgm_hooked = True
-        logger.info("[成员事件] 已挂载 botpy 网关日志钩子（可观测 READY/事件名/原始消息）")
-    except Exception as e:
-        logger.warning(f"[成员事件] botpy 日志钩子挂载失败: {e}")
-
 
 def install_member_event_support(plugin, context) -> int:
     """向所有 qq_official 适配器实例注入群成员事件支持。
@@ -81,8 +50,7 @@ def install_member_event_support(plugin, context) -> int:
     Returns:
         成功注入的实例数量（0 表示无可用 qq_official 实例）。
     """
-    logger = getattr(plugin, "logger", _log)
-    _install_botpy_log_hook(plugin)
+    logger = getattr(plugin, "logger", _astrbot_logger)
     insts = []
     try:
         for platform in context.platform_manager.platform_insts:
@@ -187,7 +155,7 @@ async def _reconnect_after(plugin, client, delay: float) -> None:
     AstrBot 的 ManagedBotWebSocket.close() 会把 _can_reconnect 置 False，
     这样 on_closed 时会清空 session_id，重连即重新 identify，新 intents 生效。
     """
-    logger = getattr(plugin, "logger", _log)
+    logger = getattr(plugin, "logger", _astrbot_logger)
     await asyncio.sleep(delay)
     wss = list(getattr(client, "_active_websockets", set()) or [])
     if not wss:

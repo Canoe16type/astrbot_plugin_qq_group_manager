@@ -3,6 +3,22 @@
 > 版本号遵循语义化版本：开发期的 `0.x` 之后，`1.0.0` 为首个正式版。
 > 详细设计与取舍说明见 README 对应章节。
 
+## 1.0.1
+
+**日志出口统一走 `astrbot.api`**
+
+- **移除 stdlib `logging` 依赖**（AstrBot 规范：插件日志只能从 `astrbot.api` 导入）：
+  - `main.py` 不再 `import logging`、不再 `logging.getLogger(...)`，初始化早期的 `_BOOT_LOG` 改为
+    `from astrbot.api import logger`（AstrBot 会路由到 `astrbot.plugin.<插件id>`，照样进 `data/logs`）。
+  - `member_event.py` 移除 `logging.getLogger(...)` 与挂在 `botpy` logger 上的自定义 `logging.Handler`，
+    模块级兜底 logger 同样改用 `astrbot.api.logger`。
+  - 写日志的出口现在只有一条：`astrbot.api.logger` / 插件的 `PluginLogger`（后者仅作为 WebUI 内存环形缓冲，
+    不再依赖 stdlib logging）。面板「日志」页面与原来一致。
+- **已知变化**：botpy 网关的 DEBUG 日志（READY / 未知事件名 / 原始消息）不再被插件钩子引流到面板日志。
+  需要排查网关事件时，请在 AstrBot 平台配置里打开 botpy 的调试输出（`bot_log`），或看 AstrBot 框架日志。
+  群成员事件注入本身不受影响（注入逻辑与日志钩子相互独立）。
+- 版本号 `1.0.0` → `1.0.1`（仅日志整改，功能与配置项无变化，可直接覆盖升级）。
+
 ## 1.0.0
 
 **首个正式版**
