@@ -684,3 +684,160 @@ select{max-width:100%}
   .nav .tab .badge{top:3px;right:10px}
   .nav .tab.active::before{left:-6px}
 }
+
+/* ══════════════════════════════════════════════════════════════
+   设置面板改造（v1.1.0）
+   ① .field.check：从「小方块 + 居中文字」改成整行卡片（文字左 / 开关右）
+   ② 数字、文本字段：标签在上、控件占满整格，宽度统一
+   ③ 栅格与控件宽度跟随视口自适应，窄屏不再碎成一堆小框
+   根源：全局 .field 是 flex-direction:column，而 .mod-scope .field 只覆盖了
+   display 没覆盖方向，导致 checkbox 和文字被压成上下居中堆叠。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── ① 开关行 ── */
+.field.check{
+  position:relative;
+  display:flex;flex-direction:row;align-items:center;gap:var(--s3);
+  width:100%;min-width:0;margin:0;
+  padding:11px var(--s3);
+  background:var(--soft2);border:1px solid var(--line);border-radius:var(--r-md);
+  font-size:var(--t1);line-height:1.55;cursor:pointer;
+  transition:border-color .15s ease,background .15s ease;
+}
+.field.check:hover{background:var(--soft);border-color:var(--line)}
+.field.check > span{order:1;flex:1;min-width:0}
+/* 原生 checkbox 保留可访问性与 change 事件，视觉交给 .tsw */
+.field.check > input[type="checkbox"]{
+  position:absolute;opacity:0;width:1px;height:1px;margin:0;pointer-events:none;
+}
+.tsw{
+  order:2;flex:none;position:relative;display:block;
+  width:44px;height:26px;border-radius:var(--r-full);
+  background:var(--soft);box-shadow:inset 0 0 0 1px var(--line);
+  transition:background .18s ease,box-shadow .18s ease;
+}
+.tsw::after{
+  content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(10,20,25,.35);
+  transition:transform .18s ease;
+}
+[data-theme="dark"] .tsw::after{background:#eef4f6}
+.field.check > input[type="checkbox"]:checked + .tsw{background:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.field.check > input[type="checkbox"]:checked + .tsw::after{transform:translateX(18px)}
+.field.check > input[type="checkbox"]:focus-visible + .tsw{outline:2px solid var(--acc);outline-offset:3px}
+.field.check > input[type="checkbox"]:disabled + .tsw{opacity:.45}
+
+/* ── ② 字段：标签在上、控件占满整格 ── */
+.mod-scope .grid > .field:not(.check),
+.mod-scope .beta-grid > .field:not(.check){
+  display:flex;flex-direction:column;align-items:stretch;gap:6px;
+  width:100%;min-width:0;margin:0;
+  padding:11px var(--s3);
+  background:var(--soft2);border:1px solid var(--line);border-radius:var(--r-md);
+}
+.mod-scope .grid > .field:not(.check) > span,
+.mod-scope .beta-grid > .field:not(.check) > span{font-size:11px;color:var(--dim);line-height:1.5}
+.mod-scope .grid > .field:not(.check) > input,
+.mod-scope .grid > .field:not(.check) > select,
+.mod-scope .grid > .field:not(.check) > textarea,
+.mod-scope .beta-grid > .field:not(.check) > input,
+.mod-scope .beta-grid > .field:not(.check) > select,
+.mod-scope .beta-grid > .field:not(.check) > textarea{width:100%;min-width:0}
+/* 整格宽度的说明行（维度开关、分组说明等）不与字段争列 */
+.mod-scope .grid > .desc{grid-column:1/-1;margin:var(--s1) 0 0}
+/* 区块外的 block 字段（豁免成员 / 自定义关键词）同样铺满 */
+.mod-scope .field.block{display:flex;flex-direction:column;align-items:stretch;gap:6px;width:100%;min-width:0}
+.mod-scope .field.block > span{font-size:11px;color:var(--dim);line-height:1.5}
+.mod-scope .field.block > textarea{width:100%;min-width:0}
+/* 白名单输入：和上面卡片同宽，不再缩成 200px 的小框 */
+#lex-allow-input{width:100%;min-width:0;min-height:72px}
+#s-whitelist,#s-keywords{width:100%;min-width:0}
+
+/* ── ③ 分辨率适配：栅格按视口给出合理列宽与列数 ── */
+.mod-scope .grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.mod-scope .beta-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.set-items{grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))}
+@media (min-width:1600px){
+  .mod-scope .grid,.mod-scope .beta-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+}
+@media (min-width:2200px){
+  .mod-scope .grid,.mod-scope .beta-grid{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+}
+@media (max-width:760px){
+  .mod-scope .mod-pane{padding:var(--s3) var(--s3) var(--s5)}
+  .mod-scope .grid,.mod-scope .beta-grid{gap:var(--s2)}
+  .field.check{padding:10px var(--s2)}
+  .tsw{width:40px;height:24px}
+  .tsw::after{width:18px;height:18px}
+  .field.check > input[type="checkbox"]:checked + .tsw::after{transform:translateX(16px)}
+}
+
+/* ── ④ 词典页签：文本框与栅格同样吃满宽度 ── */
+#tab-lexicons .lex-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr))}
+#tab-lexicons .lex-grid > .field.check{grid-column:1/-1}
+#tab-lexicons .card textarea{width:100%;min-width:0}
+#lex-up-text{width:100%;min-width:0;min-height:110px;margin-top:var(--s2)}
+/* 命中测试：textarea 撑满剩余宽度并顶对齐，按钮不再被拉成高胖胶囊 */
+.test-box{align-items:flex-start}
+.test-box textarea,#lex-test-text{flex:1 1 auto;width:auto;min-width:0;min-height:70px}
+.test-box > .btn,.test-box > button{flex:0 0 auto;margin-top:1px}
+@media (min-width:1600px){
+  #tab-lexicons .lex-grid{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+}
+@media (max-width:760px){
+  #tab-lexicons .lex-grid{gap:var(--s2)}
+  .test-box{flex-direction:column}
+  .test-box > .btn,.test-box > button{align-self:flex-start;margin-top:0}
+}
+
+/* ── ⑤ 手机端（≤760px）：rail 变底部横排导航，七个入口一行铺满 ──
+   原因：上面 ≤760px 的旧规则写的是 `.nav a`，但导航实际是 `<button class="tab">`，
+   选择器对不上，于是 rail 一直是 236px 竖排，手机上七个图标挤成一竖列。 */
+@media (max-width:760px){
+  .app{
+    grid-template-columns:1fr;
+    grid-template-rows:1fr auto;
+    height:100vh;height:100dvh;
+  }
+  .rail{
+    order:2;flex-direction:row;align-items:stretch;gap:0;
+    padding:5px 6px calc(5px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line);
+    box-shadow:0 -2px 12px rgba(0,0,0,.14);
+    z-index:20;backdrop-filter:blur(8px);
+  }
+  .brand,.railfoot{display:none}
+  .nav,.nav.tabs{
+    flex-direction:row;flex:1;gap:2px;
+    align-items:stretch;justify-content:space-between;
+  }
+  .nav .tab{
+    flex:1 1 0;min-width:0;width:auto;
+    flex-direction:column;justify-content:center;align-items:center;gap:2px;
+    padding:5px 0;border-radius:var(--r-sm);
+    font-size:9.5px;line-height:1.15;font-weight:500;text-align:center;
+    white-space:nowrap;
+  }
+  .nav .tab .ico{width:18px;height:18px;flex:none}
+  .nav .tab .lbl{
+    display:block;flex:none;min-width:0;max-width:100%;
+    overflow:hidden;text-overflow:ellipsis;
+  }
+  .nav .tab.active::before{display:none}
+  .nav .tab .badge{
+    top:2px;right:calc(50% - 21px);
+    font-size:9px;min-width:12px;height:12px;padding:0 3px;
+  }
+  /* 手机端主内容要能手指滚动：.main 原来是 overflow:hidden，
+     内容超出后只能靠程序改 scrollTop，用户滑不动（长页签会「卡住看不见」）。*/
+  .main{
+    overflow-y:auto;overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+    min-height:0;
+  }
+  .top{
+    position:sticky;top:0;z-index:10;
+    height:auto;padding:10px var(--s3);gap:var(--s2);
+    background:var(--pan);border-bottom:1px solid var(--line);
+  }
+}

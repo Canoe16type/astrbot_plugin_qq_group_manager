@@ -55,6 +55,7 @@
       <button class="tab" data-tab="settings"><svg class="ico"><use href="#i-settings"/></svg><span class="lbl">设置</span></button>
       <button class="tab" data-tab="ops"><svg class="ico"><use href="#i-groups"/></svg><span class="lbl">群管</span><span class="badge hidden" id="reqBadge">0</span></button>
       <button class="tab" data-tab="moderation"><svg class="ico"><use href="#i-review"/></svg><span class="lbl">群规审核</span></button>
+      <button class="tab" data-tab="members"><svg class="ico"><use href="#i-groups"/></svg><span class="lbl">成员档案</span></button>
       <button class="tab" data-tab="lexicons"><svg class="ico"><use href="#i-book"/></svg><span class="lbl">词典</span></button>
       <button class="tab" data-tab="records"><svg class="ico"><use href="#i-records"/></svg><span class="lbl">记录</span></button>
       <button class="tab" data-tab="logs"><svg class="ico"><use href="#i-logs"/></svg><span class="lbl">日志</span></button>
@@ -64,7 +65,7 @@
         <svg class="ico only-light"><use href="#i-moon"/></svg>
         <svg class="ico only-dark"><use href="#i-sun"/></svg>
       </button>
-      <small>插件 v<span id="pluginVersion">1.0.0</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
+      <small>插件 v<span id="pluginVersion">1.1.0</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
     </div>
   </aside>
 
@@ -167,6 +168,63 @@
  <div id="muteList"><div class="empty"><svg class="ico eico" aria-hidden="true"><use href="#i-mute"/></svg><span>加载中…</span></div></div>
  </div>
 
+ </section>
+
+<!-- ============ 成员档案（openid -> 昵称/备注） ============ -->
+ <section id="tab-members" class="panel">
+ <div class="page-head">
+ <h2> 成员档案</h2>
+ <p>官方事件和群消息里只有 <code>member_openid</code>，没有昵称、没有 QQ 号，所以「谁是谁」得靠这张表。名字可以在这里改，也可以群里发 <code>/群管 成员 改名</code>；退群通知就是从这张表取名字的。</p>
+ </div>
+
+ <div class="log-controls">
+ <span class="hint">群</span>
+ <select id="memGroup" class="select"><option value="">选择群…</option></select>
+ <span class="hint">状态</span>
+ <select id="memStatus" class="select">
+ <option value="all">全部</option>
+ <option value="active">在群</option>
+ <option value="left">已退群</option>
+ <option value="unnamed">未命名</option>
+ <option value="named">已命名</option>
+ </select>
+ <span class="hint">排序</span>
+ <select id="memSort" class="select">
+ <option value="last_seen">最近发言</option>
+ <option value="msg_count">发言最多</option>
+ <option value="first_seen">最早入档</option>
+ <option value="name">昵称</option>
+ </select>
+ <input id="memSearch" class="input" type="search" placeholder="搜昵称 / 备注 / openid" />
+ <button id="btnMemReload" class="btn ghost small">↻ 刷新</button>
+ <button id="btnMemSync" class="btn ghost small" title="调官方「群成员列表」接口补昵称；该接口目前是内邀白名单能力（11253）">⬇ 官方同步</button>
+ <button id="btnMemImport" class="btn ghost small" title="按行粘贴：openid,昵称,备注">⇪ 批量导入</button>
+ <button id="btnMemClearLeft" class="btn ghost small" title="删掉所有「已退群」的记录">🧹 清理已退群</button>
+ </div>
+
+ <div id="memStats" class="hint" style="margin:8px 0"></div>
+
+ <div class="card">
+ <div class="card-head">
+ <h3> 档案列表</h3>
+ <span class="hint" id="memPageInfo"></span>
+ </div>
+ <div id="memList"><div class="empty"><svg class="ico eico" aria-hidden="true"><use href="#i-groups"/></svg><span>先在上面选一个群</span></div></div>
+ <div class="log-controls" style="margin-top:10px">
+ <button id="memPrev" class="btn ghost small">← 上一页</button>
+ <button id="memNext" class="btn ghost small">下一页 →</button>
+ </div>
+ </div>
+
+ <div id="memImportBox" class="card" hidden>
+ <div class="card-head"><h3> 批量导入</h3><span class="hint">每行一条：openid,昵称,备注（后两项可省）</span></div>
+ <textarea id="memImportText" placeholder="C3D4E5F6A1B2...  , 小明 , 老群友
+A1B2C3D4E5F6...  , 小红"></textarea>
+ <div class="log-controls" style="margin-top:8px">
+ <button id="memImportDo" class="btn">导入</button>
+ <button id="memImportCancel" class="btn ghost">取消</button>
+ </div>
+ </div>
  </section>
 
 <!-- ============ 群规审核（并入本页，独立 page 已废弃） ============ -->
@@ -376,9 +434,9 @@
  <label class="field"><span>默认类型（纯词表按这个归类）</span><select id="lex-up-cat"></select></label>
  <label class="field"><span>匹配方式</span>
  <select id="lex-up-match">
- <option value="auto">auto（自动：看得出是正则才当正则）</option>
- <option value="literal">literal（全部按字面量，推荐）</option>
- <option value="regex">regex（全部按正则）</option>
+ <option value="auto" title="自动：看得出是正则才按正则处理，否则按字面量">auto（自动识别）</option>
+ <option value="literal" title="全部按字面量处理，不会被当成正则">literal（字面量，推荐）</option>
+ <option value="regex" title="全部按正则表达式处理，写错会解析失败">regex（正则）</option>
  </select>
  </label>
  <label class="field"><span>写入方式</span>
@@ -388,7 +446,7 @@
  <option value="append">追加到已有</option>
  </select>
  </label>
- <label class="field" id="lex-up-target-wrap" hidden><span>目标词库</span><select id="lex-up-target"></select></label>
+ <label class="field" id="lex-up-target-wrap" hidden style="grid-column:1/-1"><span>目标词库</span><select id="lex-up-target"></select></label>
  </div>
  <textarea id="lex-up-text" rows="6" placeholder="也可以直接把词库内容粘贴到这里（一行一条，支持 # 注释、[ad] 分节、ad: 词语 指定类型）"></textarea>
  <div class="row-actions">
@@ -417,7 +475,7 @@
  </div>
  <label class="field" style="grid-column:1/-1"><span>GitHub 加速地址（可选，直连失败才用；填前缀或含 {url} 的模板）</span><input type="text" id="lex-fetch-mirror" placeholder="https://ghproxy.net/{url}" /></label>
  <label class="field check"><input type="checkbox" id="lex-fetch-force" /><span>只走加速（GitHub 完全连不上时勾上）</span></label>
- <label class="field"><span>默认归类（纯词表按这个归类）</span><select id="lex-fetch-cat"></select></label>
+ <label class="field" style="grid-column:1/-1"><span>默认归类（纯词表按这个归类）</span><select id="lex-fetch-cat"></select></label>
  <label class="field check"><input type="checkbox" id="lex-fetch-auto" /><span>获取后自动启用</span></label>
  </div>
  <div class="row-actions">

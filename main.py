@@ -46,6 +46,7 @@ from astrbot.api.web import json_response, request, stream_response
 from .plugin_logger import PluginLogger
 from .qq_api import QQApi, QQApiError
 from . import member_event
+from . import member_registry as member_registry_lib
 from . import lexicon as lexicon_lib
 from . import moderation
 from . import variant as variant_lib
@@ -173,7 +174,7 @@ _patch_botpy_quote_fields()
 DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\s*$", re.I)
 
 # 管理指令集合（需要管理员权限）
-ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批", "/通过", "/拒绝", "/撤回", "/审核", "/群名", "/管理登记")
+ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批", "/通过", "/拒绝", "/撤回", "/审核", "/群名", "/管理登记", "/成员")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
 # 说明：这些名字现在挂在指令组「群管」下作为子指令（面板里是 1 条组 + 子指令），
@@ -182,7 +183,7 @@ ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批"
 # "仅管理员"更宽松。
 REGISTERED_COMMANDS = (
     "禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝",
-    "撤回", "审核", "群名", "管理登记", "群管", "举报", "群规",
+    "撤回", "审核", "群名", "管理登记", "群管", "举报", "群规", "成员",
 )
 
 # 禁言历史：每群最多保留的条数
@@ -240,6 +241,58 @@ def parse_duration(text: str) -> Optional[int]:
     if unit in ("d", "天"):
         return num * 86400
     return num
+
+
+# 群规「一行式」写法里的分隔符：全角竖线 / 半角竖线 / 兼容 U+FE31 竖排形式。
+# 教训：以前只认全角「｜」，用户用半角「|」时整句会被当成规则名，
+# 说明和时长静默丢失（群里表现为「已添加群规：侮辱」）。
+_RULE_SEP_RE = re.compile(r"\s*[｜|︱]\s*")
+
+
+def parse_rule_spec(text: str) -> tuple[str, str, int, Optional[str]]:
+    """解析群规的一行式写法，返回 (name, desc, seconds, error)。
+
+    error 非 None 时调用方应回用法提示，而不是硬建一条残缺群规。
+
+    三种写法都认（都是用户真实会发出来的）：
+      名｜说明｜时长（全角竖线，帮助里的标准写法）
+      名 | 说明 | 时长（半角竖线，手机输入法/英文键盘最常见）
+      名 说明 时长（纯空格）
+    时长可省略 → 默认 1 小时；只写一段 → 只当规则名。
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return "", "", 3600, "empty"
+    norm = _RULE_SEP_RE.sub("｜", raw)
+    if "｜" in norm:
+        seg = [x.strip() for x in norm.split("｜") if x.strip()]
+    else:
+        seg = [x.strip() for x in norm.split() if x.strip()]
+    seconds = 3600
+    if len(seg) >= 2:
+        tail = parse_duration(seg[-1])
+        if tail:
+            seconds = int(tail)
+            seg = seg[:-1]
+    if not seg:
+        return "", "", 3600, "empty"
+    name = seg[0]
+    desc = " ".join(seg[1:]).strip()
+    if len(name) > 24:
+        return name, desc, seconds, "name_too_long"
+    return name, desc, seconds, None
+
+
+RULE_USAGE_ADD = (
+    "用法：/群管 群规 添加 规则名 | 说明 | 时长" + chr(10) +
+    "示例：/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
+    "竖线用半角「|」或全角「｜」都行；时长可省略，默认 1 小时。"
+)
+RULE_USAGE_SET = (
+    "用法：/群管 群规 设置 规则名 | 说明 | 时长" + chr(10) +
+    "示例：/群管 群规 设置 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
+    "多条用「;」隔开，规则会追加到本群群规里。"
+)
 
 
 def fmt_duration(seconds: int) -> str:
@@ -413,6 +466,8 @@ class QQGroupManager(Star):
         self._intro_done: dict[str, str] = {}    # 已发过群管自我介绍的群 -> event/message/manual
         self._intro_pending: dict[str, float] = {}  # 收到入群事件、但发送尚未确认成功的群
         self._nick_cache: dict[str, dict[str, str]] = {}  # group_openid -> {member_openid: 昵称}
+        # 被 40034105（该群未开主动消息权限）拒过的群，仅用于日志/诊断提示，不阻止重试
+        self._member_perm_blocked: set[str] = set()
         self._pending: dict[str, list[dict]] = {}  # group_openid -> [join_request]
         self._notified: dict[str, dict[tuple, float]] = {}  # group_openid -> {申请键: 通知时间}（防重复推送）
         # 轮询任务自己维护"上次看到的申请键"，不依赖共享的 self._pending：
@@ -433,6 +488,11 @@ class QQGroupManager(Star):
         # 群规审核（/举报）：数据按群隔离、全部本地落盘；
         # 注意：只有收到 /举报 才会调用模型，平时不扫描、不判定、不执行。
         self.mod = moderation.ModerationStore(self._plugin_data_dir(), self.logger)
+        # 群成员档案（openid -> 昵称/备注）：官方事件与消息里只有 openid、没有昵称，
+        # 所以"这个人是谁"必须落一张可人工维护的表；退群通知、禁言列表都从这取名。
+        self.members = member_registry_lib.MemberRegistry(
+            self._plugin_data_dir(), self.logger
+        )
         # 关键词词库：内置的是公开开源词库（lexicons/SOURCES.md 有来源与协议），
         # 页面可上传自己的词库、勾选启用、加白名单；词库只做关键词维度，不单独调模型。
         self.lexicons = lexicon_lib.LexiconManager(
@@ -1123,6 +1183,7 @@ class QQGroupManager(Star):
                 sname = event.get_sender_name()
                 if sid and sname:
                     self._nick_cache.setdefault(g, {})[sid] = sname
+                self._record_member_seen(event)
             self._ensure_poll_task()
             self._ensure_member_event_injected()  # 兜底：平台实例就绪后重试注入
             self._record_recent_msg(event)  # 引用撤回：原文匹配需要消息缓存
@@ -1133,61 +1194,275 @@ class QQGroupManager(Star):
 
     # ------------------------------------------------------------------
     # 群成员事件（退群/被移出通知，运行时注入实现，见 member_event.py）
+    # 群成员档案（openid <-> 昵称/备注，见 member_registry.py）
     # ------------------------------------------------------------------
+    def _members_on(self) -> bool:
+        return bool(self._read_config_value(
+            ("member_registry", "enabled"), default=True,
+            legacy_keys=("member_registry_enabled",),
+        ))
+
+    # ------------------------------------------------------------------
+    # 生效群范围（basic.target_group_openids）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _parse_group_target(item) -> tuple[str, str]:
+        """把配置项拆成 (platform_id, group_openid)。
+
+        支持三种写法：
+          - ``群OpenID``               → platform_id 为空＝不限机器人实例
+          - ``机器人实例ID:群OpenID``   → 只在这个平台实例上管这个群
+        """
+        text = str(item or "").strip()
+        if ":" in text:
+            head, _, tail = text.partition(":")
+            head, tail = head.strip(), tail.strip()
+            if head and tail:
+                return head, tail
+        return "", text
+
+    def _target_groups(self) -> list[str]:
+        """生效群范围原始配置项（可能带「机器人实例ID:」前缀）。"""
+        raw = self._read_config_value(
+            ("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)
+        ) or []
+        return [str(x).strip() for x in raw if str(x or "").strip()]
+
+    def _target_group_allowed(self, group_openid: str, platform_id: str | None = None) -> bool:
+        """群是否在生效范围内（留空＝所有群、所有机器人；兼容带前缀写法）。"""
+        targets = self._target_groups()
+        if not targets:
+            return True
+        gid = str(group_openid or "").strip()
+        if not gid:
+            return False
+        pid = str(platform_id or self._known_groups.get(gid) or "").strip()
+        for item in targets:
+            item_pid, item_gid = self._parse_group_target(item)
+            if item_gid.lower() != gid.lower():
+                continue
+            if not item_pid:
+                return True          # 没写机器人前缀＝所有机器人都管
+            if not pid or item_pid.lower() == pid.lower():
+                return True
+        return False
+
+    @staticmethod
+    def _explain_send_error(code) -> str:
+        """把群消息发送失败的常见错误码翻成一句人话，排障少走弯路。"""
+        try:
+            c = int(code) if code is not None else 0
+        except (TypeError, ValueError):
+            c = 0
+        table = {
+            11251: "11251＝主动消息受限：群内 24 小时内需有人 @ 过机器人，否则主动消息发不出去（可改用被动回复）。",
+            11253: "11253＝应用无接口访问权限：该接口是内邀白名单能力，普通机器人本来就用不了，属正常现象。",
+            40034027: "40034027＝event_id 不支持该事件类型，只能改发主动消息。",
+            40034105: (
+                "40034105＝主动消息无权限：该群没有给机器人开「主动消息推送」，"
+                "需群主在群设置/添加机器人时的权限项里开启；同一机器人其他群可能正常。"
+            ),
+            40054005: "40054005＝msg_seq 去重：被动回复复用同一个 event_id 时要自增 msg_seq。",
+        }
+        return table.get(c, f"错误码 {c} 未收录，建议对照平台文档或看 AstrBot / 适配器日志里的原始响应。")
+
+    def _group_in_scope(self, group_openid: str, platform_id: str | None = None) -> bool:
+        return self._target_group_allowed(group_openid, platform_id)
+
+    def _record_member_seen(self, event: AstrMessageEvent) -> None:
+        """普通群消息：把发言人记进档案。
+
+        官方群消息事件的 author 里只有 member_openid，昵称通常是空的；
+        这里只有在适配器真给了昵称时才顺手填（source=msg，人工昵称不会被覆盖）。
+        """
+        try:
+            if not self._members_on():
+                return
+            if not bool(self._read_config_value(("member_registry", "record_on_message"), default=True)):
+                return
+            g = event.get_group_id()
+            sid = str(event.get_sender_id() or "")
+            if not g or not sid or not self._group_in_scope(g, event.get_platform_id()):
+                return
+            sname = str(event.get_sender_name() or "").strip()
+            name = sname if (sname and sname != sid) else ""
+            self.members.seen(g, sid, name=name)
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug(f"[成员档案] 记录发言失败: {e}")
+
+    async def _on_group_member_add(self, data: dict, platform_id: str | None = None) -> None:
+        """成员入群：建档案（只有 openid，昵称靠人工或接口补）。"""
+        try:
+            if not self._members_on():
+                return
+            g = str(data.get("group_openid") or "")
+            member = str(data.get("member_openid") or "")
+            if not g or not member or not self._group_in_scope(g, platform_id):
+                return
+            rec = self.members.seen(
+                g, member,
+                ts=data.get("timestamp") or None,
+                count_msg=False,
+                user_openid=str(data.get("user_openid") or ""),
+            )
+            self.logger.info(
+                f"[成员档案] 群 {g} 成员入群: {member_registry_lib.short_id(member)}"
+                f"（{'已在档' if rec and rec.get('first_seen') else '新建'}）"
+            )
+        except Exception as e:  # noqa: BLE001
+            self.logger.exception(f"[成员事件] 处理入群事件异常: {e}")
+
     async def _on_group_member_remove(self, data: dict, platform_id: str | None = None) -> None:
-        """成员退群/被移出：按配置在群内发言通知。
+        """成员退群/被移出：先查档案，再按配置在群内发言通知。
 
         Args:
-            data: 网关事件体（含 group_openid / member_openid）。
+            data: 网关事件体（含 group_openid / member_openid / user_openid，
+                以及 member_event.py 补进来的 _event_id）。
             platform_id: 事件来源的 qq_official 实例 ID（member_event.py 注入
                 时通过闭包传入），用于多实例下精确路由 API 客户端。
         """
         try:
+            g = str(data.get("group_openid") or "")
+            member = str(data.get("member_openid") or "")
+            if not g or not member:
+                self.logger.warning(f"[成员事件] 退群事件缺少必要字段: {data}")
+                return
+            if not self._group_in_scope(g, platform_id):
+                return
+
+            # 1) 先查档案（此时 status 还是 active，能算在群时长）
+            rec = self.members.get(g, member)
+            joined_at = float((rec or {}).get("first_seen") or 0)
+            now = float(data.get("timestamp") or time.time())
+            msgs = int((rec or {}).get("msg_count") or 0)
+            username = str((rec or {}).get("nickname") or "").strip()
+            name_src = "existing" if username else ""
+            user_openid = str(data.get("user_openid") or "")
+
+            # 2a) 跨群认人：事件里的 user_openid 在同一机器人下跨群稳定，
+            #     别的群补过名字就直接借过来（source 记为 cross）。
+            if not username and user_openid:
+                got, from_group = self.members.name_by_user_openid(user_openid, exclude_group=g)
+                if got:
+                    username = got
+                    name_src = "cross"
+                    self.logger.info(
+                        f"[成员档案] 群 {g} 成员 {member_registry_lib.short_id(member)}"
+                        f" 借用「{from_group[-6:]}」群的名字: {got}"
+                    )
+
+            # 2b) 还没有名字，再试一次接口（白名单机器人可用，普通机器人报 11253）
+            if not username and bool(self._read_config_value(
+                ("member_event", "member_remove_try_fetch_name"), default=True,
+                legacy_keys=("member_remove_try_fetch_name",),
+            )):
+                fetched = await self._resolve_member_name(g, member)
+                if fetched:
+                    username = fetched
+                    name_src = "api"
+
+            # 3) 落档：有档案标退群，没档案也建一条「只有 openid」的记录便于追溯
+            if self._members_on():
+                try:
+                    if rec is None:
+                        rec = self.members.create_left(g, member, ts=now)
+                        if user_openid:
+                            self.members.bind_user_openid(g, member, user_openid)
+                    else:
+                        self.members.mark_left(g, member, ts=now)
+                        if user_openid:
+                            self.members.bind_user_openid(g, member, user_openid)
+                except Exception as e:  # noqa: BLE001
+                    self.logger.debug(f"[成员档案] 标记退群失败: {e}")
+                # 刚补到的名字（跨群借的 / 接口查的）写回本群档案
+                if username and name_src in ("cross", "api"):
+                    try:
+                        cur = self.members.get(g, member) or {}
+                        if not str(cur.get("nickname") or "").strip():
+                            self.members.set_name(g, member, username, source=name_src)
+                    except Exception as e:  # noqa: BLE001
+                        self.logger.debug(f"[成员档案] 回写昵称失败: {e}")
+
             if not bool(self._read_config_value(
                 ("member_event", "enable_member_remove_notify"),
                 default=False,
                 legacy_keys=("enable_member_remove_notify",),
             )):
                 return
-            g = data.get("group_openid") or ""
-            member = data.get("member_openid") or ""
-            if not g or not member:
-                self.logger.warning(f"[成员事件] 退群事件缺少必要字段: {data}")
-                return
-            # 群过滤
-            targets = self._read_config_value(
-                ("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)
-            ) or []
-            if targets and g not in targets:
-                return
-            # 尝试点名
-            username = ""
-            if bool(self._read_config_value(
-                ("member_event", "member_remove_try_fetch_name"),
-                default=True,
-                legacy_keys=("member_remove_try_fetch_name",),
-            )):
-                username = await self._resolve_member_name(g, member)
+
+            # 4) 组通知文案
+            days = int(max(0, now - joined_at) // 86400) if joined_at else 0
+            extra = ""
+            if joined_at:
+                extra = f"\n在群 {days} 天 · 共发言 {msgs} 条"
             text = self._render(
                 "msg_member_remove_notify",
                 username=username or "某位成员",
+                short=member_registry_lib.short_id(member),
+                openid=member,
+                days=days,
+                msgs=msgs,
+                extra=extra,
+                group=(self.mod.get_group_meta(g).get("name") or g),
             )
+            if not str(text or "").strip():
+                return
+
             api = self._api_for_group_or_default(g, fallback_pid=platform_id)
             if api is None:
                 self.logger.warning(f"[成员事件] 群 {g} 无可用 API 客户端，无法发送退群通知")
                 return
-            try:
-                await api.send_group_message(g, text)
-                self.logger.info(
-                    f"[成员事件] 群 {g} 成员 {member}({username or '未知'}) 退群，已发送通知"
-                )
-            except Exception as e:
-                self.logger.error(f"[成员事件] 发送退群通知失败（可能是主动消息频控）: {e}")
-        except Exception as e:
+
+            # 5) 发送。官方「支持 event_id 被动回复」的事件只有
+            #    INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE，
+            #    GROUP_MEMBER_REMOVE 不在名单里（会返回 40034027），
+            #    所以默认直接发主动消息；想试被动回复的用户可开 passive_first，
+            #    失败会自动降级，不会把通知丢掉。
+            mode = str(self._read_config_value(
+                ("member_event", "member_remove_notify_mode"), default="active"
+            ) or "active")
+            event_id = str(data.get("_event_id") or "")
+            sent = False
+            if mode == "passive_first" and event_id:
+                try:
+                    await api.send_group_message(g, text, event_id=event_id)
+                    sent = True
+                    self.logger.info(f"[成员事件] 群 {g} 退群通知已用 event_id 被动回复")
+                except Exception as e:  # noqa: BLE001
+                    code = getattr(e, "code", None)
+                    self.logger.info(
+                        f"[成员事件] 被动回复失败(code={code})，降级为主动消息: {e}"
+                    )
+            if not sent:
+                try:
+                    await api.send_group_message(g, text)
+                    self._member_perm_blocked.discard(g)
+                    self.logger.info(
+                        f"[成员事件] 群 {g} 成员 {member_registry_lib.short_id(member)}"
+                        f"({username or '无名'}) 退群，已发送主动消息通知"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    code = getattr(e, "code", None)
+                    hint = self._explain_send_error(code)
+                    try:
+                        if int(code) == 40034105:
+                            self._member_perm_blocked.add(g)
+                    except (TypeError, ValueError):
+                        pass
+                    self.logger.error(
+                        f"[成员事件] 退群通知发送失败(code={code if code is not None else '未知'}): {e}；{hint}"
+                    )
+        except Exception as e:  # noqa: BLE001
             self.logger.exception(f"[成员事件] 处理退群事件异常: {e}")
 
     async def _resolve_member_name(self, group_openid: str, member_openid: str) -> str:
-        """尽力获取成员昵称：内存缓存 -> 群成员接口。查不到返回空串。"""
+        """尽力获取成员昵称：档案 -> 内存缓存 -> 群成员接口。查不到返回空串。"""
+        try:
+            rec = self.members.get(group_openid, member_openid) or {}
+            if str(rec.get("nickname") or "").strip():
+                return str(rec["nickname"]).strip()
+        except Exception:  # noqa: BLE001
+            pass
         cached = (self._nick_cache.get(group_openid) or {}).get(member_openid)
         if cached:
             return cached
@@ -1195,9 +1470,17 @@ class QQGroupManager(Star):
         if api is not None:
             try:
                 info = await api.get_group_member(group_openid, member_openid)
-                name = (info or {}).get("nickname") or ""
+                name = (info or {}).get("nickname") or (info or {}).get("username") or ""
                 if name:
                     self._nick_cache.setdefault(group_openid, {})[member_openid] = name
+                    # 接口给了名字就顺手回填档案（人工昵称不会被覆盖）
+                    if self._members_on():
+                        try:
+                            rec = self.members.get(group_openid, member_openid)
+                            if rec is not None and rec.get("name_source") != "manual":
+                                self.members.set_name(group_openid, member_openid, name, source="api")
+                        except Exception:  # noqa: BLE001
+                            pass
                     return name
             except Exception:
                 pass
@@ -1308,6 +1591,11 @@ class QQGroupManager(Star):
         """查看 / 配置本群群规"""
         await self._run_command(event, forced_cmd="/群规", skip=1)
 
+    @qgm_group.command("成员")
+    async def g_members(self, event: AstrMessageEvent):
+        """群成员档案（列表 / 改名 / 备注 / 删除 / 拉取昵称）"""
+        await self._run_command(event, forced_cmd="/成员", skip=1)
+
     def _ensure_member_event_injected(self) -> None:
         """确保群成员事件注入完成；失败时延迟重试。
 
@@ -1376,6 +1664,12 @@ class QQGroupManager(Star):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+        # 成员档案攒在内存里（发言计数 60s 才落一次盘），退出前补一次
+        try:
+            self.members.save()
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug(f"保存成员档案失败（忽略）: {e}")
 
         # 释放每个 QQApi 持有的 aiohttp.ClientSession。
         # 不做的话，每次重载/禁用插件都会泄漏一个连接池与若干 socket，
@@ -1493,8 +1787,7 @@ class QQGroupManager(Star):
             return  # 非本插件指令，不打扰
 
         # 群白名单检查
-        targets = self._read_config_value(("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)) or []
-        if targets and event.get_group_id() not in targets:
+        if not self._target_group_allowed(event.get_group_id(), event.get_platform_id()):
             self.logger.debug(f"群 {event.get_group_id()} 不在管理名单，忽略")
             return
 
@@ -1536,6 +1829,219 @@ class QQGroupManager(Star):
             await self._cmd_review(event, cmd, parts)
         elif cmd == "/管理登记":
             await self._cmd_admin_register(event, parts)
+        elif cmd == "/成员":
+            await self._cmd_member(event, parts)
+
+    # ------------------------------------------------------------------
+    # /成员：群成员档案
+    # ------------------------------------------------------------------
+    async def _cmd_member(self, event: AstrMessageEvent, parts: list[str]) -> None:
+        """群成员档案：列表 / 改名 / 备注 / 删除 / 清理 / 拉取 / 查。
+
+        官方事件与消息里只有 member_openid、没有昵称，所以这张表得靠人工维护；
+        面板「成员档案」页签改的是同一份数据（members.json）。
+        """
+        g = event.get_group_id()
+        if not g:
+            await self._reply(event, "这个指令要在群里发哈。")
+            return
+        if not self._members_on():
+            await self._reply(event, "群成员档案已在配置里关闭（member_registry.enabled）。")
+            return
+
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        args = parts[2:]
+
+        # 宽松一点：/群管 成员 2、/群管 成员 已退 都当作列表查询
+        if sub.isdigit() or sub in ("已退", "退群", "在群", "全部", "无名", "未命名", "有名", "named"):
+            args = [sub] + args
+            sub = "列表"
+
+        if sub in ("", "列表", "list"):
+            status = "all"
+            page = 1
+            for a in args:
+                if a in ("在群", "active"):
+                    status = "active"
+                elif a in ("已退", "退群", "left"):
+                    status = "left"
+                elif a in ("无名", "未命名", "unnamed"):
+                    status = "unnamed"
+                elif a in ("有名", "named"):
+                    status = "named"
+                elif a.isdigit():
+                    page = max(1, int(a))
+            await self._reply(event, self._render_member_list(g, status=status, page=page))
+            return
+
+        if sub in ("查", "搜索", "search"):
+            kw = " ".join(args).strip()
+            if not kw:
+                await self._reply(event, "用法：/群管 成员 查 <昵称/备注/openid 片段>")
+                return
+            await self._reply(event, self._render_member_list(g, keyword=kw, title=f"搜索「{kw}」"))
+            return
+
+        if sub in ("改名", "设置", "rename", "set"):
+            if len(args) < 2:
+                await self._reply(event, "用法：/群管 成员 改名 <序号或openid> <昵称>\n先发 /群管 成员 列表 看序号。")
+                return
+            openid = self._member_ref(g, args[0])
+            if not openid:
+                await self._reply(event, f"没找到成员「{args[0]}」，先发 /群管 成员 列表 看看序号。")
+                return
+            name = " ".join(args[1:]).strip()[:40]
+            self.members.set_name(g, openid, name, source="manual")
+            await self._reply(event, f"✅ 已记下：{member_registry_lib.short_id(openid)} → {name or '（清空）'}")
+            return
+
+        if sub in ("备注", "note"):
+            if len(args) < 1:
+                await self._reply(event, "用法：/群管 成员 备注 <序号或openid> [备注内容]（留空即清除）")
+                return
+            openid = self._member_ref(g, args[0])
+            if not openid:
+                await self._reply(event, f"没找到成员「{args[0]}」。")
+                return
+            note = " ".join(args[1:]).strip()[:200]
+            self.members.set_note(g, openid, note)
+            await self._reply(event, f"✅ 备注已更新：{member_registry_lib.short_id(openid)} → {note or '（空）'}")
+            return
+
+        if sub in ("删除", "删", "delete", "del"):
+            if not args:
+                await self._reply(event, "用法：/群管 成员 删除 <序号或openid>")
+                return
+            openid = self._member_ref(g, args[0])
+            if not openid:
+                await self._reply(event, f"没找到成员「{args[0]}」。")
+                return
+            self.members.delete(g, openid)
+            await self._reply(event, f"🗑 已从档案删除：{member_registry_lib.short_id(openid)}")
+            return
+
+        if sub in ("清理", "clean"):
+            n = self.members.delete_left(g)
+            await self._reply(event, f"🧹 已清理 {n} 条「已退群」档案。" if n else "没有「已退群」的档案需要清理。")
+            return
+
+        if sub in ("拉取", "同步", "sync"):
+            await self._reply(event, await self._cmd_member_sync(g))
+            return
+
+        await self._reply(
+            event,
+            "群成员档案用法：\n"
+            "/群管 成员 —— 看档案（默认按最近发言排序）\n"
+            "/群管 成员 已退 / 无名 / 全部 —— 按状态筛\n"
+            "/群管 成员 查 <关键词> —— 搜昵称/备注/openid\n"
+            "/群管 成员 改名 <序号> <昵称> —— 人工补名字\n"
+            "/群管 成员 备注 <序号> <备注>\n"
+            "/群管 成员 删除 <序号> —— 删单条\n"
+            "/群管 成员 清理 —— 清掉所有已退群记录\n"
+            "/群管 成员 拉取 —— 调官方群成员接口补昵称（需白名单权限）\n"
+            "改昵称也可以走网页面板「成员档案」页签。",
+        )
+
+    def _member_ref(self, group_openid: str, token: str) -> str:
+        """把「序号」或「openid / openid 尾段」解析成完整 openid。"""
+        tok = str(token or "").strip()
+        if not tok:
+            return ""
+        if tok.isdigit() and len(tok) <= 4:
+            rows, _ = self.members.list_members(group_openid, limit=200)
+            idx = int(tok)
+            if 1 <= idx <= len(rows):
+                return str(rows[idx - 1].get("openid") or "")
+            # 超出范围就不要再当序号了，下面继续按 openid / 尾段找
+        if self.members.has(group_openid, tok):
+            return tok
+        rows, _ = self.members.list_members(group_openid, keyword=tok, limit=5)
+        if len(rows) == 1:
+            return str(rows[0].get("openid") or "")
+        return ""
+
+    def _render_member_list(self, group_openid: str, *, status: str = "all",
+                            keyword: str = "", page: int = 1, title: str = "") -> str:
+        """档案列表文本（每页 15 条）。"""
+        per = 15
+        rows, total = self.members.list_members(
+            group_openid, status=status, keyword=keyword,
+            offset=(page - 1) * per, limit=per,
+        )
+        st = self.members.stats(group_openid)
+        head = title or {
+            "active": "在群成员",
+            "left": "已退群成员",
+            "unnamed": "还没名字的成员",
+            "named": "已命名成员",
+        }.get(status, "全部成员")
+        lines = [
+            f"📇 {head}（共 {st['total']} 人：在群 {st['active']} / 已退 {st['left']}；"
+            f"有名字 {st['named']}，累计发言 {st['messages']} 条）"
+        ]
+        if not rows:
+            lines.append("这一页没有记录。档案是随着群消息自动攒的，机器人没收到过消息就不会有记录。")
+            return "\n".join(lines)
+        base = (page - 1) * per
+        for i, r in enumerate(rows, start=1):
+            name = str(r.get("nickname") or "").strip()
+            label = name or f"（未命名 {member_registry_lib.short_id(r.get('openid'))}）"
+            note = str(r.get("note") or "").strip()
+            last = float(r.get("last_seen") or 0)
+            when = (
+                datetime.fromtimestamp(last, _active_tz()).strftime("%m-%d %H:%M")
+                if last else "-"
+            )
+            flag = " · 已退群" if r.get("status") == "left" else ""
+            extra = f" · 备注：{note}" if note else ""
+            lines.append(
+                f"{base + i}. {label} · 发言 {int(r.get('msg_count') or 0)} · 末次 {when}{flag}{extra}"
+            )
+        pages = max(1, (total + per - 1) // per)
+        if pages > 1:
+            lines.append(f"—— 第 {page}/{pages} 页 · 下一页：/群管 成员 列表 {page + 1}")
+        lines.append("改名：/群管 成员 改名 <序号> <昵称>")
+        return "\n".join(lines)
+
+    async def _cmd_member_sync(self, group_openid: str) -> str:
+        """尝试用官方群成员接口补昵称。
+
+        注意：GET /v2/groups/{openid}/members 与 .../members/{openid}
+        目前都是**内邀白名单**能力，普通机器人调用返回 11253。这里如实回报，
+        不做"假装成功"的提示。
+        """
+        api = self._api_for_group_or_default(group_openid)
+        if api is None:
+            return "没有可用的机器人实例，先确认 QQ 官方适配器在线。"
+        try:
+            members = await api.list_group_members(group_openid)
+        except QQApiError as e:
+            if e.code == 11253:
+                return (
+                    "❌ 官方「群成员列表」接口还是内邀能力（错误码 11253），本机器人没有权限。\n"
+                    "可以先用 /群管 成员 改名 手工补，或在面板「成员档案」页签里批量改。"
+                )
+            return f"❌ 拉取失败：{e}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ 拉取失败：{e}"
+        if not members:
+            return "接口没返回成员（可能权限不足或群为空）。"
+        rows = [
+            {
+                "openid": m.get("member_openid") or "",
+                "nickname": m.get("username") or "",
+                "role": m.get("member_role") or "",
+                "user_openid": m.get("union_openid") or m.get("user_openid") or "",
+                "joined_at": m.get("joined_at") or "",
+            }
+            for m in members
+        ]
+        added, updated = self.members.upsert_many(group_openid, rows)
+        return (
+            f"✅ 已从官方接口同步 {len(rows)} 人（新增 {added}、更新 {updated}）。\n"
+            f"人工改过的昵称不会被覆盖。"
+        )
 
     async def _cmd_group_name(self, event: AstrMessageEvent) -> None:
         """刷新当前群的群名（管理员）。
@@ -2221,15 +2727,13 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     def _managed_groups(self) -> dict[str, str]:
         """返回 {group_openid: platform_id} 轮询目标。"""
-        targets = self._read_config_value(("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)) or []
-        if targets:
+        if self._target_groups():
             out = {}
-            for g in targets:
-                pid = self._known_groups.get(g)
-                if pid:
+            for g, pid in self._known_groups.items():
+                if self._target_group_allowed(g, pid):
                     out[g] = pid
                 else:
-                    self.logger.debug(f"管理名单中的群 {g} 尚未交互过，跳过轮询")
+                    self.logger.debug(f"群 {g} 不在管理名单，跳过轮询")
             return out
         return dict(self._known_groups)
 
@@ -3093,10 +3597,7 @@ class QQGroupManager(Star):
 
     def _mod_group_allowed(self, group: str) -> bool:
         """审核相关的群指令同样遵守 basic.target_group_openids 管理名单。"""
-        targets = self._read_config_value(
-            ("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)
-        ) or []
-        return (not targets) or (group in targets)
+        return self._target_group_allowed(group)
 
     async def _mod_auto_variant_only(self, event: AstrMessageEvent, group: str, rep: dict,
                                      settings: dict, variant: dict) -> None:
@@ -3479,42 +3980,55 @@ class QQGroupManager(Star):
             await self._reply(event, self._mod_tpl(g, "mod_need_admin"))
             return
 
-        if sub in ("设置", "修改") :
+        if sub in ("设置", "修改"):
             text = " ".join(parts[2:]).strip()
             if not text:
-                await self._reply(event, "用法：/群管 群规 设置 规则名｜判定说明｜时长（多行用 ; 分隔）")
+                await self._reply(event, RULE_USAGE_SET)
                 return
             items = [x.strip() for x in re.split("[" + chr(10) + ";]", text) if x.strip()]
-            new_rules = []
+            new_rules, bad = [], []
             for it in items:
-                seg = [x.strip() for x in it.split("｜") if x.strip()]
-                name = seg[0] if seg else "未命名规则"
-                desc = seg[1] if len(seg) > 1 else name
-                secs = parse_duration(seg[2]) if len(seg) > 2 else 3600
+                name, desc, secs, err = parse_rule_spec(it)
+                if err:
+                    bad.append(it)
+                    continue
                 new_rules.append({
-                    "name": name, "desc": desc,
+                    "name": name, "desc": desc or name,
                     "category": "other", "severity": "medium",
                     "seconds": int(secs or 3600), "enabled": True,
                 })
             for r in new_rules:
                 self.mod.add_rule(g, r)
-            await self._reply(event, f"已保存 {len(new_rules)} 条群规，当前共 {len(self.mod.get_rules(g))} 条。")
+            if not new_rules:
+                await self._reply(event, RULE_USAGE_SET)
+                return
+            msg = f"已保存 {len(new_rules)} 条群规，当前共 {len(self.mod.get_rules(g))} 条。"
+            if bad:
+                msg += chr(10) + f"有 {len(bad)} 行没看懂，已跳过：" + " / ".join(bad[:3])
+            await self._reply(event, msg)
             return
 
-        if sub == "添加":
+        if sub in ("添加", "新增", "add"):
             text = " ".join(parts[2:]).strip()
-            if not text:
-                await self._reply(event, "用法：/群管 群规 添加 规则名｜判定说明｜时长")
+            name, desc, secs, err = parse_rule_spec(text)
+            if err:
+                tip = RULE_USAGE_ADD
+                if err == "name_too_long":
+                    tip = ("规则名太长了（超过 24 字），中间八成漏了竖线分隔。" + chr(10) + RULE_USAGE_ADD)
+                await self._reply(event, tip)
                 return
-            seg = [x.strip() for x in text.split("｜") if x.strip()]
-            secs = parse_duration(seg[2]) if len(seg) > 2 else 3600
             rule = self.mod.add_rule(g, {
-                "name": seg[0] if seg else "未命名规则",
-                "desc": seg[1] if len(seg) > 1 else "",
+                "name": name, "desc": desc,
                 "category": "other", "severity": "medium",
                 "seconds": int(secs or 3600), "enabled": True,
             })
-            await self._reply(event, f"已添加群规：{rule['name']}（{rule['id']}）")
+            # 回显完整内容：让用户当场看出说明和时长有没有被吃掉
+            await self._reply(event, (
+                f"已添加群规 {rule['id']}" + chr(10) +
+                f"名称：{rule['name']}" + chr(10) +
+                f"说明：{rule['desc'] or '（未填，按名称判定）'}" + chr(10) +
+                f"判定命中后禁言：{fmt_duration(int(rule['seconds']))}"
+            ))
             return
 
         if sub in ("删除", "移除"):
@@ -3528,7 +4042,13 @@ class QQGroupManager(Star):
             await self._reply(event, "已清空本群群规。")
             return
 
-        await self._reply(event, "用法：/群管 群规 ｜ /群管 群规 添加 规则名｜说明｜时长 ｜ /群管 群规 删除 序号 ｜ /群管 群规 清空")
+        await self._reply(event, (
+            "群规指令怎么用：" + chr(10) +
+            "· /群管 群规            看现有群规" + chr(10) +
+            "· /群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
+            "· /群管 群规 删除 2     删第 2 条" + chr(10) +
+            "· /群管 群规 清空       全删"
+        ))
 
     # ---------------- /审核（管理员） ----------------
     async def _cmd_mod(self, event: AstrMessageEvent, parts: list[str]) -> None:
@@ -3926,6 +4446,148 @@ class QQGroupManager(Star):
         if label == "false_positive" and target.get("text"):
             self._mod_few_shot += f"- 「{str(target['text'])[:80]}」→ violation=false（人工标注的误判样本，勿再判违规）" + chr(10) + ""
         return json_response({"saved": True})
+
+    # ------------------------------------------------------------------
+    # 成员档案 Web API
+    # ------------------------------------------------------------------
+    async def web_members(self):
+        """GET /members?group=xxx&status=&keyword=&sort=&page=&size= 成员档案列表。"""
+        g = str(request.query.get("group", "") or "")
+        if not g:
+            return json_response({"error": "missing group"})
+        status = str(request.query.get("status", "all") or "all")
+        keyword = str(request.query.get("keyword", "") or "")
+        sort = str(request.query.get("sort", "last_seen") or "last_seen")
+        page = max(1, request.query.get("page", 1, type=int))
+        size = min(200, max(5, request.query.get("size", 30, type=int)))
+        rows, total = self.members.list_members(
+            g, status=status, keyword=keyword, sort=sort,
+            offset=(page - 1) * size, limit=size,
+        )
+        items = []
+        for r in rows:
+            item = dict(r)
+            item["short"] = member_registry_lib.short_id(r.get("openid"))
+            item["last_seen_text"] = fmt_ts(r.get("last_seen") or 0)
+            item["first_seen_text"] = fmt_ts(r.get("first_seen") or 0)
+            item["left_at_text"] = fmt_ts(r.get("left_at") or 0) if r.get("left_at") else ""
+            items.append(item)
+        return json_response({
+            "items": items, "total": total, "page": page, "size": size,
+            "stats": self.members.stats(g),
+        })
+
+    async def web_members_stats(self):
+        """GET /members/stats?group=xxx 档案统计。"""
+        g = str(request.query.get("group", "") or "")
+        if not g:
+            return json_response({"error": "missing group"})
+        return json_response(self.members.stats(g))
+
+    async def web_members_update(self):
+        """POST /members/update body: {group, openid, nickname?, note?}"""
+        payload = await request.json(default={})
+        g = str(payload.get("group") or "")
+        openid = str(payload.get("openid") or "")
+        if not g or not openid:
+            return json_response({"error": "invalid payload"})
+        if not self.members.has(g, openid):
+            return json_response({"error": "member not found"})
+        if "nickname" in payload:
+            self.members.set_name(g, openid, str(payload.get("nickname") or ""), source="manual")
+        if "note" in payload:
+            self.members.set_note(g, openid, str(payload.get("note") or ""))
+        rec = self.members.get(g, openid) or {}
+        rec = dict(rec)
+        rec["short"] = member_registry_lib.short_id(openid)
+        return json_response({"ok": True, "item": rec})
+
+    async def web_members_delete(self):
+        """POST /members/delete body: {group, openid}"""
+        payload = await request.json(default={})
+        g = str(payload.get("group") or "")
+        openid = str(payload.get("openid") or "")
+        if not g or not openid:
+            return json_response({"error": "invalid payload"})
+        ok = self.members.delete(g, openid)
+        return json_response({"ok": ok, "stats": self.members.stats(g)})
+
+    async def web_members_clear_left(self):
+        """POST /members/clear_left body: {group}"""
+        payload = await request.json(default={})
+        g = str(payload.get("group") or "")
+        if not g:
+            return json_response({"error": "invalid payload"})
+        n = self.members.delete_left(g)
+        return json_response({"removed": n, "stats": self.members.stats(g)})
+
+    async def web_members_import(self):
+        """POST /members/import body: {group, text}
+
+        每行一条：`openid,昵称,备注`（逗号/制表符/全角逗号都行），
+        最少只需 openid。给"从别处导出一批名字"用。
+        """
+        payload = await request.json(default={})
+        g = str(payload.get("group") or "")
+        text = str(payload.get("text") or "")
+        if not g or not text.strip():
+            return json_response({"error": "invalid payload"})
+        rows = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in re.split(r"[,，\t]+", line)]
+            oid = parts[0] if parts else ""
+            if not oid:
+                continue
+            row = {"openid": oid}
+            if len(parts) > 1 and parts[1]:
+                row["nickname"] = parts[1]
+            if len(parts) > 2 and parts[2]:
+                row["note"] = parts[2]
+            rows.append(row)
+        added, updated = self.members.upsert_many(g, rows)
+        return json_response({
+            "added": added, "updated": updated,
+            "parsed": len(rows), "stats": self.members.stats(g),
+        })
+
+    async def web_members_sync(self):
+        """POST /members/sync body: {group} 用官方群成员列表接口补昵称。
+
+        该接口目前是内邀白名单能力（11253），失败时如实返回错误码，
+        前端按 code 给提示，不做"看起来成功了"的假象。
+        """
+        payload = await request.json(default={})
+        g = str(payload.get("group") or "")
+        if not g:
+            return json_response({"error": "invalid payload"})
+        api = self._api_for_group_or_default(g)
+        if api is None:
+            return json_response({"error": "no_api", "message": "没有可用的机器人实例"})
+        try:
+            members = await api.list_group_members(g)
+        except QQApiError as e:
+            return json_response({
+                "error": "api_error", "code": e.code,
+                "message": "官方群成员列表接口是内邀能力（11253），本机器人暂无权限"
+                if e.code == 11253 else str(e),
+            })
+        except Exception as e:  # noqa: BLE001
+            return json_response({"error": "api_error", "message": str(e)})
+        rows = [{
+            "openid": m.get("member_openid") or "",
+            "nickname": m.get("username") or "",
+            "role": m.get("member_role") or "",
+            "user_openid": m.get("union_openid") or m.get("user_openid") or "",
+            "joined_at": m.get("joined_at") or "",
+        } for m in members if m.get("member_openid")]
+        added, updated = self.members.upsert_many(g, rows)
+        return json_response({
+            "ok": True, "added": added, "updated": updated,
+            "count": len(rows), "stats": self.members.stats(g),
+        })
 
     async def web_mod_admins(self):
         """GET /mod/admins?group=xxx 变体提醒名单（群内管理员用 /管理登记 自助登记）。"""
@@ -4511,6 +5173,13 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/test", self.web_mod_test, ["POST"], "审核-试跑")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/group_rename", self.web_mod_group_rename, ["POST"], "审核-群备注名")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/group_names/refresh", self.web_mod_group_names_refresh, ["POST"], "审核-拉取群名")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members", self.web_members, ["GET"], "成员档案-列表")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/stats", self.web_members_stats, ["GET"], "成员档案-统计")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/update", self.web_members_update, ["POST"], "成员档案-改昵称/备注")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/delete", self.web_members_delete, ["POST"], "成员档案-删除")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/clear_left", self.web_members_clear_left, ["POST"], "成员档案-清理已退群")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/import", self.web_members_import, ["POST"], "成员档案-批量导入")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/sync", self.web_members_sync, ["POST"], "成员档案-官方接口同步")
         # 词库（公开词库 + 上传 + 白名单 + 命中测试）
         ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons", self.web_lexicons, ["GET"], "词库-列表与统计")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/detail", self.web_lexicon_detail, ["GET"], "词库-详情与词条预览")

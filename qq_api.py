@@ -248,6 +248,34 @@ class QQApi:
             self._log("DEBUG", f"[api] 获取群成员信息失败（可能已退群）: {e}")
             return None
 
+    # ---------- 群成员列表（内邀能力，为将来开放预留） ----------
+    async def list_group_members(self, group_openid: str,
+                                 max_pages: int = 20) -> list[dict]:
+        """拉取群成员列表（含 username 昵称），自动按 next_cursor 翻页。
+
+        文档: GET /v2/groups/{group_openid}/members?cursor=...
+        每次最多 30 条；**当前是内邀白名单能力**，普通机器人会收到
+        11253（应用无接口访问权限），此时抛 QQApiError，由调用方提示用户。
+        """
+        out: list[dict] = []
+        cursor = ""
+        for _ in range(max(1, max_pages)):
+            data = await self._request(
+                "GET",
+                f"/v2/groups/{group_openid}/members",
+                params={"cursor": cursor} if cursor else None,
+            )
+            if not isinstance(data, dict):
+                break
+            batch = data.get("members") or []
+            if isinstance(batch, list):
+                out.extend([m for m in batch if isinstance(m, dict)])
+            nxt = str(data.get("next_cursor") or "")
+            if not nxt or nxt == cursor or not batch:
+                break
+            cursor = nxt
+        return out
+
     # ---------- 主动发群消息 ----------
     async def send_group_message(self, group_openid: str, content: str,
                                  event_id: str = "", msg_id: str = "") -> dict:
