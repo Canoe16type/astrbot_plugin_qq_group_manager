@@ -113,6 +113,36 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
+/* ---------------- 开关升级：原生 checkbox → 轨道开关 ----------------
+   只加视觉层，不碰 DOM 结构与事件：
+   1) input 本体保留（id 不变，$("s-xxx").checked 与 change 监听照旧可用）；
+   2) 在 input 后面插一个空 <i class="tsw">，外观由 CSS 的 :checked + .tsw 驱动；
+   3) 幂等：重复调用不会重复插入；动态渲染出的新开关由 MutationObserver 兜住。 */
+function upgradeChecks(root) {
+  const scope = root || document;
+  scope.querySelectorAll("label.field.check").forEach((lab) => {
+    const input = lab.querySelector('input[type="checkbox"]');
+    if (!input || lab.querySelector(":scope > .tsw")) return;
+    const track = document.createElement("i");
+    track.className = "tsw";
+    track.setAttribute("aria-hidden", "true");
+    input.after(track);
+  });
+}
+document.addEventListener("DOMContentLoaded", () => upgradeChecks());
+if (typeof MutationObserver === "function") {
+  let pending = false;
+  const mo = new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; upgradeChecks(); });
+  });
+  document.addEventListener("DOMContentLoaded", () => {
+    mo.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+
 const state = {
   status: null,
   lastGroups: [],      // 最近一次接口返回的群列表（分群下拉兜底用）
@@ -225,11 +255,12 @@ function showToast(msg) {
   t._timer = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
-// ---------------- Tab 切换（5 个一级页签，切页即按需拉数据） ----------------
+// ---------------- Tab 切换（一级页签，切页即按需拉数据） ----------------
 const TAB_LOADERS = {
   status: () => loadStatus(),
   ops: () => { fillOpsGroupSelect(); loadRequests(); loadMutes(); },
   moderation: () => { if (window.__qqgmModerationLoad) window.__qqgmModerationLoad(); },
+  members: () => { if (window.__qqgmMembersLoad) window.__qqgmMembersLoad(); },
   lexicons: () => loadLexicons(),
   records: () => { loadHistory(); loadRecalls(); if (window.__qqgmRecordsLoad) window.__qqgmRecordsLoad(); },
   logs: () => loadLogHistory(),
@@ -242,6 +273,7 @@ const TAB_HEAD = {
   settings: ["插件设置", "表单由 _conf_schema.json 自动生成，与 AstrBot 配置面板读写同一份配置"],
   ops: ["群管", "入群申请与当前禁言状态一览；同意 / 拒绝请在群内用管理员指令处理"],
   moderation: ["群规审核", "左侧选群，右侧按「群规 / 举报设置 / 话术模板」分栏配置，按群独立保存"],
+  members: ["成员档案", "openid ↔ 昵称/备注 对照表；官方事件只给 openid，名字靠这里维护，退群通知也从这里取名"],
   lexicons: ["词典", "关键词维度用的词库：内置开源词库 + 本地自传词库，改动立即生效"],
   records: ["记录", "禁言历史、撤回历史与模型判定记录；试跑用当前选中群的提示词"],
   logs: ["日志", "实时日志流（SSE），可按等级与关键词过滤"],
@@ -2617,8 +2649,10 @@ const HELP = {
       def:"成员变动事件要勾 1<<24，群内 @ 消息要勾 1<<25；漏勾就收不到对应事件，表现为「功能没反应」。", doc:["消息收发概述", DOC.overview] },
     { id:"addrobot", term:"GROUP_ADD_ROBOT 机器人入群事件", go:["welcome","机器人入群自我介绍"],
       def:"机器人被拉进群时推送，入群瞬间就能拿到 group_openid。用事件的 event_id 发被动消息可绕开 11251；发送成功会自动撤销旧的「首条消息欢迎」，失败或事件没收到则由兜底路径补发。", doc:["机器人入群事件", DOC.addrobot] },
-    { id:"memberevent", term:"群成员事件（暂不可用）", go:["groups","群列表"],
-      def:"更正：QQ 官方目前不推送 GROUP_MEMBER_EVENT 群成员事件（用独立网关只订阅该事件也收不到任何推送）。所以退群通知这类配置是「已就绪、等官方开放后自动生效」，不是插件故障，无需排查。", doc:null },
+    { id:"memberevent", term:"群成员事件（GROUP_MEMBER_ADD / REMOVE）", go:["groups","群列表"],
+      def:"官方 v2 有这两个事件（autogen/event 下），走 intent 1<<24（GROUP_MEMBER_EVENT），事件体只有 timestamp / group_openid / member_openid / user_openid（可能为空），没有昵称、也没有事件 id。插件用运行时注入把处理器挂到 qq_official 的 botpy client 上，所以开启后需要重启或等适配器重连一次；一直收不到推送通常是平台侧没给这个机器人推该事件。", doc:null },
+    { id:"membername", term:"为什么退群通知只能显示「某位成员」", go:["members","成员档案"],
+      def:"取名顺序：本群档案（人工）→ 用事件里的 user_openid 去其它群借名字 → 群成员信息接口。前两条能用是因为档案是本地维护的；接口（GET /v2/groups/{g}/members）仍是内邀能力，普通机器人返回 11253。所以最省事的做法是给常在群里说话的人补一次名字：/群管 成员 改名 <序号> 昵称，或面板「成员档案」页签，补过就不会再被覆盖。", doc:null },
     { id:"msgseq", term:"40054005 / msg_seq 消息去重", go:["switches","功能开关"],
       def:"同一条消息用重复的 msg_seq 重发会被判为重复下发；重发必须换序号。", doc:["发送群聊消息", DOC.msg] },
     { id:"40064004", term:"40064004 · 撤回超 2 分钟", go:["recall","撤回"],
@@ -2706,8 +2740,8 @@ const HELP = {
       def:"机器人不是群主或管理员 → 去群里把它设为管理员。code 11251 → 这是主动消息受限，影响欢迎语这类主动推送，不影响指令回复。其他 code 连 HTTP 状态码一起反馈。", doc:["发送群聊消息", DOC.msg] },
     { id:"q4", term:"入群申请没有自动通知", go:["approve","入群审批"],
       def:"确认「新申请群内通知」已开；在群里发一条指令触发轮询启动（状态页可看轮询状态）；轮询间隔保持 ≥ 10 秒（接口约 30 QPM，过小会自动兜底为 10 秒）；确认机器人有查看入群申请的权限。", doc:null },
-    { id:"q5", term:"退群通知不生效", go:["groups","群列表"],
-      def:"官方侧原因：QQ 开放平台目前不推送群成员事件，属平台限制，与插件无关。插件侧注入已完成（intents 订阅、事件解析、处理器都验过，独立网关只订阅该事件也收不到推送）。无需处理，等官方开放后自动生效。", doc:null },
+    { id:"q5", term:"退群通知不生效 / 只显示「某位成员」", go:["members","成员档案"],
+      def:"分两种情况：① 完全不发——确认「群成员事件 → 退群通知」已开，然后重启一次 AstrBot（或等下一条群消息触发重连注入），日志里出现「未找到平台名为 qq_official 的适配器实例」就是这个原因；② 发了但没名字——正常，事件里只有 openid，官方成员接口是内邀能力（11253），去「成员档案」给这个人补一次名字即可。通知默认走主动消息，因为 GROUP_MEMBER_REMOVE 不支持 event_id 被动回复（40034027）。", doc:null },
     { id:"q6", term:"设置改了没生效", go:["global","全局作用域"],
       def:"多数配置保存后即时生效（含轮询间隔）。个别没生效时，先在 WebUI 重新保存一次；仍不行就重启 AstrBot。改动「生效群范围」「管理员判定」这类配置后，建议重启一次。", doc:null },
     { id:"q7", term:"明明违规了却没执行（记录里写「置信度 xx < 阈值 0.75」）", go:["review","群规审核"],
@@ -2723,6 +2757,7 @@ const HELP = {
   /* ── 文档索引：插件本地文档 + QQ 官方文档 ── */
   docs: [
     { term:"README.md · 指令手册", def:"13 条指令的语法、示例与权限", file:"plugins/astrbot_plugin_qq_group_manager/README.md → 指令手册", doc:null },
+    { term:"README.md · 成员档案（openid 认不出人怎么办）", def:"为什么只有 openid、档案怎么攒、退群通知机制、官方接口 11253、局限", file:"README.md → 成员档案（openid 认不出人怎么办）", doc:null },
     { term:"README.md · 群规审核（/群管 举报）", def:"四维度判定、禁言时长怎么算、置信度怎么来的、维度开关", file:"README.md → 群规审核（/群管 举报）", doc:null },
     { term:"README.md · 词典（关键词词库）", def:"内置词库一览、白名单、词 vs 正则、文件格式、合规与隐私", file:"README.md → 词典（关键词词库）", doc:null },
     { term:"README.md · 插件配置说明", def:"基础功能 / 权限判定 / 撤回 / 入群审批 / 群规审核 / 消息模板 / 日志", file:"README.md → 插件配置说明", doc:null },
@@ -2843,3 +2878,229 @@ dq.oninput=render;
 document.addEventListener('keydown',e=>{
   if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){e.preventDefault();openHelp('terms');}
   if(e.key==='Escape')closeHelp();});
+
+/* ================= 成员档案（openid <-> 昵称/备注） ================= */
+(function () {
+  // 官方只给 member_openid，没有昵称；名字、备注都在这里维护。
+  // 群列表复用「群规审核」的 mod/groups（带备注名/群名）。
+  const bridge = window.AstrBotPluginPage;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  let groupsLoaded = false;
+  let current = "";
+  let page = 1;
+  let total = 0;
+
+  function toast(msg, isErr) {
+    const el = $("modToast");
+    if (!el) { console.log(msg); return; }
+    el.textContent = msg;
+    el.style.background = isErr ? "var(--danger)" : "var(--text)";
+    el.classList.add("show");
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.remove("show"), 2200);
+  }
+
+  async function ensureGroups() {
+    if (groupsLoaded) return;
+    try {
+      const res = await bridge.apiGet("mod/groups");
+      const sel = $("memGroup");
+      const seen = new Set();
+      const opt = (g, label) => `<option value="${esc(g)}">${esc(label)}</option>`;
+      let html = '<option value="">选择群…</option>';
+      for (const b of (res.bots || [])) {
+        for (const g of (b.groups || [])) {
+          if (seen.has(g.group)) continue;
+          seen.add(g.group);
+          const label = (g.display || g.alias || g.name || ("未命名群 " + String(g.group).slice(-6)));
+          html += opt(g.group, b.name ? `${label}（${b.name}）` : label);
+        }
+      }
+      for (const g of (res.items || [])) {
+        if (seen.has(g.group)) continue;
+        seen.add(g.group);
+        html += opt(g.group, g.display || g.alias || g.name || ("未命名群 " + String(g.group).slice(-6)));
+      }
+      sel.innerHTML = html;
+      groupsLoaded = true;
+      if (!current && sel.value) current = sel.value;
+    } catch (e) {
+      toast("群列表加载失败：" + e, true);
+    }
+  }
+
+  function fmtTs(ts) {
+    if (!ts) return "-";
+    const d = new Date(Number(ts) * 1000);
+    const p = (x) => String(x).padStart(2, "0");
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  function renderStats(st) {
+    if (!st) { $("memStats").textContent = ""; return; }
+    $("memStats").innerHTML =
+      `共 <b>${st.total}</b> 条档案 · 在群 <b>${st.active}</b> · 已退 <b>${st.left}</b> · ` +
+      `已命名 <b>${st.named}</b> / 未命名 <b>${st.unnamed}</b> · 累计发言 <b>${st.messages}</b> 条`;
+  }
+
+  async function load() {
+    await ensureGroups();
+    if (!current) {
+      $("memList").innerHTML = '<div class="empty"><span>先在上面选一个群</span></div>';
+      return;
+    }
+    const params = {
+      group: current,
+      status: $("memStatus").value,
+      sort: $("memSort").value,
+      keyword: ($("memSearch").value || "").trim(),
+      page,
+      size: 30,
+    };
+    let res;
+    try {
+      res = await bridge.apiGet("members", params);
+    } catch (e) {
+      $("memList").innerHTML = `<div class="empty"><span>加载失败：${esc(e)}</span></div>`;
+      return;
+    }
+    if (res.error) {
+      $("memList").innerHTML = `<div class="empty"><span>${esc(res.error)}</span></div>`;
+      return;
+    }
+    total = res.total || 0;
+    renderStats(res.stats);
+    const pages = Math.max(1, Math.ceil(total / (res.size || 30)));
+    $("memPageInfo").textContent = total ? `第 ${res.page}/${pages} 页 · 共 ${total} 条` : "";
+    $("memPrev").disabled = page <= 1;
+    $("memNext").disabled = page >= pages;
+
+    const items = res.items || [];
+    if (!items.length) {
+      $("memList").innerHTML =
+        '<div class="empty"><span>没有记录。档案是随群消息自动攒的：机器人没收到过这个群的消息，这里就是空的。</span></div>';
+      return;
+    }
+    const rows = items.map((it, i) => {
+      const name = (it.nickname || "").trim();
+      const named = !!name;
+      const src = { manual: "人工", api: "接口", msg: "消息", cross: "借名" }[it.name_source] || "";
+      const badge = it.status === "left"
+        ? '<span class="tag bad">已退群</span>'
+        : '<span class="tag">在群</span>';
+      return `<tr>
+        <td>${i + 1}</td>
+        <td>
+          <div style="font-weight:600">${named ? esc(name) : '<span style="color:var(--dim)">未命名</span>'}
+            ${src ? `<span class="hint" style="margin-left:6px">${src}</span>` : ""}</div>
+          <div class="hint" style="font-family:ui-monospace,Menlo,monospace">${esc(it.openid || "")}</div>
+        </td>
+        <td>${esc(it.note || "")}</td>
+        <td>${it.msg_count || 0}</td>
+        <td>${esc(it.last_seen_text || fmtTs(it.last_seen))}</td>
+        <td>${badge}</td>
+        <td style="white-space:nowrap">
+          <button class="btn ghost small" data-act="name" data-oid="${esc(it.openid)}" data-name="${esc(name)}">改昵称</button>
+          <button class="btn ghost small" data-act="note" data-oid="${esc(it.openid)}" data-note="${esc(it.note || "")}">备注</button>
+          <button class="btn ghost small" data-act="del" data-oid="${esc(it.openid)}">删</button>
+        </td>
+      </tr>`;
+    }).join("");
+    $("memList").innerHTML = `<div class="table-wrap"><table class="group-table">
+      <thead><tr><th>#</th><th>昵称 / openid</th><th>备注</th><th>发言</th><th>最近发言</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  async function update(openid, patch) {
+    try {
+      const r = await bridge.apiPost("members/update", Object.assign({ group: current, openid }, patch));
+      if (r.error) { toast(r.error, true); return; }
+      toast("已保存");
+      await load();
+    } catch (e) {
+      toast("保存失败：" + e, true);
+    }
+  }
+
+  $("memGroup").addEventListener("change", (e) => {
+    current = e.target.value;
+    page = 1;
+    load();
+  });
+  ["memStatus", "memSort"].forEach((id) => $(id).addEventListener("change", () => { page = 1; load(); }));
+  let searchTimer = null;
+  $("memSearch").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { page = 1; load(); }, 300);
+  });
+  $("btnMemReload").addEventListener("click", () => load());
+  $("memPrev").addEventListener("click", () => { if (page > 1) { page--; load(); } });
+  $("memNext").addEventListener("click", () => { page++; load(); });
+
+  $("memList").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const openid = btn.dataset.oid;
+    const act = btn.dataset.act;
+    if (act === "name") {
+      const v = prompt("给这个 openid 起个名字（留空 = 清空）：", btn.dataset.name || "");
+      if (v === null) return;
+      await update(openid, { nickname: v });
+    } else if (act === "note") {
+      const v = prompt("备注（留空 = 清空）：", btn.dataset.note || "");
+      if (v === null) return;
+      await update(openid, { note: v });
+    } else if (act === "del") {
+      if (!confirm("从档案里删掉这一条？")) return;
+      const r = await bridge.apiPost("members/delete", { group: current, openid });
+      if (r.error) { toast(r.error, true); return; }
+      toast("已删除");
+      await load();
+    }
+  });
+
+  $("btnMemSync").addEventListener("click", async () => {
+    if (!current) { toast("先选群", true); return; }
+    toast("正在调官方群成员列表接口…");
+    try {
+      const r = await bridge.apiPost("members/sync", { group: current });
+      if (r.error) { toast(r.message || r.error, true); return; }
+      toast(`已同步 ${r.count} 人（新增 ${r.added}，更新 ${r.updated}）`);
+      await load();
+    } catch (e) {
+      toast("同步失败：" + e, true);
+    }
+  });
+
+  $("btnMemClearLeft").addEventListener("click", async () => {
+    if (!current) { toast("先选群", true); return; }
+    if (!confirm("删掉这个群所有「已退群」的档案？")) return;
+    const r = await bridge.apiPost("members/clear_left", { group: current });
+    if (r.error) { toast(r.error, true); return; }
+    toast(`已清理 ${r.removed} 条`);
+    await load();
+  });
+
+  $("btnMemImport").addEventListener("click", () => {
+    $("memImportBox").hidden = !$("memImportBox").hidden;
+  });
+  $("memImportCancel").addEventListener("click", () => { $("memImportBox").hidden = true; });
+  $("memImportDo").addEventListener("click", async () => {
+    if (!current) { toast("先选群", true); return; }
+    const text = $("memImportText").value || "";
+    if (!text.trim()) { toast("内容为空", true); return; }
+    const r = await bridge.apiPost("members/import", { group: current, text });
+    if (r.error) { toast(r.error, true); return; }
+    toast(`导入完成：新增 ${r.added}，更新 ${r.updated}`);
+    $("memImportText").value = "";
+    $("memImportBox").hidden = true;
+    await load();
+  });
+
+  window.__qqgmMembersLoad = () => {
+    if (!$("memGroup").value) groupsLoaded = false; // 群列表可能在别处新增了群
+    load();
+  };
+})();
