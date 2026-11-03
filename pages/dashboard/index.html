@@ -65,7 +65,7 @@
         <svg class="ico only-light"><use href="#i-moon"/></svg>
         <svg class="ico only-dark"><use href="#i-sun"/></svg>
       </button>
-      <small>插件 v<span id="pluginVersion">1.1.0</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
+      <small>插件 v<span id="pluginVersion">1.1.1</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
     </div>
   </aside>
 
@@ -185,22 +185,24 @@
  <option value="all">全部</option>
  <option value="active">在群</option>
  <option value="left">已退群</option>
- <option value="unnamed">未命名</option>
  <option value="named">已命名</option>
+ <option value="unnamed">未命名</option>
  </select>
  <span class="hint">排序</span>
  <select id="memSort" class="select">
  <option value="last_seen">最近发言</option>
  <option value="msg_count">发言最多</option>
- <option value="first_seen">最早入档</option>
+ <option value="first_seen">入群时间</option>
  <option value="name">昵称</option>
+ <option value="left_at">最近退群</option>
  </select>
  <input id="memSearch" class="input" type="search" placeholder="搜昵称 / 备注 / openid" />
  <button id="btnMemReload" class="btn ghost small">↻ 刷新</button>
- <button id="btnMemSync" class="btn ghost small" title="调官方「群成员列表」接口补昵称；该接口目前是内邀白名单能力（11253）">⬇ 官方同步</button>
+ <button id="btnMemSync" class="btn ghost small" title="调官方「群成员列表」接口补昵称；该接口目前是内邀白名单能力（11253），没权限会明确提示">⬇ 官方同步</button>
  <button id="btnMemImport" class="btn ghost small" title="按行粘贴：openid,昵称,备注">⇪ 批量导入</button>
  <button id="btnMemClearLeft" class="btn ghost small" title="删掉所有「已退群」的记录">🧹 清理已退群</button>
  </div>
+ <div id="memSyncHint" class="hint" style="margin:0 0 8px"></div>
 
  <div id="memStats" class="hint" style="margin:8px 0"></div>
 
@@ -220,7 +222,7 @@
  <div class="card-head"><h3> 批量导入</h3><span class="hint">每行一条：openid,昵称,备注（后两项可省）</span></div>
  <textarea id="memImportText" placeholder="C3D4E5F6A1B2...  , 小明 , 老群友
 A1B2C3D4E5F6...  , 小红"></textarea>
- <div class="log-controls" style="margin-top:8px">
+ <div class="log-controls" style="margin-top:8px;justify-content:flex-end">
  <button id="memImportDo" class="btn">导入</button>
  <button id="memImportCancel" class="btn ghost">取消</button>
  </div>

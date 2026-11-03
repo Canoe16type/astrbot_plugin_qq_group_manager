@@ -134,6 +134,7 @@ class MemberRegistry:
             "msg_count": 0,
             "status": "active",           # active / left
             "left_at": 0.0,
+            "join_count": 1,              # 进群次数（只记次数，不记任何内容）
         }
 
     def _group(self, group_openid: str, create: bool = False) -> dict[str, dict]:
@@ -179,13 +180,26 @@ class MemberRegistry:
             rows[oid] = rec
             self._dirty = True
             self._log("INFO", f"群 {group_openid} 新成员入档: {short_id(oid)}")
+        if rec.get("status") == "left":
+            # 说过话就一定在群里（重新入群，或退群事件误报）。
+            # 重新入群＝新一轮在群周期：上一条周期留下的统计一律清零，
+            # 否则「进群→退群→再进群→再退群」会把两次的数据累加在一起，
+            # 退群通知里就会写出早就不是本次的发言数（1.1.1 修复）。
+            old_msgs = int(rec.get("msg_count") or 0)
+            rec["status"] = "active"
+            rec["left_at"] = 0.0
+            rec["first_seen"] = now
+            rec["last_seen"] = 0.0
+            rec["msg_count"] = 0
+            rec["join_count"] = int(rec.get("join_count") or 1) + 1
+            self._log(
+                "INFO",
+                f"群 {group_openid} 成员 {short_id(oid)} 重新入群（第 {rec['join_count']} 次），"
+                f"发言统计按本轮重新计数（退群时已清零，上轮 {old_msgs} 条仅记录在日志里）",
+            )
         rec["last_seen"] = now
         if count_msg:
             rec["msg_count"] = int(rec.get("msg_count") or 0) + 1
-        if rec.get("status") == "left":
-            # 说过话就一定在群里（重新入群或退群事件误报）
-            rec["status"] = "active"
-            rec["left_at"] = 0.0
         uo = str(user_openid or union_openid or "")
         if uo:
             rec["user_openid"] = uo
@@ -216,13 +230,25 @@ class MemberRegistry:
         return rec
 
     def mark_left(self, group_openid: str, openid: str,
-                  ts: float | None = None) -> Optional[dict]:
-        """标记退群。没有档案时返回 None（调用方决定是否建"仅有 openid"的记录）。"""
+                  ts: float | None = None, purge_stats: bool = True) -> Optional[dict]:
+        """标记退群。没有档案时返回 None（调用方决定是否建"仅有 openid"的记录）。
+
+        purge_stats=True（默认）会把**本轮的活跃统计清零**：发言数、最近发言时间。
+        理由：退群＝这一轮在群周期结束，留着的统计既没用、又会在下次进群后
+        被误读成"本次数据汇总"。昵称 / 备注 / 进群次数保留——那是人工维护的
+        身份信息，删了下次退群就又叫不出名字了。
+
+        注意：一定要在取完统计（发退群通知用）之后再调用，否则通知里的
+        「共发言 N 条」会变成 0。
+        """
         rec = self._group(group_openid).get(str(openid or ""))
         if rec is None:
             return None
         rec["status"] = "left"
         rec["left_at"] = float(ts or _now())
+        if purge_stats:
+            rec["msg_count"] = 0
+            rec["last_seen"] = 0.0
         self.save()
         return rec
 
@@ -322,7 +348,9 @@ class MemberRegistry:
             "name": lambda r: str(r.get("nickname") or "\uffff"),
             "left_at": lambda r: -(float(r.get("left_at") or 0)),
         }.get(sort, lambda r: -(float(r.get("last_seen") or 0)))
-        rows.sort(key=key)
+        # 在群的人永远排在已退群的人前面（同组内再按所选字段排），
+        # 否则「最近发言」会把刚退群的排到最上面，看着像还在群里。
+        rows.sort(key=lambda r: (1 if r.get("status") == "left" else 0, key(r)))
         total = len(rows)
         if limit and limit > 0:
             rows = rows[offset: offset + limit]

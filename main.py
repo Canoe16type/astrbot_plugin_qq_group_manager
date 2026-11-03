@@ -2850,9 +2850,40 @@ class QQGroupManager(Star):
             tpl = moderation.DEFAULT_TEMPLATES.get(key, "")
         return moderation.render_tpl(tpl, **kw)
 
+    # QQ 官方引用「合并转发」时，reply 原文不是转发正文，而是另一套摘要清单：
+    #   === 消息 1 ===
+    #   [消息内容] [群聊的聊天记录]
+    #   [消息类型] 引用消息
+    #   [关联消息]
+    #   --- 第1条 ---
+    #       [消息内容] 该不会4.2出了吧？
+    #       [发送者] 曾某人
+    # 而转发消息本身在缓存里是 [群聊的聊天记录] / === 消息 N === / [消息内容] ...。
+    # 两套格式互不包含，所以「整串 in」永远匹配不上；必须抽 [消息内容] 行做交集。
+    _QUOTE_ITEM_RE = re.compile(r"\[消息内容\]\s*(.+)")
+    _FORWARD_NOISE = {
+        "[群聊的聊天记录]", "群聊的聊天记录", "[转发消息]", "[合并转发]",
+        "[聊天记录]", "聊天记录",
+    }
+
+    @classmethod
+    def _quote_forward_items(cls, text: str) -> list[str]:
+        """从引用摘要里抽出被转发消息的正文行（去重保序，剔除占位标题）。"""
+        items: list[str] = []
+        for line in (text or "").splitlines():
+            m = cls._QUOTE_ITEM_RE.search(line)
+            if not m:
+                continue
+            v = m.group(1).strip()
+            if not v or v in cls._FORWARD_NOISE:
+                continue
+            if v not in items:
+                items.append(v)
+        return items
+
     def _find_recent_msg(self, group: str, text: str = "", ts: float = 0.0,
                          max_age: float = 3600.0) -> Optional[dict]:
-        """在消息缓存里找被举报的那条（优先按原文，其次按时间邻近）。
+        """在消息缓存里找被举报的那条（优先按原文，其次转发摘要交集，最后按时间）。
 
         与撤回用的 _match_recent_msg_id 区别：这里要拿到**整条记录**
         （发送者 openid、图片、真实消息 ID），且时间窗更宽（审核不受 2 分钟限制）。
@@ -2860,20 +2891,33 @@ class QQGroupManager(Star):
         try:
             lst = self._recent_group_msgs.get(group) or []
             now = time.time()
+            qitems = self._quote_forward_items(text)
+            bare = (text or "").strip()
             best, best_score = None, -1.0
             for r in lst:
                 if now - float(r.get("ts") or 0) > max_age:
                     continue
                 score = 0.0
                 rt = (r.get("text") or "").strip()
-                if text and rt == text.strip():
+                if bare and rt == bare:
                     score += 10.0          # 原文完全一致最强
-                elif text and rt and (text.strip() in rt or rt in text.strip()):
+                elif bare and rt and (bare in rt or rt in bare):
                     score += 4.0
+                elif qitems and rt:
+                    # 被引用的是合并转发：按「子消息正文行」在缓存正文里的命中比例打分，
+                    # 全中 = 8 分（低于原文完全一致，高于普通包含，不会误伤普通消息）。
+                    hit = sum(1 for it in qitems if it in rt)
+                    if hit:
+                        score += 4.0 + 4.0 * hit / len(qitems)
                 if ts:
                     score += max(0.0, 3.0 - abs(float(r.get("ts") or 0) - ts))
                 if score > best_score:
                     best, best_score = r, score
+            if best is not None:
+                self.logger.debug(
+                    f"审核引用命中缓存: items={qitems[:3]} score={best_score:.1f} "
+                    f"id={best.get('id')} text_len={len(best.get('text') or '')}"
+                )
             return best if best_score > 0 else None
         except Exception:
             return None
@@ -2933,13 +2977,19 @@ class QQGroupManager(Star):
                 if rid:
                     message_id = str(rid)
                 quoted_content = getattr(reply, "message_str", "") or ""
+                # reply.chain 里的文本才是被引用原文；message_str 有时只剩占位标题。
+                chain_parts = []
                 for sub in (getattr(reply, "chain", None) or []):
                     if type(sub).__name__ == "Image":
                         u = str(getattr(sub, "url", "") or getattr(sub, "file", "") or "")
                         if u.startswith("http"):
                             quoted_images.append(u)
-                    elif not quoted_content:
-                        quoted_content = str(getattr(sub, "text", "") or "")
+                    else:
+                        t = str(getattr(sub, "text", "") or "")
+                        if t.strip():
+                            chain_parts.append(t.strip())
+                if chain_parts:
+                    quoted_content = "\n".join(chain_parts)
         except Exception:
             pass
         try:
@@ -2964,17 +3014,25 @@ class QQGroupManager(Star):
                     rec = r
                     break
         if rec is None:
-            out["text"] = quoted_content
+            # 兜底：被举报的是合并转发时，摘要里的 [消息内容] 行至少能拿去审核，
+            # 别把「[消息类型] 引用消息」这类噪声丢给模型。
+            items = self._quote_forward_items(quoted_content)
+            out["text"] = "\n".join(items) if items else quoted_content
             out["images"] = quoted_images
+            self.logger.debug(
+                f"审核引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]}"
+            )
             return out
         real_id = str(rec.get("id") or "")
         # QQ 官方引用事件只给 REFIDX 引用索引，撤回 API 认的是缓存里的真实消息 ID
         if real_id and (not message_id or message_id.startswith(("REFIDX", "TMP_"))):
             message_id = real_id
+        # 命中缓存时优先用缓存里的正文：合并转发的缓存正文是完整展开版，
+        # 比引用摘要（夹着 [消息类型] 等元信息）更适合做审核判定。
         out.update({
             "resolved": True,
             "id": message_id or real_id,
-            "text": quoted_content or str(rec.get("text") or ""),
+            "text": str(rec.get("text") or "") or quoted_content,
             "sender": str(rec.get("sender") or ""),
             "sender_name": str(rec.get("sender_name") or ""),
             "images": list(rec.get("images") or []) or quoted_images,

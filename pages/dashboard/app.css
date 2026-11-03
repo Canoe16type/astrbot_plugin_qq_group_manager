@@ -491,6 +491,20 @@ textarea{min-height:78px;resize:vertical;line-height:1.6;font-family:inherit}
 .modal-title{font-size:var(--t3);font-weight:700;margin-bottom:var(--s2)}
 .modal-msg{font-size:var(--t2);color:var(--dim);line-height:1.7;margin-bottom:var(--s4);white-space:pre-wrap}
 .modal-btns{display:flex;gap:var(--s2);justify-content:flex-end}
+/* 自定义输入弹窗（替代沙箱里用不了的 prompt()） */
+.modal-input{width:100%;margin:var(--s2) 0 var(--s4);box-sizing:border-box}
+/* 成员档案：openid 很长（32 位），不限制会把表格撑出横向滚动条（1.1.1 修）。
+   全局 table 是 table-layout:fixed，不写列宽就变成每列等宽，
+   「操作」列三个按钮放不下 → 给各列钉死宽度，只让「昵称/openid」列吃剩余空间。 */
+.oid{display:block;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+     font-family:var(--mono)}
+#memList th:nth-child(1){width:52px}
+#memList th:nth-child(3){width:132px}
+#memList th:nth-child(4){width:64px}
+#memList th:nth-child(5){width:118px}
+#memList th:nth-child(6){width:120px}
+#memList th:nth-child(7){width:178px}
+#memList th,#memList td{padding-left:var(--s2);padding-right:var(--s2);overflow:hidden}
 #toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(10px);opacity:0;
        background:var(--tx);color:var(--pan);border-radius:var(--r-full);padding:9px var(--s4);
        font-size:var(--t1);z-index:9999;max-width:86vw;transition:.2s;pointer-events:none}
@@ -509,19 +523,27 @@ textarea{min-height:78px;resize:vertical;line-height:1.6;font-family:inherit}
 
 /* ── 日志 ── */
 .log-toolbar,.log-controls{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);margin-bottom:var(--s3)}
-.log-controls .btn{margin-left:auto}
-.log-list{background:var(--tx);border-radius:var(--r-md);padding:var(--s3);height:min(62vh,560px);overflow:auto;
+/* 只有第一个按钮吃剩余空间（形成右侧按钮组），其余按钮紧跟其后。
+   以前是每个 .btn 都 margin-left:auto，于是「批量导入」这种只有两个按钮的
+   卡片里，导入被推到中间、取消被推到最右，窄屏宽屏都歪（1.1.1 修）。 */
+.log-controls .btn{margin-left:0}
+.log-controls .btn:first-of-type{margin-left:auto}
+/* 日志区和页面同色系（1.1.1）：以前背景写死 --tx（那是文字色 token），
+   浅色主题下是一整块近黑、深色主题下反过来发白，跟周围卡片完全两个色系，很晃眼。
+   现在背景跟随卡片、文字与高亮色全部走主题 token，明暗两套都统一。 */
+.log-list{background:var(--soft2);border:1px solid var(--line);border-radius:var(--r-md);
+          padding:var(--s3);height:min(62vh,560px);overflow:auto;
           font-family:var(--mono);font-size:11.5px;line-height:1.7}
-.log-list .empty{color:#9aa4ad}
-.log-list .empty .eico{background:rgba(255,255,255,.13);box-shadow:none;color:#9aa4ad}
-.log-line{display:flex;gap:var(--s2);color:#cfd6db;word-break:break-all}
-.log-line .lt{color:#7c8a94;flex:none}
+.log-list .empty{color:var(--dim)}
+.log-list .empty .eico{background:var(--soft);box-shadow:none;color:var(--dim)}
+.log-line{display:flex;gap:var(--s2);color:var(--tx);word-break:break-all}
+.log-line .lt{color:var(--dim);flex:none}
 .log-line .msg{flex:1;min-width:0}
 .log-line .lv{flex:none;min-width:52px;font-weight:700}
-.log-line .lv-DEBUG{color:#8b979c}
-.log-line .lv-INFO{color:#4fd1b5}
-.log-line .lv-WARNING{color:#e5b04a}
-.log-line .lv-ERROR{color:#ff7d6e}
+.log-line .lv-DEBUG{color:var(--dim)}
+.log-line .lv-INFO{color:var(--acc)}
+.log-line .lv-WARNING{color:var(--warn)}
+.log-line .lv-ERROR{color:var(--bad)}
 
 /* ── 插件设置页（schema 自动生成） ── */
 .set-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);background:var(--pan);
@@ -539,7 +561,7 @@ textarea{min-height:78px;resize:vertical;line-height:1.6;font-family:inherit}
 .set-group-head .set-subtitle{font-size:11px;color:var(--dim);flex:1;min-width:120px}
 .set-group-body{padding:0 var(--s4) var(--s4)}
 .set-group.collapsed .set-group-body{display:none}
-.set-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:var(--s3);padding-top:var(--s3)}
+.set-items{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:var(--s3);padding-top:var(--s3)}
 .set-item{display:flex;flex-direction:column;gap:5px;background:var(--soft2);border-radius:var(--r-md);padding:var(--s3)}
 .set-item.dirty{box-shadow:inset 0 0 0 1.5px var(--brand)}
 .set-label{display:flex;align-items:center;gap:6px;font-size:var(--t1);font-weight:600}
@@ -756,7 +778,7 @@ select{max-width:100%}
 /* ── ③ 分辨率适配：栅格按视口给出合理列宽与列数 ── */
 .mod-scope .grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
 .mod-scope .beta-grid{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
-.set-items{grid-template-columns:repeat(auto-fill,minmax(min(100%,280px),1fr))}
+.set-items{grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr))}
 @media (min-width:1600px){
   .mod-scope .grid,.mod-scope .beta-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
 }

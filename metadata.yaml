@@ -15,7 +15,7 @@ help: |
   【免责】内置词库仅本机过滤，面板不展示词条，详见 lexicons/DISCLAIMER.md
 support_platforms:
   - qq_official
-version: 1.1.0
+version: 1.1.1
 astrbot_version: ">=4.16.0,<5"
 author: Canoe16type
 repo: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager

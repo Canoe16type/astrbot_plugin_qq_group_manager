@@ -242,6 +242,41 @@ function showConfirm(msg) {
     okBtn.focus();
   });
 }
+/* 文本输入弹窗：原生 prompt() 在沙箱 iframe 里被浏览器直接拦掉（点了像没反应），
+   所以一切「让用户输一行字」都必须走这个。返回 string；取消返回 null。 */
+function showPrompt(opts) {
+  const o = typeof opts === "string" ? { msg: opts } : (opts || {});
+  return new Promise((resolve) => {
+    const mask = document.createElement("div");
+    mask.className = "modal-mask show";
+    mask.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-title">${esc(o.title || "请输入")}</div>
+        <div class="modal-msg">${esc(o.msg || "")}</div>
+        <input class="input modal-input" type="text" maxlength="${Number(o.maxlength) || 200}"
+               placeholder="${esc(o.placeholder || "")}" value="${esc(o.value || "")}" />
+        <div class="modal-btns">
+          <button class="btn" data-act="cancel">取消</button>
+          <button class="btn primary" data-act="ok">确定</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const input = mask.querySelector(".modal-input");
+    const done = (val) => {
+      mask.remove();
+      resolve(val);
+    };
+    mask.querySelector('[data-act="ok"]').onclick = () => done(input.value);
+    mask.querySelector('[data-act="cancel"]').onclick = () => done(null);
+    mask.onclick = (e) => { if (e.target === mask) done(null); };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); done(input.value); }
+      else if (e.key === "Escape") { e.preventDefault(); done(null); }
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 30);
+  });
+}
+
 function showToast(msg) {
   let t = document.getElementById("toast");
   if (!t) {
@@ -2680,6 +2715,8 @@ const HELP = {
       def:"跨群共享的一段禁止说明，会追加在每群的群规之前。内容越长越省 token（同一段前缀可复用）。", doc:null },
     { id:"verdict", term:"判定记录 / 试跑", go:["review","群规审核"],
       def:"每条判定都会落「类型 + 严重度 + 置信度」，方便回看时长是怎么来的。面板「记录 → 判定记录」可以按群筛、单条删除、标记误判。/群管 审核 测试 和面板试跑是诊断入口，不受维度开关限制，关着也能跑。", doc:null },
+    { id:"forwardreport", term:"引用「合并转发」的消息举报", go:["review","群规审核"],
+      def:"被引用的是合并转发时，QQ 官方下发的并不是转发正文，而是一份摘要清单（<b>[关联消息]</b> + 每条 <b>[消息内容]</b>），格式和转发原文不一样。插件会把摘要里的子消息正文抽出来跟缓存里的转发原文比对，命中后按缓存里的完整内容送审。处置对象是<b>转发这条消息的人</b>：谁发的处理谁，撤回也只撤这条转发；一条都对不上就跳过，不会乱猜人。", doc:null },
     { id:"matchmode", term:"词 vs 正则（match）", go:["review","群规审核"],
       def:"词库规则默认按字面量匹配（literal），公开词库都是这种；写正则要显式声明（文件级 regex、或单条加 re: 前缀）。TXT/CSV 上传默认 auto：看得出正则特征（\\d、.*、[..]、^$）才当正则，否则按字面量处理，这样 C++、1.5折 不会被误解释。", doc:null },
     { id:"variant", term:"变体检测（谐音 / 形近 / 插符号）", go:["review","群规审核"],
@@ -2899,7 +2936,8 @@ document.addEventListener('keydown',e=>{
     el.style.background = isErr ? "var(--danger)" : "var(--text)";
     el.classList.add("show");
     clearTimeout(toast._t);
-    toast._t = setTimeout(() => el.classList.remove("show"), 2200);
+    // 出错信息（含接口返回的长句）留久一点，别还没看清就没了
+    toast._t = setTimeout(() => el.classList.remove("show"), isErr ? 6000 : 2600);
   }
 
   async function ensureGroups() {
@@ -2990,17 +3028,19 @@ document.addEventListener('keydown',e=>{
       const badge = it.status === "left"
         ? '<span class="tag bad">已退群</span>'
         : '<span class="tag">在群</span>';
+      const joins = Number(it.join_count || 1);
+      const joinTag = joins > 1 ? ` <span class="hint">第 ${joins} 次进群</span>` : "";
       return `<tr>
         <td>${i + 1}</td>
         <td>
           <div style="font-weight:600">${named ? esc(name) : '<span style="color:var(--dim)">未命名</span>'}
             ${src ? `<span class="hint" style="margin-left:6px">${src}</span>` : ""}</div>
-          <div class="hint" style="font-family:ui-monospace,Menlo,monospace">${esc(it.openid || "")}</div>
+          <div class="hint oid" title="${esc(it.openid || "")}">${esc(it.openid || "")}</div>
         </td>
         <td>${esc(it.note || "")}</td>
         <td>${it.msg_count || 0}</td>
-        <td>${esc(it.last_seen_text || fmtTs(it.last_seen))}</td>
-        <td>${badge}</td>
+        <td>${it.status === "left" ? '<span class="hint">-</span>' : esc(it.last_seen_text || fmtTs(it.last_seen))}</td>
+        <td>${badge}${joinTag}</td>
         <td style="white-space:nowrap">
           <button class="btn ghost small" data-act="name" data-oid="${esc(it.openid)}" data-name="${esc(name)}">改昵称</button>
           <button class="btn ghost small" data-act="note" data-oid="${esc(it.openid)}" data-note="${esc(it.note || "")}">备注</button>
@@ -3044,16 +3084,32 @@ document.addEventListener('keydown',e=>{
     if (!btn) return;
     const openid = btn.dataset.oid;
     const act = btn.dataset.act;
+    // 注意：这里一律走 showPrompt / showConfirm。
+    // 面板跑在 sandbox iframe（无 allow-modals）里，原生 prompt/confirm
+    // 会被浏览器拦掉并返回 null，表现就是"按钮点了没反应"。
     if (act === "name") {
-      const v = prompt("给这个 openid 起个名字（留空 = 清空）：", btn.dataset.name || "");
+      const v = await showPrompt({
+        title: "改昵称",
+        msg: "给这个 openid 起个名字（留空 = 清空）" + (openid ? "\n" + openid : ""),
+        value: btn.dataset.name || "",
+        placeholder: "例如：小明",
+        maxlength: 40,
+      });
       if (v === null) return;
       await update(openid, { nickname: v });
     } else if (act === "note") {
-      const v = prompt("备注（留空 = 清空）：", btn.dataset.note || "");
+      const v = await showPrompt({
+        title: "备注",
+        msg: "备注只在本面板显示（留空 = 清空）",
+        value: btn.dataset.note || "",
+        placeholder: "例如：活跃老群友 / 广告号",
+        maxlength: 200,
+      });
       if (v === null) return;
       await update(openid, { note: v });
     } else if (act === "del") {
-      if (!confirm("从档案里删掉这一条？")) return;
+      const ok = await showConfirm("从档案里删掉这一条？删掉后这个人再退群就只能显示短标识了。\n" + openid);
+      if (!ok) return;
       const r = await bridge.apiPost("members/delete", { group: current, openid });
       if (r.error) { toast(r.error, true); return; }
       toast("已删除");
@@ -3061,22 +3117,51 @@ document.addEventListener('keydown',e=>{
     }
   });
 
+  // 「官方同步」必须有明确反馈：按钮进入同步中状态（禁用 + 文案变化），
+  // 结束无论成败都在工具条下方留一行结果（不只是一闪而过的 toast），
+  // 失败时按错误码给一句能照做的建议。
   $("btnMemSync").addEventListener("click", async () => {
-    if (!current) { toast("先选群", true); return; }
-    toast("正在调官方群成员列表接口…");
+    if (!current) { toast("先在左上角选一个群", true); return; }
+    const btn = $("btnMemSync");
+    const hint = $("memSyncHint");
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "同步中…";
+    if (hint) { hint.textContent = "正在调官方「群成员列表」接口…"; hint.style.color = ""; }
+    const t0 = Date.now();
     try {
       const r = await bridge.apiPost("members/sync", { group: current });
-      if (r.error) { toast(r.message || r.error, true); return; }
-      toast(`已同步 ${r.count} 人（新增 ${r.added}，更新 ${r.updated}）`);
+      const ms = Date.now() - t0;
+      if (r && r.error) {
+        const msg = r.message || r.error;
+        const tip = /11253/.test(String(msg))
+          ? "该接口是内邀白名单能力，普通机器人用不了（不是插件坏了）。想补名字：用「批量导入」或群里发 /群管 成员 改名。"
+          : msg;
+        if (hint) { hint.textContent = `同步失败：${tip}`; hint.style.color = "var(--danger)"; }
+        toast("同步失败：" + tip, true);
+        return;
+      }
+      const added = Number(r.added || 0), updated = Number(r.updated || 0);
+      const total = Number(r.count || added + updated);
+      const line = total
+        ? `同步完成：拉到 ${total} 人，新增 ${added}，更新 ${updated}（${ms} ms）`
+        : `同步完成：接口没有返回任何成员（${ms} ms）`;
+      if (hint) { hint.textContent = line; hint.style.color = "var(--ok)"; }
+      toast(line);
       await load();
     } catch (e) {
+      if (hint) { hint.textContent = "同步失败：" + e; hint.style.color = "var(--danger)"; }
       toast("同步失败：" + e, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
     }
   });
 
   $("btnMemClearLeft").addEventListener("click", async () => {
-    if (!current) { toast("先选群", true); return; }
-    if (!confirm("删掉这个群所有「已退群」的档案？")) return;
+    if (!current) { toast("先在左上角选一个群", true); return; }
+    const ok = await showConfirm("删掉这个群所有「已退群」的档案？昵称和备注会一起消失，之后这些人退群只能显示短标识。");
+    if (!ok) return;
     const r = await bridge.apiPost("members/clear_left", { group: current });
     if (r.error) { toast(r.error, true); return; }
     toast(`已清理 ${r.removed} 条`);
