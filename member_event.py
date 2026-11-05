@@ -174,7 +174,8 @@ def install_member_event_support(plugin, context) -> int:
         )
 
         # 1b) 同一位 intent 下的 GROUP_MEMBER_ADD（成员入群），一并接上：
-        #     入群瞬间就能建档案（只有 openid），退群时"在群多久"才有据可查。
+        #     入群瞬间就发欢迎语（受 member_event.enable_member_add_welcome 控制），
+        #     顺带建档案（只有 openid），退群时"在群多久"才有据可查。
         def parse_group_member_add(self, payload):
             d = payload.get("d", {}) if isinstance(payload, dict) else {}
             if isinstance(d, dict):

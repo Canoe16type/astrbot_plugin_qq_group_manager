@@ -3,7 +3,7 @@ display_name: QQ 群管理
 short_desc: QQ 官方机器人群管：禁言、撤回、入群审批、群规审核，带 WebUI 面板
 desc: QQ 官方机器人（腾讯 QQ 开放平台 API）群管理插件，仅支持腾讯 QQ 官方机器人（不支持 OneBot / 第三方协议端）。功能：禁言 / 解禁 / 查禁言、消息撤回、入群审批与通知（含官方审批策略管理）、欢迎语、成员档案（openid ↔ 昵称/备注）与退群通知、多模式管理员判定，内置 WebUI 面板（概览 / 设置 / 群管 / 入群审批 / 群规审核 / 成员档案 / 词典 / 记录 / 日志九个页签），无需修改 AstrBot 本体代码。群规审核支持关键词 + 群规 + 语义 + 图片四维度判定，群规与开关按群独立配置，默认仅 /群管 举报 触发、默认试运行；按需开启变体检测（谐音 / 形近 / 插符号绕过，只撤回不禁言）、待办队列与复犯累进。词库为公开开源审核词表，仅本机过滤用，面板不展示词条内容，来源与免责见 lexicons/SOURCES.md。
 help: |
-  【群管指令】统一写 /群管 <子指令>；完整说明见 README「指令手册」
+  【群管指令】统一写 /群管 <子指令>；完整说明见 docs/GUIDE.md「指令手册」
   /群管 禁言 @用户 10分钟 [理由]｜解禁｜查禁言｜禁言历史
   /群管 撤回            引用消息后发送，官方限 2 分钟内
   /群管 审批｜通过 序号｜拒绝 序号 [理由]
@@ -15,7 +15,7 @@ help: |
   【免责】内置词库仅本机过滤，面板不展示词条，详见 lexicons/DISCLAIMER.md
 support_platforms:
   - qq_official
-version: 1.2.0
+version: 1.3.0
 astrbot_version: ">=4.16.0,<5"
 author: Canoe16type
 repo: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager

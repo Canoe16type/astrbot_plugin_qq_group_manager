@@ -13,6 +13,8 @@
      data-overview="https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html"
      data-remove="https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_member_remove.html"
      data-addrobot="https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_add_robot.html"
+     data-memberadd="https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_member_add.html"
+     data-md="https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html"
      data-text="https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/text-chain.html"
      data-jsdelivr="https://cdn.jsdelivr.net/gh/{u}/{r}@{b}/{p}"></div>
 <svg style="display:none">
@@ -740,6 +742,18 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <p>表单由插件配置 schema（<code>_conf_schema.json</code>）自动生成，和 AstrBot 自己的配置面板读写同一份配置，改完两边都是最新值。</p>
  </div>
 
+ <div class="seg" id="setSeg" style="margin:0 0 12px;max-width:280px">
+   <button class="on" data-sub="general">常规设置</button>
+   <button data-sub="templates">消息模板</button>
+ </div>
+
+ <div class="md-help-bar" id="tplMdBar" style="display:none">
+ <svg class="ico s"><use href="#i-help"/></svg>
+ <span>模板格式选 <b>Markdown</b> 后可用标题、加粗、链接、图片等语法；不知道怎么写就看「Markdown 大全」，每条都有可复制的写法。</span>
+ <button class="btn ghost small" id="tplMdHelp" title="在帮助中心打开 Markdown 语法大全">
+ <svg class="ico s"><use href="#i-book"/></svg>Markdown 怎么写？</button>
+ </div>
+
  <div class="set-toolbar">
  <input id="setSearch" class="input" type="text" placeholder=" 搜索配置项…" style="min-width:200px" />
  <label class="check"><input type="checkbox" id="setOnlyDirty" /> 只看已改动</label>
@@ -776,6 +790,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
     <div class="seg" id="seg">
       <button class="on" data-tab="terms">术语</button>
       <button data-tab="cmd">指令</button>
+      <button data-tab="md">Markdown</button>
       <button data-tab="faq">常见问题</button>
       <button data-tab="docs">文档</button>
     </div>
@@ -784,6 +799,50 @@ A1B2C3D4E5F6...  , 小红"></textarea>
     <div id="dlist"></div>
   </div>
 </aside>
+<dialog id="tplDlg" class="tpl-dlg">
+  <div class="tpl-dlg-head">
+    <div>
+      <h3 id="tplDlgTitle">消息模板</h3>
+      <p class="tpl-dlg-sub" id="tplDlgHint"></p>
+    </div>
+    <div class="seg sm" id="tplDlgSeg">
+      <button class="on" data-fmt="text">纯文本</button>
+      <button data-fmt="markdown">Markdown</button>
+      <button data-fmt="image">图片</button>
+    </div>
+    <button class="iconbtn" id="tplDlgClose" title="关闭"><svg class="ico s"><use href="#i-close"/></svg></button>
+  </div>
+  <div class="tpl-dlg-body">
+    <div class="tpl-dlg-pane">
+      <label class="tpl-dlg-label">模板内容（支持 {变量}）</label>
+      <textarea id="tplDlgText" class="input tpl-dlg-text" spellcheck="false"></textarea>
+      <div class="tpl-mod-row" id="tplModRow">
+        <span class="tpl-mod-label">插入模块</span>
+        <button type="button" class="tpl-mod-chip" data-mod="{at}" title="在这条消息里 @ 该成员（QQ 官方 @ 标签，群里点得动）">@群员</button>
+        <button type="button" class="tpl-mod-chip" data-mod="{avatar:40}" title="该成员头像，40px 小图（不拉大图，省流量；仅 Markdown 格式生效）">头像·小</button>
+        <button type="button" class="tpl-mod-chip" data-mod="{avatar}" title="该成员头像，100px（默认尺寸；仅 Markdown 格式生效）">头像</button>
+        <button type="button" class="tpl-mod-chip" data-mod="{avatar:160}" title="该成员头像，160px 大图（仅 Markdown 格式生效）">头像·大</button>
+      </div>
+      <div class="tpl-dlg-imgrow" id="tplImgRow" style="display:none">
+        <label class="tpl-dlg-label">图片地址（http/https）</label>
+        <input id="tplImgUrl" class="input" type="text" placeholder="https://…">
+        <div class="tpl-dlg-size">
+          <label>宽 <input id="tplImgW" class="input" type="number" min="0" step="1" placeholder="208"></label>
+          <label>高 <input id="tplImgH" class="input" type="number" min="0" step="1" placeholder="320"></label>
+        </div>
+      </div>
+      <div class="tpl-dlg-actions">
+        <button class="btn ghost small" id="tplDlgReset">↺ 填回默认</button>
+        <span class="spacer"></span>
+        <button class="btn small" id="tplDlgSave">保存此项</button>
+      </div>
+    </div>
+    <div class="tpl-dlg-pane">
+      <label class="tpl-dlg-label">QQ 渲染效果预览</label>
+      <div class="tpl-preview" id="tplPreview"></div>
+    </div>
+  </div>
+</dialog>
 <script src="app.js" defer></script>
 </body>
 </html>

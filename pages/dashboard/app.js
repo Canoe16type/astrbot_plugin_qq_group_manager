@@ -1707,6 +1707,8 @@ const SET_ICONS = {
   moderation: "📋", templates: "💬", member_event: "👋", log: "📜",
 };
 const setState = {
+  sub: "general", // 子页签：general=常规设置 / templates=消息模板
+  tplFormats: {}, // 模板 key -> {format, url, width, height}
   groups: [],     // 后端返回的 schema
   providers: [],
   reload: {},     // 需要重载插件才生效的项 {"group": ["key"]}
@@ -1771,6 +1773,184 @@ function buildWidget(item, value) {
   return `<input type="text" data-kind="str" value="${esc(value ?? "")}" />`;
 }
 
+// ---------------- 💬 消息模板：格式拨杆 + 编辑预览 ----------------
+// 格式（text/markdown/image）存在插件侧车文件里，内容仍走 AstrBot 配置，
+// 所以这里的任何编辑都不会改变配置结构，关掉页面也不影响已存内容。
+const TPL_FMT_LABEL = { text: "纯文本", markdown: "Markdown", image: "图片" };
+function fmtLabel(f) { return TPL_FMT_LABEL[f] || "纯文本"; }
+
+// QQ 官方 markdown 子集渲染：只实现平台文档明确支持的语法，
+// 不做"猜"，避免预览比实际好看、误导用户。
+function renderQQMarkdown(src) {
+  const escTxt = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escAttr = (s) => escTxt(s).replace(/"/g, "&quot;");
+  const inline = (s) => {
+    let x = escTxt(s);
+    x = x.replace(/!\[([^\]]*?)\s*(?:#(\d+)px)?\s*(?:#(\d+)px)?\]\(([^)\s]+)\)/g, (m, alt, w, h, url) => {
+      const ww = w ? parseInt(w, 10) : 208;
+      const hh = h ? parseInt(h, 10) : Math.round(ww * 1.54);
+      // 示例里的占位域名加载不出来时，换成虚线框，别让示例看着像坏了
+      const box = `width:${ww}px;height:${hh}px;border:1px dashed #d7dbe3;border-radius:8px;display:none;align-items:center;justify-content:center;color:#98a2b3;font-size:12px;margin:6px 0`;
+      const img = `<img src="${escAttr(url)}" alt="${escAttr(alt)}" style="width:${ww}px;height:${hh}px;object-fit:cover;border-radius:8px;display:block;margin:6px 0" onerror="this.style.display='none';var p=this.nextElementSibling;if(p){p.style.display='flex'}">`;
+      return `${img}<span style="${box}">${escAttr(alt) || "图片预览"}</span>`;
+    });
+    x = x.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    x = x.replace(/__(.+?)__/g, "<b><u>$1</u></b>");
+    x = x.replace(/\*\*\*(.+?)\*\*\*/g, "<b><i>$1</i></b>");
+    x = x.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    x = x.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<i>$2</i>");
+    x = x.replace(/~~(.+?)~~/g, "<del>$1</del>");
+    x = x.replace(/\u200B/g, "<br>");
+    return x;
+  };
+  const lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let list = null;
+  const flush = () => {
+    if (list) {
+      out.push(`<${list.tag}>${list.items.map((i) => `<li>${i}</li>`).join("")}</${list.tag}>`);
+      list = null;
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) { flush(); continue; }
+    if (/^\s*\*\*\*\s*$/.test(line)) { flush(); out.push("<hr>"); continue; }
+    const h = line.match(/^(#{1,2})\s+(.*)$/);
+    if (h) { flush(); out.push(`<div class="pv-h${h[1].length}">${inline(h[2])}</div>`); continue; }
+    const q = line.match(/^\s*>\s?(.*)$/);
+    if (q) { flush(); out.push(`<blockquote>${inline(q[1])}</blockquote>`); continue; }
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ol) { if (!list || list.tag !== "ol") { flush(); list = { tag: "ol", items: [] }; } list.items.push(inline(ol[1])); continue; }
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    if (ul) { if (!list || list.tag !== "ul") { flush(); list = { tag: "ul", items: [] }; } list.items.push(inline(ul[1])); continue; }
+    flush();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  flush();
+  return out.join("") || '<span class="pv-warn">（空内容）</span>';
+}
+
+let _tplCur = null;
+
+function setDlgFmt(fmt) {
+  if (!_tplCur) return;
+  _tplCur.format = fmt;
+  const seg = $("tplDlgSeg");
+  if (seg) seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+  const row = $("tplImgRow");
+  if (row) row.style.display = fmt === "image" ? "" : "none";
+  renderTplPreview();
+}
+
+// 在光标处插入模块占位符（不覆盖已有选择内容时替换选中段，符合常规编辑器直觉）
+function insertTplModule(snippet) {
+  const ta = $("tplDlgText");
+  if (!ta) return;
+  const start = typeof ta.selectionStart === "number" ? ta.selectionStart : ta.value.length;
+  const end = typeof ta.selectionEnd === "number" ? ta.selectionEnd : start;
+  ta.value = ta.value.slice(0, start) + snippet + ta.value.slice(end);
+  const pos = start + snippet.length;
+  ta.focus();
+  try { ta.setSelectionRange(pos, pos); } catch (err) { /* 某些浏览器的老内核不支持，忽略 */ }
+  renderTplPreview();
+}
+
+// 预览里的内置模块：真机会展开成 @标签 / 头像图；面板拿不到成员 openid，
+// 这里按等效尺寸画占位块，让作者知道「会长在哪个位置、占多大」。
+function previewModules(html) {
+  return String(html)
+    .replace(/\{at\}/g, '<span class="md-at">@群员</span>')
+    .replace(/\{avatar(?::(\d+))?\}/g, (m, d) => {
+      const s = Math.max(24, Math.min(parseInt(d, 10) || 100, 320));
+      return `<span class="md-avatar" style="width:${s}px;height:${s}px">头像</span>`;
+    });
+}
+
+function renderTplPreview() {
+  const box = $("tplPreview");
+  if (!box) return;
+  const fmt = _tplCur ? _tplCur.format : "text";
+  const text = $("tplDlgText").value;
+  if (fmt === "image") {
+    const url = $("tplImgUrl").value.trim();
+    const h = parseInt($("tplImgH").value, 10) || 0;
+    const cap = text.trim() ? `<div class="pv-cap">${esc(text)}</div>` : "";
+    box.innerHTML = url
+      ? `<img src="${esc(url)}" style="max-width:100%;border-radius:10px;${h ? `max-height:${h}px;` : ""}object-fit:cover;display:block" onerror="this.outerHTML='<div class=&quot;pv-warn&quot;>图片加载失败，请检查地址</div>'">${cap}`
+      : '<div class="pv-warn">还没填图片地址</div>';
+    return;
+  }
+  if (fmt === "text") {
+    box.innerHTML = `<div class="pv-text">${previewModules(esc(text).replace(/\n/g, "<br>"))}</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="pv-md">${previewModules(renderQQMarkdown(text))}</div>`;
+}
+
+function openTplDialog(key) {
+  const meta = setState.tplFormats[key] || {};
+  const field = setState.fields.find((f) => f.key === "templates." + key);
+  const item = field ? field.item : { description: key, default: "", hint: "" };
+  _tplCur = { key, item, format: meta.format || "text" };
+  $("tplDlgTitle").textContent = item.description || key;
+  $("tplDlgHint").textContent = (item.hint ? item.hint + " · " : "") +
+    "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）";
+  $("tplDlgText").value = field ? field.get() : (meta.value || "");
+  $("tplImgUrl").value = meta.url || "";
+  $("tplImgW").value = meta.width || "";
+  $("tplImgH").value = meta.height || "";
+  setDlgFmt(_tplCur.format);
+  const dlg = $("tplDlg");
+  if (!dlg) return;
+  if (typeof dlg.showModal === "function") { if (!dlg.open) dlg.showModal(); }
+  else dlg.setAttribute("open", "");
+}
+
+function closeTplDialog() {
+  const dlg = $("tplDlg");
+  if (dlg && dlg.open) dlg.close();
+  _tplCur = null;
+}
+
+async function saveTplDialog() {
+  if (!_tplCur) return;
+  const key = _tplCur.key;
+  const payload = {
+    key,
+    type: _tplCur.format,
+    value: $("tplDlgText").value,
+    url: $("tplImgUrl").value.trim(),
+    width: parseInt($("tplImgW").value, 10) || 0,
+    height: parseInt($("tplImgH").value, 10) || 0,
+  };
+  const btn = $("tplDlgSave");
+  btn.disabled = true; btn.textContent = "保存中…";
+  try {
+    const r = await bridge.apiPost("templates/formats/save", payload);
+    if (!r.ok) throw new Error((r.errors || []).join("；") || r.message || "保存失败");
+    const meta = setState.tplFormats[key] = Object.assign({}, setState.tplFormats[key] || {}, {
+      format: payload.type, url: payload.url, width: payload.width, height: payload.height,
+    });
+    // 同步表单状态：这一项已落盘，不能再算"未保存改动"
+    const field = setState.fields.find((f) => f.key === "templates." + key);
+    if (field) {
+      field.item.value = payload.value;
+      setState.original[field.key] = payload.value;
+      delete setState.dirty[field.key];
+      field.set(payload.value);
+      field.refresh();
+    }
+    updateDirtyBar();
+    showToast(`已保存：${_tplCur.item.description || key}（${fmtLabel(meta.format)}）`);
+    closeTplDialog();
+  } catch (e) {
+    showToast("保存失败: " + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = "保存此项";
+  }
+}
+
 function buildItem(item, group) {
   const key = setKeyOf(group.key, item.key);
   const box = document.createElement("div");
@@ -1823,6 +2003,41 @@ function buildItem(item, group) {
     refresh();
     showToast(`已填回默认值（还没保存）：${item.description}`);
   });
+  // 消息模板这一组额外挂「格式拨杆 + 编辑预览」，格式本身存侧车文件
+  const fmtMeta = group.key === "templates" ? setState.tplFormats[item.key] : null;
+  if (fmtMeta) {
+    const bar = document.createElement("div");
+    bar.className = "tpl-fmtbar";
+    bar.innerHTML = `
+      <div class="seg sm tpl-fmtseg">
+        <button data-fmt="text" class="${fmtMeta.format === "text" ? "on" : ""}">纯文本</button>
+        <button data-fmt="markdown" class="${fmtMeta.format === "markdown" ? "on" : ""}">Markdown</button>
+        <button data-fmt="image" class="${fmtMeta.format === "image" ? "on" : ""}">图片</button>
+      </div>
+      <button class="btn ghost small tpl-editbtn">✎ 编辑与预览</button>`;
+    const hintEl = box.querySelector(".set-hint");
+    box.insertBefore(bar, hintEl);
+    bar.querySelectorAll("[data-fmt]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        const fmt = b.dataset.fmt;
+        bar.querySelectorAll("[data-fmt]").forEach((x) => x.classList.toggle("on", x === b));
+        const cur = setState.tplFormats[item.key] = Object.assign({}, fmtMeta, { format: fmt });
+        try {
+          const r = await bridge.apiPost("templates/formats/save", {
+            key: item.key, type: fmt,
+            url: cur.url || "", width: cur.width || 0, height: cur.height || 0,
+          });
+          if (!r.ok) throw new Error((r.errors || []).join("；") || r.message || "保存失败");
+          showToast(`${item.description}：已设为${fmtLabel(fmt)}`);
+          if (fmt === "image" && !cur.url) openTplDialog(item.key);  // 选图片但没地址，直接引导去填
+        } catch (e) {
+          showToast("格式保存失败: " + e.message);
+        }
+      });
+    });
+    bar.querySelector(".tpl-editbtn").addEventListener("click", () => openTplDialog(item.key));
+  }
+
   setState.original[key] = item.value;
   setState.fields.push({ key, group: group.key, item, box, get, set, refresh });
   return box;
@@ -1835,7 +2050,13 @@ function renderSettings() {
   setState.original = {};
   setState.dirty = {};
 
-  setState.groups.forEach((group) => {
+  const onlyTpl = setState.sub === "templates";
+  // 「Markdown 大全」入口只在消息模板子页签出现，别的子页签不需要它占地方
+  const mdBar = $("tplMdBar");
+  if (mdBar) mdBar.style.display = onlyTpl ? "" : "none";
+  setState.groups
+    .filter((g) => (g.key === "templates") === onlyTpl)
+    .forEach((group) => {
     const sec = document.createElement("div");
     sec.className = "set-group" + (setState.collapsed[group.key] ? " collapsed" : "");
     sec.dataset.group = group.key;
@@ -1967,10 +2188,15 @@ async function loadSettings(force) {
   const wrap = $("setGroups");
   wrap.innerHTML = emptyBox("load", "加载中…");
   try {
-    const r = await bridge.apiGet("config/schema");
+    const [r, tpl] = await Promise.all([
+      bridge.apiGet("config/schema"),
+      bridge.apiGet("templates/formats").catch(() => ({ templates: [] })),
+    ]);
     setState.groups = r.groups || [];
     setState.providers = r.providers || [];
     setState.reload = r.reload_required || {};
+    setState.tplFormats = {};
+    (tpl.templates || []).forEach((t) => { setState.tplFormats[t.key] = t; });
     renderSettings();
     if (force) showToast("已重新读取当前配置");
   } catch (e) {
@@ -2055,6 +2281,52 @@ if ($("btnSetReload")) $("btnSetReload").addEventListener("click", async () => {
 });
 if ($("btnSetSave")) $("btnSetSave").addEventListener("click", saveSettings);
 if ($("btnSetDiscard")) $("btnSetDiscard").addEventListener("click", discardSettings);
+
+// 消息模板页的「Markdown 怎么写？」按钮：直接开帮助中心的 Markdown 大全
+if ($("tplMdHelp")) $("tplMdHelp").addEventListener("click", (e) => {
+  e.preventDefault();
+  openHelp("md", "start");
+});
+
+// 消息模板：子页签切换 + 编辑对话框
+const _setSubSeg = $("setSeg");
+if (_setSubSeg) _setSubSeg.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-sub]");
+  if (!b || b.dataset.sub === setState.sub) return;
+  setState.sub = b.dataset.sub;
+  _setSubSeg.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+  renderSettings();
+});
+(function bindTplDialog() {
+  const dlg = $("tplDlg");
+  if (!dlg) return;
+  const seg = $("tplDlgSeg");
+  if (seg) seg.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-fmt]");
+    if (b) setDlgFmt(b.dataset.fmt);
+  });
+  ["tplDlgText", "tplImgUrl", "tplImgW", "tplImgH"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", renderTplPreview);
+  });
+  const modRow = $("tplModRow");
+  if (modRow) modRow.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-mod]");
+    if (b) insertTplModule(b.dataset.mod);
+  });
+  const save = $("tplDlgSave");
+  if (save) save.addEventListener("click", saveTplDialog);
+  const close = $("tplDlgClose");
+  if (close) close.addEventListener("click", closeTplDialog);
+  const reset = $("tplDlgReset");
+  if (reset) reset.addEventListener("click", () => {
+    if (!_tplCur) return;
+    $("tplDlgText").value = _tplCur.item.default || "";
+    renderTplPreview();
+    showToast("已填回默认值（还没保存）");
+  });
+  dlg.addEventListener("click", (e) => { if (e.target === dlg) closeTplDialog(); });
+})();
 
 // ---------------- 词典（词库） ----------------
 // 内置词库来自公开开源词库（插件目录 lexicons/SOURCES.md），页面只管：看、开关、上传、白名单、测试。
@@ -2719,11 +2991,12 @@ document.addEventListener("click", (e) => {
 const DOC = (() => {
   const el = document.getElementById("docUrls");
   const g = (k) => (el && el.dataset[k]) || "";
-  return { msg: g("msg"), overview: g("overview"), remove: g("remove"), addrobot: g("addrobot"), text: g("text") };
+  return { msg: g("msg"), overview: g("overview"), remove: g("remove"), addrobot: g("addrobot"),
+           memberadd: g("memberadd"), md: g("md"), text: g("text") };
 })();
 const JSDELIVR_TPL = (document.getElementById("docUrls") || {}).dataset?.jsdelivr || "";
 const HELP = {
-  /* ── 术语：平台类来自 QQ 官方文档核对，插件类整理自插件 README ── */
+  /* ── 术语：平台类来自 QQ 官方文档核对，插件类整理自插件 docs/GUIDE.md ── */
   terms: [
     { id:"timezone", term:"时区与时间口径（跟 AstrBot 一致）", go:["kpis","概览"],
       def:"面板上所有时间——事件流、今日统计、轮询上次时间——都按 AstrBot 全局配置 timezone 计算，默认 Asia/Shanghai（UTC+8），不跟随浏览器时区。时长类配置后台一律以秒为单位：default_mute_seconds 600、max_mute_seconds 86400（＝1 天）、recall_max_age_seconds 110，界面只是换算成分钟 / 天显示。", doc:null },
@@ -2737,6 +3010,8 @@ const HELP = {
       def:"只有 3 个事件的 event_id 能拿来回复消息：INTERACTION_CREATE、GROUP_ADD_ROBOT、GROUP_MSG_RECEIVE。其余事件只能发主动消息。", doc:["发送群聊消息", DOC.msg] },
     { id:"40034027", term:"40034027 · 该事件不支持回复消息", go:["welcome","成员入群欢迎"],
       def:"用 event_id 去回复不在白名单里的事件就会报这个码，改成主动消息即可（但要过 24 小时窗口）。", doc:["发送群聊消息", DOC.msg] },
+    { id:"memberadd", term:"GROUP_MEMBER_ADD · 成员入群事件", go:["switches","成员入群欢迎"],
+      def:"intent 1<<24。事件体只有 timestamp / group_openid / member_openid（<b>没有</b>昵称、没有 user_openid），而且它不在 event_id 被动回复白名单里，所以入群欢迎只能发主动消息：受主动消息频控，群里没给机器人开主动推送时会被拒。插件收到这个事件就按「消息模板 · 成员入群 · 欢迎语」发一条，同一成员 10 分钟内只欢迎一次（审批通过时已欢迎过的不会再重复）。", doc:["群成员加入", DOC.memberadd] },
     { id:"openid", term:"openid / user_openid 到底有什么区别", go:["groups","群列表"],
       def:"openid 按「机器人 + 用户」分配：同一个人在不同群、不同机器人下 ID 都不同，不能跨群复用，换机器人会重新分配。插件靠 platform_id 区分不同机器人，所以面板是「机器人 → 群名 → 设置」三级。", doc:["消息收发概述", DOC.overview] },
     { id:"intent", term:"Intent 位（1<<24 / 1<<25）", go:["switches","功能开关"],
@@ -2792,7 +3067,7 @@ const HELP = {
       def:"这是刻意设计不是 bug：词库详情只给类型、条数、词长分布；命中测试只给类型、来源、词长、位置；判定理由与日志也不写入命中的具体词。唯一例外是白名单——它是正常词汇且需要随时增删，所以照常显示。", doc:null }
   ],
 
-  /* ── 指令手册：整理自 README「指令手册」── */
+  /* ── 指令手册：整理自 docs/GUIDE.md「指令手册」── */
   cmd: [
     { id:"common", term:"通用规则（先看这条）", go:null,
       def:"指令一律写成「/群管 <子指令>」，参数用空格分隔；不写 / 也行，但必须在消息里 @ 机器人，否则按普通聊天处理（消息里的 @机器人 匹配时会被自动忽略）。<br /><b>只发 /群管 不带子指令时，会回一句「参数不足」并自动列出指令树</b>——这是预期行为，不是报错，照着树里选一条再发即可。权限不足会收到提示。", doc:null },
@@ -2826,7 +3101,42 @@ const HELP = {
       def:"不带参数看本群审核状态（开关、试运行、巡检、群规条数、阈值、上限、累计次数、缓存命中率）；/群管 审核 试跑 开|关 切试运行；/群管 审核 巡检 开|关 切关键词巡检；/群管 审核 测试 <内容> 用当前配置试判一条；/群管 审核 自我介绍 手动重发群管功能介绍。管理员指令。", doc:null }
   ],
 
-  /* ── 常见问题：整理自 README「常见问题（FAQ）」── */
+  /* ── Markdown 大全：写法全部按 QQ 官方「Markdown 消息」文档核对 ──
+     每条给 sample（真实可复制的写法），面板里用同一个渲染器出效果，
+     所以「看到什么 = 群里发出来大致是什么」。 */
+  md: [
+    { id:"start", term:"先决条件：格式要选 Markdown", sample:"",
+      def:"「设置 → 消息模板」里每条模板都能单独选<code>纯文本</code> / <code>Markdown</code> / <code>图片</code>。选 Markdown 时插件按 msg_type=2 发自定义 Markdown；选纯文本就原样显示，井号和星号都会露出来。官方 2026/04/23 起，单聊、群聊的自定义 Markdown 已对所有机器人开放，不需要单独申请模板（频道场景仍需内邀）。",
+      doc:["Markdown 消息", DOC.md] },
+    { id:"title", term:"标题", sample:"# 一号标题\n## 二号标题\n正文写在这里",
+      def:"一级用 1 个 <code>#</code>、二级用 2 个，最多 6 级。<code>#</code> 后面必须有空格，否则会被当正文。" },
+    { id:"bold", term:"加粗 / 斜体 / 删除线", sample:"**加粗**　_斜体_　*星号斜体*　***加粗斜体***\n~~删除线~~　__下划线加粗__",
+      def:"QQ 的 Markdown 认这 6 种文字样式，标点都要成对出现。" },
+    { id:"link", term:"链接（群里能点）", sample:"官方文档：[🔗Markdown 消息](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html)",
+      def:"写成 <code>[文字](https://…)</code>，协议必须是 http(s)，否则只显示成普通文字。别把网址光秃秃写在正文里，QQ 不会自动识别。" },
+    { id:"image", term:"图片", sample:"![群规图 #208px #320px](https://example.com/img/rule.png)",
+      def:"把地址换成<strong>你自己的公网图片</strong>（平台会下载转存，所以要能直接访问），<code>#宽px #高px</code> 可省略。本地图片先用「素材管理」上传拿 <code>qqbot-media://</code> 引用。插件里的 <code>{avatar}</code> 模块就是这条语法，不用自己拼 URL。<br>注意：别拿头像接口或别人的图站地址凑数，域名被判定异常可能连消息一起发不出去。",
+      doc:["素材管理", DOC.md] },
+    { id:"list", term:"有序 / 无序列表", sample:"# 管理员待办\n1. 更新群规\n2. 清理广告\n\n- 禁言 10 分钟\n- 撤回并记录",
+      def:"有序用 <code>1.</code>、无序用 <code>-</code>。列表前面若是普通段落，中间要空一行才认；二级列表缩进 4 个空格。" },
+    { id:"quote", term:"块引用", sample:"> 本群禁止刷屏\n> 违者禁言 10 分钟",
+      def:"每行开头加 <code>&gt;</code>，适合放群规摘要、免责声明。" },
+    { id:"hr", term:"分割线", sample:"上面一段话\n***\n下面一段话",
+      def:"单独一行写 <code>***</code>，用来分段（插件帮助页的来源区就是它）。" },
+    { id:"newline", term:"换行 / 连续空行", sample:"第一行\n第二行\n\u200B\n\u200B\n第三行",
+      def:"Markdown 里单个换行会被合并成一行，想分段就空一行。要在同一段里连续空出几行（比如列表后接正文），官方给的办法是零宽空格 <code>\\u200B</code>，写一个多一行。" },
+    { id:"at", term:"@某位成员 / 头像", sample:"{at} 欢迎加入！\n{avatar:160}\n有问题 @ 管理员",
+      def:"官方标签是 <code>&lt;qqbot-at-user id=\"openid\" /&gt;</code>，旧写法 <code>&lt;@openid&gt;</code> 官方已标注即将弃用。模板里直接写 <code>{at}</code> 最省事：插件会自动换成「这条消息相关的成员」，头像用 <code>{avatar:40}</code> 小图 / <code>{avatar}</code> 100px / <code>{avatar:160}</code> 大图（仅 Markdown 格式生效，源图按尺寸自动取档）。上面预览里的 @群员 是示意，真实发送才展开成真人。" },
+    { id:"no", term:"哪些写了不生效", sample:"| 表格 | 不支持 |\n```\n代码块 不支持\n```",
+      def:"官方「支持格式」里没有<strong>表格</strong>和<strong>代码块</strong>（三个反引号），写了会原样显示；也不建议塞 HTML 标签。表情请直接打 emoji，不要用 <code>:smile:</code> 这种简码。" },
+    { id:"var", term:"和 {变量} 混用", sample:"## 欢迎 {username}\n本群已开群管：[指令大全](https://q.qq.com)",
+      def:"模板渲染顺序是「先替换 {变量}，再按 Markdown 解析」，所以变量值里不要带 <code>*</code> <code>#</code> <code>[</code> 这类符号（昵称里真有也没事，只是偶尔会歪）。Markdown 里要写花括号原文，请用 <code>{{</code> 转义成一对。" },
+    { id:"err", term:"Markdown 相关报错码", sample:"",
+      def:"<code>40034124</code> markdown 消息参数错误：正文为空，或 <code>content</code> 里塞了控制字符 / 过长；<code>40034127</code> 无 markdown 模板权限：说明走成了「模板消息」路径，自定义 Markdown 已不需要申请；<code>40034101</code> 主动消息超频控：欢迎语这类主动消息按分钟限流，等一会儿再发。",
+      doc:["发送群聊消息", DOC.msg] }
+  ],
+
+  /* ── 常见问题：整理自 docs/GUIDE.md「常见问题（FAQ）」── */
   faq: [
     { id:"q1", term:"插件加载失败 / WebUI 里看不到插件", go:["global","全局作用域"],
       def:"原因：目录层级不对、metadata.yaml 不完整、或 AstrBot 版本不满足。确认目录是 plugins/astrbot_plugin_qq_group_manager/（别多套一层），确认 metadata.yaml 的 name 为 astrbot_plugin_qq_group_manager 且 astrbot_version 满足当前版本，再看 AstrBot 日志里的插件报错。", doc:null },
@@ -2852,13 +3162,13 @@ const HELP = {
 
   /* ── 文档索引：插件本地文档 + QQ 官方文档 ── */
   docs: [
-    { term:"README.md · 指令手册", def:"13 条指令的语法、示例与权限", file:"plugins/astrbot_plugin_qq_group_manager/README.md → 指令手册", doc:null },
-    { term:"README.md · 成员档案（openid 认不出人怎么办）", def:"为什么只有 openid、档案怎么攒、退群通知机制、官方接口 11253、局限", file:"README.md → 成员档案（openid 认不出人怎么办）", doc:null },
-    { term:"README.md · 群规审核（/群管 举报）", def:"四维度判定、禁言时长怎么算、置信度怎么来的、维度开关", file:"README.md → 群规审核（/群管 举报）", doc:null },
-    { term:"README.md · 词典（关键词词库）", def:"内置词库一览、白名单、词 vs 正则、文件格式、合规与隐私", file:"README.md → 词典（关键词词库）", doc:null },
-    { term:"README.md · 插件配置说明", def:"基础功能 / 权限判定 / 撤回 / 入群审批 / 群规审核 / 消息模板 / 日志", file:"README.md → 插件配置说明", doc:null },
-    { term:"README.md · 常见问题（FAQ）", def:"本页签里的 FAQ 就是从这里整理的，含原始排错细节", file:"README.md → 常见问题（FAQ）", doc:null },
-    { term:"README.md · 数据与日志位置", def:"配置文件、known_groups、mute_history、mod_*.json、日志保留天数", file:"README.md → 数据与日志位置", doc:null },
+    { term:"GUIDE.md · 指令手册", def:"13 条指令的语法、示例与权限", file:"plugins/astrbot_plugin_qq_group_manager/docs/GUIDE.md → 指令手册", doc:null },
+    { term:"GUIDE.md · 成员档案（openid 认不出人怎么办）", def:"为什么只有 openid、档案怎么攒、退群通知机制、官方接口 11253、局限", file:"docs/GUIDE.md → 成员档案（openid 认不出人怎么办）", doc:null },
+    { term:"GUIDE.md · 群规审核（/群管 举报）", def:"四维度判定、禁言时长怎么算、置信度怎么来的、维度开关", file:"docs/GUIDE.md → 群规审核（/群管 举报）", doc:null },
+    { term:"GUIDE.md · 词典（关键词词库）", def:"内置词库一览、白名单、词 vs 正则、文件格式、合规与隐私", file:"docs/GUIDE.md → 词典（关键词词库）", doc:null },
+    { term:"GUIDE.md · 插件配置说明", def:"基础功能 / 权限判定 / 撤回 / 入群审批 / 群规审核 / 消息模板 / 日志", file:"docs/GUIDE.md → 插件配置说明", doc:null },
+    { term:"GUIDE.md · 常见问题（FAQ）", def:"本页签里的 FAQ 就是从这里整理的，含原始排错细节", file:"docs/GUIDE.md → 常见问题（FAQ）", doc:null },
+    { term:"GUIDE.md · 数据与日志位置", def:"配置文件、known_groups、mute_history、mod_*.json、日志保留天数", file:"docs/GUIDE.md → 数据与日志位置", doc:null },
     { term:"lexicons/SOURCES.md · 词库来源与协议", def:"三个上游开源项目、协议、词条数与生成脚本", file:"plugins/astrbot_plugin_qq_group_manager/lexicons/SOURCES.md", doc:null },
     { term:"发送群聊消息（事件白名单 / 频控 / 错误码）", def:"含 event_id 白名单、msg_seq 去重、主动消息限制", doc:["查看原文", DOC.msg] },
     { term:"消息收发概述（主动 / 被动消息）", def:"理解 24 小时窗口与限频的入口文档", doc:["查看原文", DOC.overview] },
@@ -2898,16 +3208,23 @@ function card(t){
       </div>
     </div></div>`;
 }
-dlist.onclick=e=>{                        /* 点问题条 → 展开 / 收起 */
+dlist.onclick=e=>{                        /* 复制 Markdown 写法 / 点问题条展开收起 */
+  const cp=e.target.closest("[data-mdcopy]");
+  if(cp){
+    const it=HELP.md[Number(cp.dataset.mdcopy)];
+    if(it){const ok=copyText(String(it.sample||""));uiToast(ok?"已复制写法":"复制失败，请手动选中复制",!ok);}
+    return;
+  }
   const q=e.target.closest('.tq'); if(!q)return;
   const c=q.closest('.tcard'), on=c.classList.toggle('on');
   q.setAttribute('aria-expanded',on);
   on?openKeys.add(c.dataset.k):openKeys.delete(c.dataset.k);
 };
 const TABMETA={
-  terms:['术语词典','平台术语已核对 QQ 官方文档，插件术语整理自插件 README'],
+  terms:['术语词典','平台术语已核对 QQ 官方文档，插件术语整理自插件 docs/GUIDE.md'],
   cmd:['指令手册','群内发送；标「管理员指令」的需要权限'],
-  faq:['常见问题','整理自插件 README 的 FAQ'],
+  md:['Markdown 大全','按 QQ 官方「Markdown 消息」核对：每条给可复制的写法，并演示渲染效果'],
+  faq:['常见问题','整理自插件 docs/GUIDE.md 的 FAQ'],
   docs:['文档索引','插件文档是本地文件，QQ 文档在开放平台']
 };
 /* 搜索排序：搜索串命中「标题/指令名」的排在只有正文提到关键词的前面。
@@ -2933,10 +3250,42 @@ function tabHint(q){
   if(!others.length) return "";
   return `<div class="dgroup">其它分类也有匹配：${others.map(o=>`${esc(o.label)} ${o.n} 条`).join(" · ")}，点上方分类标签切换</div>`;
 }
+/* Markdown 大全的卡片：左边「写法」可复制，右边用同一个渲染器出「效果」，
+   这样用户看到的就是群里大概会呈现的样子，不用自己脑补。 */
+function mdCard(t, i){
+  const src=String(t.sample||"");
+  const shown=esc(src).replace(/\u200B/g,'<span class="zwsp">␦</span>');
+  const grid=src?`<div class="mdsec-grid">
+      <div>
+        <div class="mdsec-lab"><span>写法</span>
+          <button class="mini ghost" data-mdcopy="${i}" title="复制这段写法">复制</button></div>
+        <pre class="mdcode">${shown}</pre>
+      </div>
+      <div>
+        <div class="mdsec-lab"><span>渲染效果（示意）</span></div>
+        <div class="mdprev pv-md">${previewModules(renderQQMarkdown(src))}</div>
+      </div>
+    </div>`:'';
+  return `<div class="mdsec" data-k="md:${esc(t.id||t.term)}">
+    <div class="mdsec-head"><b>${esc(t.term)}</b>
+      ${t.doc?`<a class="mini ghost" href="${t.doc[1]}" target="_blank" rel="noopener" data-doc="${t.doc[1]}" title="${t.doc[1]}"><svg class="ico s"><use href="#i-doc"/></svg>${esc(t.doc[0])}</a>`:''}
+    </div>
+    <div class="mdsec-desc">${t.def}</div>
+    ${grid}
+  </div>`;
+}
+
 function render(){
   const q=dq.value.trim().toLowerCase();
   const list=HELP[curTab].map((t,i)=>[t,i]).filter(([t])=>helpRank(t,q)<9)
     .sort((a,b)=>helpRank(a[0],q)-helpRank(b[0],q)||a[1]-b[1]).map(([t])=>t);
+  if(curTab==='md'){
+    const idx=HELP.md.map((t,i)=>[t,i]).filter(([t])=>helpRank(t,q)<9).map(([,i])=>i);
+    dlist.innerHTML = (idx.length
+      ? `<div class="dgroup">${TABMETA.md[0]} · ${TABMETA.md[1]}</div>`+idx.map(i=>mdCard(HELP.md[i],i)).join('')
+      : emptyBox("search", "没有匹配项，试试「标题」「图片」「链接」「列表」「@」")) + tabHint(q);
+    return;
+  }
   if(curTab==='docs'){
     const local=list.filter(d=>!d.doc), ext=list.filter(d=>d.doc);
     const rowL=d=>`<div class="doclink flat"><svg class="ico"><use href="#i-doc"/></svg>
@@ -2962,8 +3311,10 @@ function openHelp(tab,id){
   if(tab){curTab=tab;[...document.querySelectorAll('#seg button')].forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));}
   if(id){dq.value='';openKeys.add(curTab+':'+id);}
   render(); drawer.classList.add('on'); scrim.classList.add('on'); setTimeout(()=>dq.focus(),180);
-  if(id){const el=dlist.querySelector(`.tcard[data-k="${curTab}:${id}"]`);
-         if(el){el.classList.add('on');el.querySelector('.tq').setAttribute('aria-expanded','true');el.scrollIntoView({block:'center'});}}
+  if(id){const el=dlist.querySelector(`[data-k="${curTab}:${id}"]`);
+         if(el){const q=el.querySelector('.tq');
+                if(q){el.classList.add('on');q.setAttribute('aria-expanded','true');}
+                el.scrollIntoView({block:'center'}); flash(el);}}
 }
 function closeHelp(){drawer.classList.remove('on');scrim.classList.remove('on');}
 document.getElementById('helpBtn').onclick=()=>openHelp('terms');

@@ -49,7 +49,7 @@ python3 tools/selftest_rule_spec.py        # 群规文本解析（时长 / 阈�
 
 - Python 3.11+，只用标准库与 AstrBot 自带依赖，**不新增第三方包**（需要的话先开 issue 讨论）。
 - 中文注释、中文用户话术；面向用户的话术走 `_conf_schema.json` 的 `templates`，别硬编码在逻辑里。
-- 新增配置项要写 `description` 与 `default`，并在 README 的配置说明里补一行。
+- 新增配置项要写 `description` 与 `default`，并在 `docs/GUIDE.md` 的「插件配置说明」里补一行。
 - 涉及审核判定 / 变体检测的改动，**必须**补对应 `tools/selftest_*.py` 的用例。
 - 不引入构建步骤（面板保持单文件 HTML 可直接打开）。
 

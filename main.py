@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.event.filter import EventMessageType
-from astrbot.api.message_components import At, Plain
+from astrbot.api.message_components import At, Image, Plain
 # 只使用 astrbot.api 公开接口：不 import astrbot.core.* 内部实现。
 # 面板「管理行为 → 指令」的禁用由 AstrBot 自己在 get_handlers_by_event_type()
 # 里按 handler.enabled 过滤（见 star_handler.py），被禁用的指令根本不会回调到插件，
@@ -50,6 +50,28 @@ from . import member_registry as member_registry_lib
 from . import lexicon as lexicon_lib
 from . import moderation
 from . import variant as variant_lib
+
+
+class _TplText(str):
+    """带模板 key 的字符串。
+
+    _render() 返回它，_reply() 据此查出该模板配置的发送格式（text / markdown / image）。
+    调用方如果对返回值做过拼接、切片等操作，会退化成普通 str，此时按纯文本发送 ——
+    这是安全降级，不改变任何既有调用点的行为。
+    """
+
+    tpl_key: str = ""
+    # 该模板对应的「成员」openid：{avatar} 头像模块用它取图。
+    # {at} 在 _render() 内已展开成标签，这里只留给头像用。
+    tpl_target: str = ""
+
+    def __new__(
+        cls, value: str = "", key: str = "", target: str = ""
+    ) -> "_TplText":
+        obj = str.__new__(cls, value)
+        obj.tpl_key = key
+        obj.tpl_target = target
+        return obj
 
 # 唯一的插件名来源＝插件目录名（也就是 AstrBot 的插件 id）。
 # AstrBot 对这四样东西都按同一个 id 定位，任何一处写死别的名字都会出问题：
@@ -486,6 +508,14 @@ class QQGroupManager(Star):
         self._history_seq = 0
         self._recall_history: dict[str, list[dict]] = {}  # group_openid -> [撤回记录]
         self._recall_seq = 0
+        # 消息模板的发送格式（text / markdown / image）与图片地址。
+        # 注意：模板"内容"仍保存在 AstrBot 配置里（与原生面板兼容、老配置零迁移），
+        # 这里只记录"这段内容该怎么发"，属于纯展示层元数据，丢了也只是退化成纯文本。
+        self._tpl_formats: dict[str, dict] = self._load_tpl_formats()
+        # 入群欢迎去重：{"群openid:成员openid": 时间戳}。
+        # 同一个入群事件可能被重推（断线重连补事件）；审批通过路径已经发过
+        # 欢迎语时，紧随其后的 GROUP_MEMBER_ADD 也不该再发一遍。
+        self._join_welcomed: dict[str, float] = {}
         # 群规审核（/举报）：数据按群隔离、全部本地落盘；
         # 注意：只有收到 /举报 才会调用模型，平时不扫描、不判定、不执行。
         self.mod = moderation.ModerationStore(self._plugin_data_dir(), self.logger)
@@ -1014,23 +1044,253 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # 模板渲染
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # 消息模板格式（text / markdown / image）
+    # ------------------------------------------------------------------
+    TPL_FORMAT_KINDS = ("text", "markdown", "image")
+
+    def _tpl_formats_path(self) -> str:
+        return os.path.join(self._plugin_data_dir(), "msg_formats.json")
+
+    def _load_tpl_formats(self) -> dict:
+        path = self._tpl_formats_path()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return {k: v for k, v in data.items() if isinstance(v, dict)}
+        except FileNotFoundError:
+            return {}
+        except Exception as e:
+            self.logger.warning(f"读取消息模板格式失败，全部按纯文本处理: {e}")
+        return {}
+
+    def _save_tpl_formats(self) -> None:
+        path = self._tpl_formats_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self._tpl_formats, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)  # 原子替换：写一半中断也不会把已有格式文件写坏
+
+    def _tpl_format(self, key: str) -> str:
+        meta = self._tpl_formats.get(key) or {}
+        kind = str(meta.get("type") or "text").strip().lower()
+        return kind if kind in self.TPL_FORMAT_KINDS else "text"
+
+    def _tpl_keys(self) -> set[str]:
+        schema = self._conf_schema()
+        group = schema.get("templates") if isinstance(schema.get("templates"), dict) else {}
+        items = group.get("items") if isinstance(group.get("items"), dict) else {}
+        return {k for k, v in items.items() if isinstance(v, dict)}
+
     def _render(self, key: str, **kw) -> str:
         tpl = str(self._read_config_value(("templates", key), default="", legacy_keys=(key,)))
+        # {at} 内置模块：调用方传 at=<openid> 时直接展开成 @ 标签；
+        # 没传就保留占位符，交给 _reply() 用「消息发送者」兜底展开。
+        target = str(kw.get("at") or "").strip()
+        if target:
+            kw["at"] = self._at_tag(target)
         kw = {k: (str(v) if v is not None else "") for k, v in kw.items()}
         try:
-            return tpl.format(**kw)
+            result = tpl.format(**kw)
         except Exception:
+            # 模板里有不配对的花括号时 format 会抛，退回逐个替换
+            result = tpl
             for k, v in kw.items():
-                tpl = tpl.replace("{" + k + "}", v)
-            return tpl
+                result = result.replace("{" + k + "}", v)
+        return _TplText(result, key, target)
+
+    # ---- 消息内置模块：@群员 / 群员头像 ----
+    # 依据 QQ 官方「文本交互」能力：
+    #   @成员标签  <qqbot-at-user id="openid" />（旧的 <@openid> 官方已标注即将弃用）
+    #   markdown   ![说明 #宽px #高px](url)，图片须公网可访问
+    # 头像走 q.qlogo.cn 公开接口，无需鉴权、不消耗机器人配额。
+    AT_TAG_FMT = '<qqbot-at-user id="{openid}" />'
+    AVATAR_URL_FMT = "https://q.qlogo.cn/qqapp/{appid}/{openid}/{size}"
+    # 头像源档位（qlogo 公开支持的规格）：按展示尺寸就近向上取，小图不拉大图，大图不糊
+    AVATAR_SRC_TIERS = (40, 100, 640)
+    _AVATAR_PH_RE = re.compile(r"\{avatar(?::(\d+))?\}")
+    _LEGACY_AT_RE = re.compile(r"<@!?([0-9A-Za-z_-]{8,})>")
+
+    def _at_tag(self, openid: str) -> str:
+        """openid → QQ 官方 @ 标签；空值返回空串。"""
+        oid = str(openid or "").strip().strip("<>@")
+        return self.AT_TAG_FMT.format(openid=oid) if oid else ""
+
+    def _platform_appid(self, platform_id: str) -> str:
+        """取平台实例的 appid（头像 URL 需要）。取不到返回空串，绝不抛异常。"""
+        try:
+            platform = self.context.get_platform_inst(platform_id)
+            cfg = getattr(platform, "config", None) or {}
+            return str(cfg.get("appid") or "")
+        except Exception:
+            return ""
+
+    def _expand_msg_modules(
+        self, text: str, event: AstrMessageEvent | None, fmt: str,
+        target: str = "", platform_id: str = "",
+    ) -> str:
+        """展开模板里的内置模块。
+
+        ``{at}``         → @成员 标签（_render 传了 at= 时不会残留到这里）
+        ``{avatar}``     → 成员头像，走 markdown 图片语法，仅 markdown 格式生效
+        ``{avatar:160}`` → 指定展示尺寸（夹在 24~320px，自动选清晰度档位）
+        旧 ``<@openid>`` → 自动升级为官方新标签
+
+        ``event`` 可以为 None：入群欢迎这类「没有可回复事件、只能发主动消息」
+        的场景拿不到 AstrMessageEvent，此时用 ``platform_id`` + ``target``
+        （成员 openid）来拼 @ 标签和头像。
+        """
+        if not text:
+            return text
+        need_at = "{at}" in text
+        need_avatar = "{avatar" in text
+        need_legacy = "<@" in text
+        if not (need_at or need_avatar or need_legacy):
+            return text
+
+        if event is not None:
+            try:
+                pid = event.get_platform_id()
+            except Exception:
+                pid = ""
+        else:
+            pid = platform_id
+        appid = self._platform_appid(pid) if pid else ""
+        if target:
+            openid = str(target).strip()
+        else:
+            try:
+                openid = str(event.get_sender_id() or "").strip() if event is not None else ""
+            except Exception:
+                openid = ""
+
+        if need_at:
+            tag = self._at_tag(openid) if (appid and openid) else ""
+            if not tag:  # 非 QQ 官方通道或拿不到 openid：退化成文字 @昵称
+                try:
+                    nick = str(event.get_sender_name() or "").strip() if event is not None else ""
+                except Exception:
+                    nick = ""
+                tag = f"@{nick}" if nick else ""
+            text = text.replace("{at}", tag)
+
+        if need_avatar:
+
+            def _sub(m):
+                # 纯文本 / 图片消息里塞不进 markdown 图片，静默去掉避免露出语法
+                if not (appid and openid) or fmt != "markdown":
+                    return ""
+                try:
+                    disp = int(m.group(1)) if m.group(1) else 100
+                except ValueError:
+                    disp = 100
+                disp = max(24, min(disp, 320))
+                # 小图档（≤40px 展示）只取 40 的源，别为一个表情大小的头像拉 640 大图
+                src = next((t for t in self.AVATAR_SRC_TIERS if t >= disp),
+                           self.AVATAR_SRC_TIERS[-1])
+                url = self.AVATAR_URL_FMT.format(appid=appid, openid=openid, size=src)
+                return f"![avatar #{disp}px #{disp}px]({url})"
+
+            text = self._AVATAR_PH_RE.sub(_sub, text)
+
+        if need_legacy and appid:
+            # 只升级 QQ 官方通道；频道/其他平台的 <@id> 不是 openid，不能动
+            text = self._LEGACY_AT_RE.sub(lambda m: self._at_tag(m.group(1)), text)
+        return text
 
     async def _reply(self, event: AstrMessageEvent, text: str) -> None:
+        """统一回复出口：按模板配置的格式决定怎么发。
+
+        格式（text / markdown / image）由面板「消息模板」页签保存在
+        plugin_data/msg_formats.json，内容本身仍在 AstrBot 配置里，
+        所以升级不会改变任何既有配置，最坏情况退化成纯文本。
+        """
         if not text:
             return
+        key = getattr(text, "tpl_key", "") or ""
+        fmt = self._tpl_format(key) if key else "text"
+        content = self._expand_msg_modules(
+            str(text), event, fmt, getattr(text, "tpl_target", "")
+        )
+        is_img = fmt == "image"
+        img_url = ""
+        if is_img:
+            img_url = str((self._tpl_formats.get(key) or {}).get("url") or "").strip()
+        # 图片消息的正文只是配文，允许为空；纯文本 / Markdown 展开后全空就别推空消息
+        if not content.strip() and not img_url:
+            return
         try:
-            await event.send(MessageChain([Plain(text)]))
+            if fmt == "markdown":
+                chain = MessageChain([Plain(content)])
+                chain.use_markdown(True)
+                await event.send(chain)
+                return
+            if is_img:
+                if img_url:
+                    comps: list = [Image(file=img_url)]
+                    if content.strip():
+                        comps.append(Plain("\n" + content.strip()))
+                    await event.send(MessageChain(comps))
+                    return
+                # 图片地址为空：退回纯文本，绝不吞消息
+            chain = MessageChain([Plain(content)])
+            chain.use_markdown(False)  # 显式纯文本，避免被平台默认 markdown 解析
+            await event.send(chain)
         except Exception as e:
             self.logger.error(f"回复消息失败: {e}")
+
+    async def _send_group_proactive(
+        self, group_openid: str, text: str, platform_id: str, *, at_openid: str = ""
+    ) -> bool:
+        """主动往群里发一条模板消息（入群欢迎这类「没有可回复事件」的场景）。
+
+        为什么必须走主动消息：官方 ``event_id`` 被动回复只支持 3 个事件
+        （INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE），
+        GROUP_MEMBER_ADD 不在白名单里，拿它的事件 id 去回会直接 40034027。
+        代价是受主动消息频控（未认证 30 条/分钟、单群 20 条/分钟、每群每天
+        1000 条），且用户可在 QQ 客户端关掉「允许主动发送」。
+
+        模板格式为图片（image）时只发配文：入群瞬间没有可渲染图片的消息上下文，
+        图片模板退化成文字，总比什么都不发好。
+
+        Returns:
+            True 表示接口调用成功。
+        """
+        key = getattr(text, "tpl_key", "") or ""
+        fmt = self._tpl_format(key) if key else "text"
+        content = self._expand_msg_modules(
+            str(text), None, fmt,
+            getattr(text, "tpl_target", "") or at_openid,
+            platform_id=platform_id,
+        )
+        if not content.strip():
+            self.logger.debug(f"[主动消息] 模板 {key or '?'} 展开后为空，跳过发送")
+            return False
+        api = self._api_for_group_or_default(group_openid, platform_id)
+        if api is None:
+            self.logger.warning(
+                f"[主动消息] 群 {str(group_openid)[-6:]} 找不到可用 API 客户端，发送跳过"
+            )
+            return False
+        if fmt == "markdown":
+            try:
+                await api.send_group_message(group_openid, content, markdown=True)
+                return True
+            except QQApiError as e:
+                # 主动 Markdown 在部分机器人上会被权限/内容校验拦掉，
+                # 退回纯文本：宁可少点格式，也别把欢迎语丢了。
+                self.logger.warning(f"[主动消息] Markdown 发送失败，退回纯文本: {e}")
+        try:
+            await api.send_group_message(group_openid, content)
+            return True
+        except QQApiError as e:
+            self.logger.warning(
+                f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败: {e}；"
+                f"{self._explain_send_error(getattr(e, 'code', None))}"
+            )
+            return False
 
     # ------------------------------------------------------------------
     # 群消息入口（指令走标准正则过滤器；普通消息仅做新群欢迎）
@@ -1291,27 +1551,122 @@ class QQGroupManager(Star):
         except Exception as e:  # noqa: BLE001
             self.logger.debug(f"[成员档案] 记录发言失败: {e}")
 
+    # 入群欢迎去重窗口（秒）：同一事件被重推、或审批通过时已经欢迎过，不再重复发。
+    JOIN_WELCOME_DEDUPE_SECONDS = 600.0
+
     async def _on_group_member_add(self, data: dict, platform_id: str | None = None) -> None:
-        """成员入群：建档案（只有 openid，昵称靠人工或接口补）。"""
+        """成员入群（GROUP_MEMBER_ADD）：建档案 + 发欢迎语。
+
+        事件体只有 timestamp / group_openid / member_openid（官方文档如此，
+        没有昵称、没有 user_openid、外层虽带事件 id 但该事件不在被动回复
+        白名单里），所以欢迎语只能走主动消息。
+        """
+        g = str(data.get("group_openid") or "")
+        member = str(data.get("member_openid") or "")
+        if not g or not member:
+            self.logger.warning(f"[成员事件] 入群事件缺少必要字段: {data}")
+            return
+        if not self._group_in_scope(g, platform_id):
+            return
+
+        # 1) 档案：入群瞬间就能建（只有 openid），退群时「在群多久」才有据可查
+        if self._members_on():
+            try:
+                rec = self.members.seen(
+                    g, member,
+                    ts=data.get("timestamp") or None,
+                    count_msg=False,
+                    user_openid=str(data.get("user_openid") or ""),
+                )
+                self.logger.info(
+                    f"[成员档案] 群 {g} 成员入群: {member_registry_lib.short_id(member)}"
+                    f"（{'已在档' if rec and rec.get('first_seen') else '新建'}）"
+                )
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug(f"[成员档案] 入群建档失败: {e}")
+
+        # 2) 欢迎语：不受「成员档案」开关影响，单独由 member_event 配置控制
         try:
-            if not self._members_on():
-                return
-            g = str(data.get("group_openid") or "")
-            member = str(data.get("member_openid") or "")
-            if not g or not member or not self._group_in_scope(g, platform_id):
-                return
-            rec = self.members.seen(
-                g, member,
-                ts=data.get("timestamp") or None,
-                count_msg=False,
-                user_openid=str(data.get("user_openid") or ""),
-            )
-            self.logger.info(
-                f"[成员档案] 群 {g} 成员入群: {member_registry_lib.short_id(member)}"
-                f"（{'已在档' if rec and rec.get('first_seen') else '新建'}）"
-            )
+            await self._welcome_member_on_join(g, member, platform_id)
         except Exception as e:  # noqa: BLE001
-            self.logger.exception(f"[成员事件] 处理入群事件异常: {e}")
+            self.logger.exception(f"[入群欢迎] 处理异常: {e}")
+
+    async def _welcome_member_on_join(
+        self, group_openid: str, member_openid: str, platform_id: str | None
+    ) -> None:
+        """成员真进群时发欢迎语（主动消息，见 _send_group_proactive）。"""
+        if not bool(self._read_config_value(
+            ("member_event", "enable_member_add_welcome"), default=True,
+            legacy_keys=("enable_member_add_welcome",),
+        )):
+            self.logger.debug("[入群欢迎] 配置已关闭，跳过")
+            return
+
+        now = time.time()
+        key = f"{group_openid}:{member_openid}"
+        last = float(self._join_welcomed.get(key) or 0)
+        if last and now - last < self.JOIN_WELCOME_DEDUPE_SECONDS:
+            self.logger.info(
+                f"[入群欢迎] 群 {str(group_openid)[-6:]} 成员 "
+                f"{member_registry_lib.short_id(member_openid)} "
+                f"{int(now - last)} 秒前刚欢迎过（事件重推或审批已欢迎），跳过"
+            )
+            return
+
+        # 名字：进群瞬间档案通常只有 openid，能用就用，实在没有给个中性称呼
+        username = ""
+        if self._members_on():
+            try:
+                username = str(
+                    (self.members.get(group_openid, member_openid) or {}).get("nickname") or ""
+                ).strip()
+            except Exception:  # noqa: BLE001
+                username = ""
+
+        try:
+            group_name = self.mod.get_group_meta(group_openid).get("name") or group_openid
+        except Exception:  # noqa: BLE001
+            group_name = group_openid
+
+        text = self._render(
+            "msg_welcome_after_approve",
+            username=username or "新朋友",
+            group_name=group_name,
+            bot_name=platform_id or "",
+            at=member_openid,
+        )
+        if not str(text or "").strip():
+            self.logger.info("[入群欢迎] 欢迎语模板为空，跳过")
+            return
+
+        ok = await self._send_group_proactive(
+            group_openid, text, platform_id or "", at_openid=member_openid
+        )
+        if ok:
+            self._join_welcomed[key] = now
+            self._prune_join_welcomed(now)
+            self.logger.info(
+                f"[入群欢迎] 群 {str(group_openid)[-6:]} 已向 "
+                f"{member_registry_lib.short_id(member_openid)} 发送欢迎语"
+            )
+        else:
+            self.logger.warning(
+                f"[入群欢迎] 群 {str(group_openid)[-6:]} 欢迎语发送失败："
+                f"主动消息需要该群允许机器人推送（部分群需群主在权限项里开启），"
+                f"也可能撞上频控或用户在客户端关掉了「允许主动发送」"
+            )
+
+    def _prune_join_welcomed(self, now: float | None = None) -> None:
+        """清理入群欢迎去重表：过期记录删掉，最多留 500 条。"""
+        now = float(now if now is not None else time.time())
+        keep = {
+            k: v for k, v in self._join_welcomed.items()
+            if now - float(v or 0) < self.JOIN_WELCOME_DEDUPE_SECONDS
+        }
+        if len(keep) > 500:
+            for k, _ in sorted(keep.items(), key=lambda kv: kv[1])[: len(keep) - 500]:
+                keep.pop(k, None)
+        self._join_welcomed = keep
 
     async def _on_group_member_remove(self, data: dict, platform_id: str | None = None) -> None:
         """成员退群/被移出：先查档案，再按配置在群内发言通知。
@@ -1401,6 +1756,7 @@ class QQGroupManager(Star):
                 username=username or "某位成员",
                 short=member_registry_lib.short_id(member),
                 openid=member,
+                at=member,
                 days=days,
                 msgs=msgs,
                 extra=extra,
@@ -2188,6 +2544,7 @@ class QQGroupManager(Star):
             self._render(
                 "msg_mute_success",
                 username=f"<@{target}>",
+                at=target,
                 seconds=seconds,
                 minutes=seconds // 60,
                 duration_text=fmt_duration(seconds),
@@ -2207,7 +2564,7 @@ class QQGroupManager(Star):
                 await api.set_mute(g, target, op="del")
                 self._mark_unmuted(g, target)
                 self.logger.info(f"解禁: group={g} member={target}")
-                await self._reply(event, self._render("msg_unmute_success", username=f"<@{target}>"))
+                await self._reply(event, self._render("msg_unmute_success", username=f"<@{target}>", at=target))
             except QQApiError as e:
                 self.logger.error(f"解禁失败: {e}")
                 await self._reply(event, self._render("msg_mute_failed", error=str(e)))
@@ -2712,14 +3069,19 @@ class QQGroupManager(Star):
                     username=username,
                     group_name=g,
                     bot_name=event.get_platform_id(),
+                    at=member_openid,
                 )
-                try:
-                    await api.send_group_message(g, welcome)
+                if await self._send_group_proactive(
+                    g, welcome, event.get_platform_id(), at_openid=member_openid
+                ):
                     self.logger.info(f"已向群 {g} 推送欢迎语")
-                except QQApiError as e:
+                    # 记一笔：成员紧接着真进群时 GROUP_MEMBER_ADD 会再来一次，
+                    # 这里已经欢迎过就别重复欢迎了（去重窗口见 JOIN_WELCOME_DEDUPE_SECONDS）。
+                    self._join_welcomed[f"{g}:{member_openid}"] = time.time()
+                    self._prune_join_welcomed()
+                else:
                     self.logger.warning(
-                        f"主动推送欢迎语失败（24h 内无人@机器人时 QQ 会限制主动消息）: {e}；"
-                        f"欢迎语已附在回复中"
+                        f"主动推送欢迎语失败（主动消息受限或频控），欢迎语已附在回复中"
                     )
                     await self._reply(
                         event, f"{welcome}\n（主动推送受限，欢迎语如上）"
@@ -2850,12 +3212,32 @@ class QQGroupManager(Star):
     def _mod_settings(self, group: str) -> dict:
         return self.mod.get_settings(group)
 
+    # moderation 话术模板里的内置模块占位符：{at} / {avatar} / {avatar:N}
+    _MOD_MODULE_RE = re.compile(r"\{at\}|\{avatar(?::\d+)?\}")
+
     def _mod_tpl(self, group: str, key: str, **kw) -> str:
-        """话术渲染：本群覆盖 -> 全局自定义 -> 内置默认。"""
+        """话术渲染：本群覆盖 -> 全局自定义 -> 内置默认。
+
+        注意 moderation.render_tpl 会把「未提供的 {变量}」一并清空，
+        所以内置模块占位符（{at} / {avatar}）必须先换成哨兵保护起来，
+        渲染完再还原，否则会像写错变量一样被静默吃掉。
+        """
         tpl = (self.mod.get_templates(group) or {}).get(key)
         if not tpl:
             tpl = moderation.DEFAULT_TEMPLATES.get(key, "")
-        return moderation.render_tpl(tpl, **kw)
+        target = str(kw.pop("at", "") or "")
+        guards: list[str] = []
+
+        def _guard(m):
+            guards.append(m.group(0))
+            return f"\x00QQGM_MOD{len(guards) - 1}\x00"
+
+        tpl = self._MOD_MODULE_RE.sub(_guard, str(tpl or ""))
+        out = moderation.render_tpl(tpl, **kw)
+        for i, g in enumerate(guards):
+            out = out.replace(f"\x00QQGM_MOD{i}\x00", g)
+        # 带上 key/target：_reply 据此查发送格式，{avatar} 才知道该取谁的头像
+        return _TplText(out, key, target)
 
     # QQ 官方引用「合并转发」时，reply 原文不是转发正文，而是另一套摘要清单：
     #   === 消息 1 ===
@@ -3338,11 +3720,11 @@ class QQGroupManager(Star):
         if info["notified"]:
             if info["muted"]:
                 text = self._mod_tpl(group, "mod_variant_strike_muted", mentions=mentions,
-                                     user=f"<@{target}>", count=count, days=win,
+                                     user=f"<@{target}>", at=target, count=count, days=win,
                                      duration=fmt_duration(int(info.get("mute_seconds") or 0)))
             else:
                 text = self._mod_tpl(group, "mod_variant_strike_notify", mentions=mentions,
-                                     user=f"<@{target}>", count=count, days=win, method=method)
+                                     user=f"<@{target}>", at=target, count=count, days=win, method=method)
             await self._reply(event, text)
         if info["note"]:
             self.logger.info(f"[审核][变体] {info['note']}（group={group} target={target} count={count}）")
@@ -3988,7 +4370,7 @@ class QQGroupManager(Star):
             ok = self.mod.unregister_admin(g, sender)
             cnt = len(self.mod.get_admins(g))
             key = "mod_admin_unregistered" if ok else "mod_admin_not_registered"
-            await self._reply(event, self._mod_tpl(g, key, user=f"<@{sender}>", count=cnt))
+            await self._reply(event, self._mod_tpl(g, key, user=f"<@{sender}>", at=sender, count=cnt))
             return
         # 登记：能走到这里说明已经过了管理员门槛（AstrBot 管理员 / 配置名单 / 群角色任一）
         role = str(self._get_qq_role(event) or "")
@@ -4000,7 +4382,7 @@ class QQGroupManager(Star):
         cnt = len(self.mod.get_admins(g))
         self.logger.info(f"[审核] 管理员登记：group={g} sender={sender} role={role} 名单共 {cnt} 人")
         await self._reply(event, self._mod_tpl(g, "mod_admin_registered",
-                                               user=f"<@{sender}>", count=cnt))
+                                               user=f"<@{sender}>", at=sender, count=cnt))
         if not self._mod_settings(g).get("variant_strike_notify", True):
             await self._reply(event, self._mod_tpl(g, "mod_admin_register_off"))
 
@@ -5427,6 +5809,8 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/config", self.web_config_save, ["POST"], "QQ群管-保存默认禁言理由")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/config/schema", self.web_config_schema, ["GET"], "QQ群管-配置schema与当前值")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/config/save", self.web_config_bulk_save, ["POST"], "QQ群管-批量保存配置")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/templates/formats", self.web_tpl_formats, ["GET"], "QQ群管-消息模板格式")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/templates/formats/save", self.web_tpl_formats_save, ["POST"], "QQ群管-保存消息模板格式")
         # 群规审核（已并入管理面板 tab：pages/dashboard，路由前缀 mod/...）
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/groups", self.web_mod_groups, ["GET"], "审核-群列表")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/detail", self.web_mod_detail, ["GET"], "审核-单群详情(群规/设置/话术)")
@@ -6032,6 +6416,91 @@ class QQGroupManager(Star):
         if len(text) > 8000:
             return None, "内容过长（限 8000 字）"
         return text, None
+
+    async def web_tpl_formats(self):
+        """GET /templates/formats：消息模板清单 + 各自配置的发送格式。"""
+        schema = self._conf_schema()
+        group = schema.get("templates") if isinstance(schema.get("templates"), dict) else {}
+        items_schema = group.get("items") if isinstance(group.get("items"), dict) else {}
+        templates = []
+        for key, ischema in items_schema.items():
+            if not isinstance(ischema, dict):
+                continue
+            meta = self._tpl_formats.get(key) or {}
+            value = self._read_config_value(
+                ("templates", key), default=ischema.get("default", ""), legacy_keys=(key,)
+            )
+            templates.append({
+                "key": key,
+                "description": str(ischema.get("description") or key),
+                "hint": str(ischema.get("hint") or ""),
+                "value": "" if value is None else str(value),
+                "default": "" if ischema.get("default") is None else str(ischema.get("default")),
+                "format": self._tpl_format(key),
+                "url": str(meta.get("url") or ""),
+                "width": int(meta.get("width") or 0),
+                "height": int(meta.get("height") or 0),
+            })
+        return json_response({"ok": True, "kinds": list(self.TPL_FORMAT_KINDS), "templates": templates})
+
+    async def web_tpl_formats_save(self):
+        """POST /templates/formats/save：保存模板格式，可同时保存内容。
+
+        body: {"items":[{"key":"msg_help","type":"markdown","url":"","width":0,"height":0,"value":"..."}]}
+        兼容单项写法 {"key": ..., "type": ...}
+        """
+        payload = await request.json(default={}) or {}
+        raw_items = payload.get("items")
+        if isinstance(raw_items, dict):
+            raw_items = [{"key": k, **(v if isinstance(v, dict) else {})} for k, v in raw_items.items()]
+        if not isinstance(raw_items, list):
+            raw_items = [payload]
+        raw_items = [i for i in raw_items if isinstance(i, dict)]
+
+        valid_keys = self._tpl_keys()
+        saved: list[str] = []
+        errors: list[str] = []
+        content_changed = False
+        for item in raw_items:
+            key = str(item.get("key") or "").strip()
+            if not key:
+                continue
+            if key not in valid_keys:
+                errors.append(f"未知模板：{key}")
+                continue
+            meta = dict(self._tpl_formats.get(key) or {})
+            if "type" in item:
+                kind = str(item.get("type") or "text").strip().lower()
+                meta["type"] = kind if kind in self.TPL_FORMAT_KINDS else "text"
+            if "url" in item:
+                meta["url"] = str(item.get("url") or "").strip()
+            for dim in ("width", "height"):
+                if dim in item:
+                    try:
+                        meta[dim] = max(0, int(item.get(dim) or 0))
+                    except (TypeError, ValueError):
+                        meta[dim] = 0
+            self._tpl_formats[key] = meta
+            if "value" in item:
+                try:
+                    self._write_config_value("templates", key, str(item.get("value") or ""))
+                    content_changed = True
+                except Exception as e:
+                    errors.append(f"{key} 内容保存失败: {e}")
+            saved.append(key)
+
+        if saved:
+            try:
+                self._save_tpl_formats()
+            except Exception as e:
+                return json_response({"ok": False, "message": f"格式写入失败: {e}"})
+            if content_changed:
+                try:
+                    self.config.save_config()
+                except Exception as e:
+                    self.logger.warning(f"保存配置失败: {e}")
+                    errors.append(f"内容写入配置文件失败: {e}")
+        return json_response({"ok": bool(saved) and not errors, "saved": saved, "errors": errors})
 
     async def web_config_schema(self):
         """GET /config/schema：返回设置页所需的 schema、当前生效值与可选模型。"""

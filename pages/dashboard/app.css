@@ -549,6 +549,30 @@ textarea{min-height:78px;resize:vertical;line-height:1.6;font-family:inherit}
              border:1px solid var(--line);border-radius:var(--r-md);padding:10px var(--s3);
              margin-bottom:var(--s3);box-shadow:var(--sh1);position:sticky;top:0;z-index:6}
 .set-toolbar .btn{flex:none}
+/* 消息模板子页签里的「Markdown 大全」入口条 */
+.md-help-bar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);
+             background:var(--acc-soft);border:1px solid var(--line);border-radius:var(--r-md);
+             padding:8px var(--s3);margin-bottom:var(--s3);font-size:var(--t1);color:var(--dim)}
+.md-help-bar b{color:var(--tx)}
+.md-help-bar span{flex:1;min-width:180px;line-height:1.5}
+/* 帮助中心 · Markdown 大全卡片 */
+.mdsec{background:var(--pan);border:1px solid var(--line);border-radius:var(--r-md);
+       padding:10px var(--s3);margin-bottom:var(--s2);box-shadow:var(--sh1)}
+.mdsec-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s2);margin-bottom:4px}
+.mdsec-head b{font-size:var(--t2)}
+.mdsec-desc{font-size:var(--t1);color:var(--dim);line-height:1.65;margin-bottom:var(--s2)}
+.mdsec-desc code{font-family:var(--mono);font-size:11px;background:var(--soft);border-radius:5px;padding:1px 5px}
+.mdsec-desc strong{color:var(--tx)}
+/* 抽屉只有 400px 宽，所以「写法 / 效果」上下叠放，不并排 */
+.mdsec-grid{display:grid;grid-template-columns:1fr;gap:var(--s2)}
+.mdsec-lab{display:flex;align-items:center;justify-content:space-between;
+           font-size:10.5px;color:var(--dim);margin-bottom:4px}
+.mdcode{margin:0;padding:8px 10px;background:var(--soft);border-radius:var(--r-sm);
+        font-family:var(--mono);font-size:11.5px;line-height:1.65;white-space:pre-wrap;
+        word-break:break-all;max-height:220px;overflow:auto}
+.mdcode .zwsp{color:var(--brand);font-size:10px}
+.mdprev{padding:8px 10px;background:var(--soft2);border:1px solid var(--line);
+        border-radius:var(--r-sm);font-size:var(--t1);max-height:220px;overflow:auto}
 .spacer{flex:1}
 .set-dirty{font-size:11px;color:var(--dim)}
 .set-dirty b{color:var(--brand)}
@@ -915,3 +939,47 @@ select{max-width:100%}
 .appr-groups{display:flex;flex-wrap:wrap;gap:4px;max-width:340px}
 .appr-ops{display:flex;flex-wrap:wrap;gap:5px}
 .appr-warn{color:var(--danger)}
+
+/* ===== 消息模板：格式拨杆 + 编辑对话框 ===== */
+.tpl-fmtbar{display:flex;align-items:center;gap:8px;margin:2px 0 6px;flex-wrap:wrap}
+.tpl-fmtseg{max-width:260px}
+.tpl-fmtseg button{font-size:var(--t1)}
+.tpl-editbtn{white-space:nowrap}
+.tpl-dlg{border:0;padding:0;border-radius:var(--r-lg);width:min(1100px,94vw);max-height:88vh;background:var(--card);
+  color:var(--txt);box-shadow:0 24px 60px rgba(0,0,0,.45)}
+.tpl-dlg::backdrop{background:rgba(0,0,0,.55)}
+.tpl-dlg-head{display:flex;align-items:flex-start;gap:14px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.tpl-dlg-head h3{margin:0;font-size:var(--t3)}
+.tpl-dlg-sub{margin:3px 0 0;color:var(--dim);font-size:var(--t1)}
+.tpl-dlg-head .iconbtn{margin-left:auto}
+.tpl-dlg-body{display:grid;grid-template-columns:1fr 1fr;gap:0;min-height:380px}
+.tpl-dlg-pane{padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.tpl-dlg-pane + .tpl-dlg-pane{border-left:1px solid var(--line)}
+.tpl-dlg-label{font-size:var(--t1);color:var(--dim)}
+.tpl-dlg-text{flex:1;min-height:240px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:var(--t1);line-height:1.6}
+.tpl-dlg-imgrow{display:flex;flex-direction:column;gap:6px}
+/* 模板弹窗的「插入模块」快捷条：@群员 / 群员头像 */
+.tpl-mod-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:2px}
+.tpl-mod-label{font-size:12px;color:var(--dim)}
+.tpl-mod-chip{border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:999px;padding:2px 10px;font-size:12px;cursor:pointer;transition:background .15s,border-color .15s}
+.tpl-mod-chip:hover{background:var(--hover,rgba(0,0,0,.05));border-color:var(--acc)}
+/* 预览里内置模块的等效示意（面板拿不到成员 openid，只能示意尺寸与位置） */
+.md-at{display:inline-block;padding:0 5px;border-radius:4px;background:rgba(88,101,242,.14);color:#3563f0;font-weight:600}
+.md-avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:linear-gradient(135deg,#7aa7ff,#b48cff);color:#fff;font-size:11px;vertical-align:middle;margin:0 2px}
+.tpl-dlg-size{display:flex;gap:10px}
+.tpl-dlg-size label{display:flex;align-items:center;gap:6px;font-size:var(--t1);color:var(--dim)}
+.tpl-dlg-size .input{width:86px}
+.tpl-dlg-actions{display:flex;align-items:center;gap:8px;margin-top:auto;padding-top:6px}
+.tpl-preview{flex:1;overflow:auto;background:var(--soft2);border-radius:var(--r-md);padding:12px 14px;min-height:240px}
+.pv-text{white-space:pre-wrap;line-height:1.7;overflow-wrap:anywhere}
+.pv-md{line-height:1.7;overflow-wrap:anywhere}
+.pv-md p{margin:4px 0}
+.pv-md .pv-h1{font-size:1.18em;font-weight:700;margin:8px 0 4px}
+.pv-md .pv-h2{font-size:1.06em;font-weight:700;margin:6px 0 3px}
+.pv-md blockquote{margin:6px 0;padding:2px 0 2px 10px;border-left:3px solid var(--acc);color:var(--dim)}
+.pv-md ul,.pv-md ol{margin:4px 0 4px 20px;padding:0}
+.pv-md hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+.pv-md a{color:var(--acc)}
+.pv-cap{margin-top:8px;color:var(--dim);font-size:var(--t1)}
+.pv-warn{color:var(--dim);font-size:var(--t1);padding:10px;border:1px dashed var(--line);border-radius:8px;text-align:center}
+@media (max-width:820px){.tpl-dlg-body{grid-template-columns:1fr}.tpl-dlg-pane + .tpl-dlg-pane{border-left:0;border-top:1px solid var(--line)}}

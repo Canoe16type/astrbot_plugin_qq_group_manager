@@ -278,21 +278,31 @@ class QQApi:
 
     # ---------- 主动发群消息 ----------
     async def send_group_message(self, group_openid: str, content: str,
-                                 event_id: str = "", msg_id: str = "") -> dict:
-        """向群内发送文本消息。
+                                 event_id: str = "", msg_id: str = "",
+                                 markdown: bool = False) -> dict:
+        """向群内发送文本 / Markdown 消息。
 
         传 event_id / msg_id 时走**被动消息**（官方推荐）：
         官方明确支持用 GROUP_ADD_ROBOT 等事件的 id 作为 event_id 做被动回复，
         5 分钟内有效、同一个事件最多回 5 条，且不吃主动消息频控。
-        不传则是主动消息：要求群内 24h 内有人@过机器人，否则可能失败（如 code 11251）。
+        不传则是主动消息：受主动消息频控（未认证 30 条/分钟、单群 20 条/分钟、
+        每群每天 1000 条），并且用户可在客户端关闭「允许主动发送」。
+
+        Args:
+            markdown: True 时按 msg_type=2 发自定义 Markdown（``# 标题``、
+                ``**加粗**``、``[🔗文字](url)`` 等），2026/04/23 起单聊/群聊
+                都无需单独申请 Markdown 模板。默认 False＝纯文本 msg_type=0。
         """
         self._seq = (self._seq + 1) % 100000
         msg_seq = self._seq or 1
         body = {
-            "content": content,
-            "msg_type": 0,
+            "msg_type": 2 if markdown else 0,
             "msg_seq": msg_seq,
         }
+        if markdown:
+            body["markdown"] = {"content": content}
+        else:
+            body["content"] = content
         if event_id:
             body["event_id"] = event_id
         elif msg_id:

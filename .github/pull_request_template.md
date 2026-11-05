@@ -18,7 +18,7 @@
 
 - [ ] 没有提交大词库（只允许 `lexicons/ad.json` / `lexicons/abuse.json`）
 - [ ] 新增 / 更换词库时已更新 `lexicons/SOURCES.md`
-- [ ] 新增配置项已写 `description` + `default`，并在 README 配置说明补了说明
+- [ ] 新增配置项已写 `description` + `default`，并在 `docs/GUIDE.md` 配置说明补了说明
 - [ ] 面向用户的话术走 `_conf_schema.json` 的 `templates`，没有硬编码
 - [ ] 行为变更已在 `CHANGELOG.md` 记录
 - [ ] 没有引入第三方依赖或构建步骤
