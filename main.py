@@ -27,7 +27,7 @@ import socket
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -74,6 +74,7 @@ LEXICON_UPSTREAM_NAME = "上游词库（一键获取）"
 LEXICON_UPSTREAM_URL = ""
 LEXICON_UPSTREAM_MAX_BYTES = 2 * 1024 * 1024      # 单次下载上限 2 MB
 LEXICON_UPSTREAM_TIMEOUT = 15.0                   # 下载超时（秒）
+LOG_SSE_HEARTBEAT_SEC = 15                         # 日志 SSE 空闲保活间隔（秒）；不发心跳会被反代按空闲超时掐断
 LEXICON_UPSTREAM_FAST_TIMEOUT = 8.0               # 配了加速地址时，直连只等这么久
 
 
@@ -452,7 +453,7 @@ class QQGroupManager(Star):
         super().__init__(context)
         self.config = config
         self.logger = PluginLogger(
-            max_entries=int(self._read_config_value(("log", "log_max_entries"), default=2000, legacy_keys=("log_max_entries",))),
+            max_entries=int(self._read_config_value(("log", "log_max_entries"), default=300, legacy_keys=("log_max_entries",))),
             level=str(self._read_config_value(("log", "log_level"), default="DEBUG", legacy_keys=("log_level",))),
             to_file=bool(self._read_config_value(("log", "log_to_file"), default=True, legacy_keys=("log_to_file",))),
             keep_days=int(self._read_config_value(("log", "log_keep_days"), default=14, legacy_keys=("log_keep_days",))),
@@ -1680,6 +1681,12 @@ class QQGroupManager(Star):
             except Exception as e:  # noqa: BLE001
                 self.logger.debug(f"关闭 HTTP 会话失败（忽略）: {e}")
         self._apis.clear()
+
+        # 日志是攒批落盘的，退出前把队列刷干净并停掉后台线程
+        try:
+            self.logger.close()
+        except Exception:
+            pass
 
     def _ensure_poll_task(self) -> None:
         if self._poll_task is None or self._poll_task.done():
@@ -3416,10 +3423,10 @@ class QQGroupManager(Star):
         settings = self._mod_settings(group)
         if respect_switches and not settings.get("enable_model", True):
             return None  # 模型层已关闭：不发任何请求（省钱、降噪）
-        # 费用熔断：超预算时不再调用模型（降级为仅关键词层）
-        budget = float(settings.get("daily_budget") or 0)
-        if budget > 0 and self.mod.stats(group).get("today_cost", 0) >= budget:
-            self.logger.warning(f"[审核] 群 {group} 已达当日费用上限 {budget}，跳过模型判定")
+        # 次数熔断：当天模型判定次数达到上限后不再调模型（自动降级为仅关键词层）
+        daily_limit = int(settings.get("daily_budget") or 0)
+        if daily_limit > 0 and self.mod.stats(group).get("today_llm_calls", 0) >= daily_limit:
+            self.logger.warning(f"[审核] 群 {group} 已达当日模型判定次数上限 {daily_limit}，跳过模型判定")
             return None
 
         images = list(rep.get("images") or [])
@@ -3492,11 +3499,6 @@ class QQGroupManager(Star):
         except (TypeError, ValueError):
             verdict["confidence"] = 0.0
         verdict["model"] = pid
-        usage = getattr(resp, "usage", None)
-        tokens = int(getattr(usage, "total_tokens", 0) or 0) if usage is not None else 0
-        verdict["tokens"] = tokens
-        price = float(self._read_config_value(("moderation", "price_per_1k_tokens"), default=0.0) or 0.0)
-        verdict["cost"] = round(tokens / 1000.0 * price, 6)
         verdict["from_cache"] = False
         return verdict
 
@@ -3698,8 +3700,6 @@ class QQGroupManager(Star):
             "from_cache": False,
             "recall_note": "",
             "model": "variant",
-            "tokens": 0,
-            "cost": 0.0,
             "variant_hit": True,
             "variant": {"method": variant["method"], "strength": variant["strength"],
                         "count": variant["count"], "source": variant["source"]},
@@ -3773,8 +3773,6 @@ class QQGroupManager(Star):
                 "prior_offenses": result.get("prior_offenses") or 0,
                 "escalation": result.get("escalation") or 1.0,
                 "model": verdict.get("model") or "keyword",
-                "tokens": verdict.get("tokens") or 0,
-                "cost": verdict.get("cost") or 0.0,
                 "variant_hit": bool(variant),
                 "variant": ({"method": variant["method"], "strength": variant["strength"],
                              "count": variant["count"], "source": variant["source"]} if variant else None),
@@ -3901,8 +3899,6 @@ class QQGroupManager(Star):
                 # 待办状态：本群关掉待办时直接标 disabled，不进队列（记录本身照常留痕）
                 "todo_state": "" if settings.get("todo_enabled", True) else "disabled",
                 "model": verdict.get("model") or "keyword",
-                "tokens": verdict.get("tokens") or 0,
-                "cost": verdict.get("cost") or 0.0,
             })
             # 变体累计升级：窗口内同一人疑似变体累计到阈值 → 提醒（默认）/ 自动禁言（默认关）
             if variant:
@@ -4226,17 +4222,29 @@ class QQGroupManager(Star):
             "name_error": str(meta.get("name_error") or ""),
         }
 
-    async def _refresh_bot_name(self, platform_id: str) -> str:
-        """拉机器人自己的昵称（GET /users/@me，普通接口），失败返回空串。"""
+    async def _refresh_bot_name(self, platform_id: str, ttl: float = 120.0) -> str:
+        """拉机器人自己的昵称（GET /users/@me，普通接口），失败返回空串。
+
+        - 异常一律吞掉：昵称只是显示用，不能因为它把「策略列表」整页搞崩。
+        - 带 TTL 节流：拉不到时别把每个列表请求都拖成两次 API 往返。
+        """
+        tried = getattr(self, "_bot_name_tried", None)
+        if tried is None:
+            tried = self._bot_name_tried = {}
+        now = time.monotonic()
+        if now - tried.get(platform_id, 0.0) < ttl:
+            return str((self.mod.get_bot_meta(platform_id) or {}).get("name") or "")
+        tried[platform_id] = now
         try:
             api = self._get_api(platform_id)
-        except QQApiError:
+            info = await api.get_bot_info()
+            name = str((info or {}).get("username") or "").strip()
+            if name:
+                self.mod.set_bot_meta(platform_id, name=name[:40])
+            return name
+        except Exception as e:  # noqa: BLE001 昵称拿不到不影响主流程
+            self.logger.debug(f"[入群审批] 拉取机器人昵称失败 {platform_id}: {e}")
             return ""
-        info = await api.get_bot_info()
-        name = str((info or {}).get("username") or "").strip()
-        if name:
-            self.mod.set_bot_meta(platform_id, name=name[:40])
-        return name
 
     async def web_mod_groups(self):
         groups = self._all_known_group_list()
@@ -5195,6 +5203,212 @@ class QQGroupManager(Star):
             "stats": self.lexicons.stats(),
         })
 
+    # ---------------- 入群自动审批策略（QQ 官方 /v2/groups/join_approval_strategy） ----------------
+    def _pick_bot_pid(self, preferred: str = "") -> tuple[str, str]:
+        """选一个平台实例 ID。preferred 命中则用之，否则取第一个启用的实例。
+
+        返回 (pid, 错误信息)，成功时错误为空串。
+        """
+        plats = self._platform_list()
+        if preferred:
+            for pl in plats:
+                if pl["id"] == preferred:
+                    return pl["id"], ""
+            return "", f"平台实例不存在：{preferred}"
+        for pl in plats:
+            if pl.get("enable"):
+                return pl["id"], ""
+        return "", "没有启用的 QQ 官方机器人实例，请先在 AstrBot 里配置并启用"
+
+    def _approval_api(self, preferred: str = "") -> "QQApi":
+        """取审批策略用的 API 客户端（策略是机器人级的，不绑群）。"""
+        pid, err = self._pick_bot_pid(preferred)
+        if err:
+            raise QQApiError(err)
+        try:
+            api = self._get_api(pid)
+        except QQApiError:
+            raise
+        except Exception as e:  # 面板接口不因实例异常直接 500
+            raise QQApiError(f"取机器人实例失败：{e}") from e
+        if api is None:
+            raise QQApiError("取不到机器人实例的 API 客户端")
+        return api
+
+    @staticmethod
+    def _parse_group_input(raw: str) -> list[str]:
+        """把「123, 456 789」这类自由输入拆成干净列表（兼容中英文逗号、空格、换行）。"""
+        if not raw:
+            return []
+        for sep in ("，", "、", ";", "；", "\n", "\t", "\r"):
+            raw = raw.replace(sep, ",")
+        return [x.strip() for x in raw.split(",") if x.strip()]
+
+    async def web_join_approval_list(self):
+        """GET 策略列表。策略按机器人维度，platform_id 可选。"""
+        try:
+            pid, perr = self._pick_bot_pid(request.query.get("platform_id", type=str) or "")
+            if perr:
+                return json_response({"error": perr})
+            # 昵称是懒加载的，进审批页时顺手补一次，下拉里就能显示机器人名称而不是 AppID
+            if not (self.mod.get_bot_meta(pid) or {}).get("name"):
+                await self._refresh_bot_name(pid)
+            api = self._get_api(pid)
+            data = await api.list_join_approval_strategies(
+                cursor=request.query.get("cursor", type=str) or "",
+                limit=request.query.get("limit", type=int) or 20,
+            )
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        rows = []
+        for s in data.get("strategies") or []:
+            gids = [str(x) for x in (s.get("group_ids") or [])]
+            gopens = [str(x) for x in (s.get("group_openids") or [])]
+            expire_at = s.get("expire_at") or ""
+            left_days = None
+            try:
+                if expire_at:
+                    left_days = (datetime.fromisoformat(expire_at.replace("Z", "+00:00"))
+                                 - datetime.now(timezone.utc)).days
+            except Exception:
+                left_days = None
+            rows.append({
+                "strategy_id": s.get("strategy_id") or "",
+                "group_ids": gids,
+                "group_openids": gopens,
+                "group_mode": "id" if gids else "openid",
+                "group_count": len(gids) + len(gopens),
+                "whitelist_user_count": s.get("whitelist_user_count") or 0,
+                "is_enable": (s.get("is_enable") or "").lower() == "on",
+                "expire_at": fmt_rfc3339(expire_at),
+                "expire_in_days": left_days,
+                "created_at": fmt_rfc3339(s.get("created_at") or ""),
+                "updated_at": fmt_rfc3339(s.get("updated_at") or ""),
+                "remark": s.get("remark") or "",
+            })
+        return json_response({
+            "platform_id": pid,
+            "platforms": self._platform_list(),
+            "strategies": rows,
+            "next_cursor": data.get("next_cursor") or "",
+        })
+
+    async def web_join_approval_save(self):
+        """POST 创建或修改策略。带 strategy_id＝修改，不带＝创建。"""
+        p = await request.json(default={})
+        sid = str(p.get("strategy_id") or "").strip()
+        raw_groups = str(p.get("groups") or "")
+        groups = self._parse_group_input(raw_groups)
+        mode = str(p.get("group_mode") or "id")
+        is_enable = "on" if p.get("is_enable", True) else "off"
+        expire_at = str(p.get("expire_at") or "").strip()
+        remark = str(p.get("remark") or "").strip()
+        try:
+            api = self._approval_api(str(p.get("platform_id") or ""))
+            if sid:
+                kw: dict = {"is_enable": is_enable}
+                if expire_at:
+                    kw["expire_at"] = expire_at
+                kw["remark"] = remark
+                r = await api.update_join_approval_strategy(sid, **kw)
+                action = "已更新策略"
+                op = str(p.get("group_op") or "").strip()
+                if op in ("add", "del") and groups:
+                    if mode == "id":
+                        try:
+                            act: dict = {"op": op, "group_ids": [int(x) for x in groups]}
+                        except ValueError:
+                            return json_response({"error": "群号必须是纯数字"})
+                    else:
+                        act = {"op": op, "group_openids": groups}
+                    r = await api.update_join_approval_strategy(sid, group_action=act)
+                    action = f"已更新策略，并{'新增' if op == 'add' else '移除'} {len(groups)} 个群"
+            else:
+                if not groups:
+                    return json_response({"error": "至少要指定一个群"})
+                if mode == "id":
+                    try:
+                        gids = [int(x) for x in groups]
+                    except ValueError:
+                        return json_response({"error": "群号必须是纯数字"})
+                    r = await api.create_join_approval_strategy(
+                        group_ids=gids, is_enable=is_enable,
+                        expire_at=expire_at or None, remark=remark or None)
+                else:
+                    r = await api.create_join_approval_strategy(
+                        group_openids=groups, is_enable=is_enable,
+                        expire_at=expire_at or None, remark=remark or None)
+                action = "已创建策略"
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        self.logger.info(f"[入群审批] {action} {r.get('strategy_id') or sid}（{len(groups)} 群）")
+        return json_response({"ok": True, "result": r, "message": action})
+
+    async def web_join_approval_toggle(self):
+        """POST 启停策略。"""
+        p = await request.json(default={})
+        sid = str(p.get("strategy_id") or "").strip()
+        if not sid:
+            return json_response({"error": "缺少 strategy_id"})
+        on = bool(p.get("enabled"))
+        try:
+            api = self._approval_api(str(p.get("platform_id") or ""))
+            r = await api.update_join_approval_strategy(sid, is_enable="on" if on else "off")
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        self.logger.info(f"[入群审批] 策略 {sid} -> {'启用' if on else '停用'}")
+        return json_response({"ok": True, "result": r})
+
+    async def web_join_approval_delete(self):
+        """POST 删除策略。"""
+        p = await request.json(default={})
+        sid = str(p.get("strategy_id") or "").strip()
+        if not sid:
+            return json_response({"error": "缺少 strategy_id"})
+        try:
+            api = self._approval_api(str(p.get("platform_id") or ""))
+            await api.delete_join_approval_strategy(sid)
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        self.logger.info(f"[入群审批] 已删除策略 {sid}")
+        return json_response({"ok": True})
+
+    async def web_join_approval_execute(self):
+        """POST 立即全量扫描（异步，官方称约 10 分钟）。"""
+        p = await request.json(default={})
+        sid = str(p.get("strategy_id") or "").strip()
+        if not sid:
+            return json_response({"error": "缺少 strategy_id"})
+        try:
+            api = self._approval_api(str(p.get("platform_id") or ""))
+            await api.execute_join_approval_strategy(sid)
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        self.logger.info(f"[入群审批] 已触发全量扫描 {sid}")
+        return json_response({"ok": True, "message": "已提交，官方异步执行，约 10 分钟完成"})
+
+    async def web_join_approval_whitelist(self):
+        """POST 增删白名单号码。body: strategy_id / op(add|del) / users(文本)"""
+        p = await request.json(default={})
+        sid = str(p.get("strategy_id") or "").strip()
+        op = str(p.get("op") or "add")
+        users = self._parse_group_input(str(p.get("users") or ""))
+        if not sid:
+            return json_response({"error": "缺少 strategy_id"})
+        if not users:
+            return json_response({"error": "白名单号码不能为空"})
+        bad = [u for u in users if not u.isdigit()]
+        if bad:
+            return json_response({"error": f"以下不是纯数字 QQ 号：{', '.join(bad[:5])}"})
+        try:
+            api = self._approval_api(str(p.get("platform_id") or ""))
+            r = await api.update_join_approval_whitelist(sid, op, users)
+        except QQApiError as e:
+            return json_response({"error": str(e)})
+        self.logger.info(f"[入群审批] 白名单 {op} {len(users)} 个 -> {sid}")
+        return json_response({"ok": True, "result": r,
+                              "message": f"已{'添加' if op == 'add' else '移除'} {len(users)} 个号码"})
+
     def _register_web_apis(self) -> None:
         ctx = self.context
         ctx.register_web_api(f"/{WEB_API_PREFIX}/status", self.web_status, ["GET"], "QQ群管-状态总览")
@@ -5250,6 +5464,13 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/export", self.web_lexicon_export, ["GET"], "词库-导出")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/allow", self.web_lexicon_allow, ["POST"], "词库-白名单")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/test", self.web_lexicon_test, ["POST"], "词库-命中测试")
+        # 入群自动审批策略（QQ 官方 /v2/groups/join_approval_strategy）
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/strategies", self.web_join_approval_list, ["GET"], "入群审批-策略列表")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/save", self.web_join_approval_save, ["POST"], "入群审批-创建/修改策略")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/toggle", self.web_join_approval_toggle, ["POST"], "入群审批-启停策略")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/delete", self.web_join_approval_delete, ["POST"], "入群审批-删除策略")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/execute", self.web_join_approval_execute, ["POST"], "入群审批-立即扫描")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/whitelist", self.web_join_approval_whitelist, ["POST"], "入群审批-白名单增删")
 
     def _platform_list(self) -> list[dict]:
         out = []
@@ -5288,8 +5509,12 @@ class QQGroupManager(Star):
                 "enable_approval": bool(self._read_config_value(("approval", "enable_approval"), default=True, legacy_keys=("enable_approval",))),
                 "enable_join_request_notify": bool(self._read_config_value(("approval", "enable_join_request_notify"), default=True, legacy_keys=("enable_join_request_notify",))),
                 "enable_welcome": bool(self._read_config_value(("basic", "enable_welcome"), default=True, legacy_keys=("enable_welcome",))),
+                "enable_group_add_intro": bool(self._read_config_value(("basic", "enable_group_add_intro"), default=True, legacy_keys=("enable_group_add_intro",))),
                 "enable_new_group_welcome": bool(self._read_config_value(("basic", "enable_new_group_welcome"), default=True, legacy_keys=("enable_new_group_welcome",))),
-                "default_mute_reason": str(self._read_config_value(("basic", "default_mute_reason"), default="违反群规", legacy_keys=("default_mute_reason",))),
+                "enable_review": bool(self._read_config_value(("moderation", "enable"), default=True, legacy_keys=("moderation_enable",))),
+                "enable_recall": bool(self._read_config_value(("recall", "enable_recall"), default=True, legacy_keys=("enable_recall",))),
+                "enable_member_remove_notify": bool(self._read_config_value(("member_event", "enable_member_remove_notify"), default=False, legacy_keys=("enable_member_remove_notify",))),
+                "enable_member_registry": bool(self._read_config_value(("member_registry", "enabled"), default=True, legacy_keys=("member_registry_enabled",))),
             },
             "admin": {
                 "mode": str(self._read_config_value(("admin", "admin_mode"), default="any", legacy_keys=("admin_mode",))),
@@ -5640,14 +5865,28 @@ class QQGroupManager(Star):
                               **self.logger.log_status()})
 
     async def web_logs_stream(self):
+        """SSE 日志流。
+
+        没有新日志时必须定期发一行 SSE 注释（`: keepalive`）保活：
+        否则连接会长时间零字节，被 Nginx / WebUI 反代按空闲超时断开，
+        前端就表现为「断开几十秒」。注释行会被 EventSource 忽略，不影响数据。
+        """
         async def gen():
             idx = self.logger.last_index
+            idle = 0
             try:
                 while True:
                     entries = self.logger.get_since(idx)
                     for e in entries:
                         yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
                         idx = e["index"]
+                    if entries:
+                        idle = 0
+                    else:
+                        idle += 1
+                        if idle >= LOG_SSE_HEARTBEAT_SEC:
+                            idle = 0
+                            yield ": keepalive\n\n"
                     await asyncio.sleep(1)
             except asyncio.CancelledError:
                 pass

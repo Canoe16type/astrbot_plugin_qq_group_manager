@@ -43,6 +43,7 @@ jobs:
         run: |
           python tools/selftest_mod_integration.py
           python tools/selftest_admin_register.py
+          python tools/selftest_rule_spec.py
 
       - name: 仓库卫生检查
         run: |

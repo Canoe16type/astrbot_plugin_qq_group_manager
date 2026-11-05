@@ -326,3 +326,112 @@ class QQApi:
 
         dt = _dt.datetime.fromtimestamp(ts, tz=_dt.timezone(_dt.timedelta(hours=8)))
         return dt.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+
+    # ---------- 入群自动审批策略 ----------
+    # 官方文档：/v2/groups/join_approval_strategy
+    # 注意：策略仅在机器人拥有群管理员身份时才会实际生效。
+    async def list_join_approval_strategies(self, cursor: str = "",
+                                            limit: int = 20) -> dict:
+        """查询生效中的策略列表（按创建时间倒序）。
+
+        返回 {'strategies': [...], 'next_cursor': str}，next_cursor 为空串表示末页。
+        """
+        params: dict = {"limit": max(1, min(int(limit or 20), 50))}
+        if cursor:
+            params["cursor"] = cursor
+        return await self._request(
+            "GET", "/v2/groups/join_approval_strategy", params=params
+        )
+
+    async def create_join_approval_strategy(self, group_openids: list[str] | None = None,
+                                            group_ids: list[int] | None = None,
+                                            is_enable: str = "on",
+                                            expire_at: str | None = None,
+                                            remark: str | None = None) -> dict:
+        """创建策略。group_openids 与 group_ids 二选一必填，各自最多 100 个。
+
+        expire_at 为 RFC3339；不传则默认一年后过期。strategy_id 由服务端生成。
+        """
+        if bool(group_openids) == bool(group_ids):
+            raise QQApiError("group_openids 与 group_ids 必须二选一传入")
+        body: dict = {"is_enable": is_enable if is_enable in ("on", "off") else "on"}
+        if group_openids:
+            body["group_openids"] = list(group_openids)[:100]
+        else:
+            body["group_ids"] = list(group_ids)[:100]
+        if expire_at:
+            body["expire_at"] = expire_at
+        if remark:
+            body["remark"] = remark[:255]
+        return await self._request(
+            "POST", "/v2/groups/join_approval_strategy", body=body
+        )
+
+    async def update_join_approval_strategy(self, strategy_id: str,
+                                            is_enable: str | None = None,
+                                            expire_at: str | None = None,
+                                            group_action: dict | None = None,
+                                            remark: str | None = None) -> dict:
+        """修改策略的启停 / 过期时间 / 备注 / 关联群增删。
+
+        group_action 形如 {'op': 'add'|'del', 'group_openids': [...]} 或
+        {'op': 'del', 'group_ids': [...]}；群标识形式须与创建时一致。
+        """
+        if not strategy_id:
+            raise QQApiError("strategy_id 不能为空")
+        body: dict = {}
+        if is_enable in ("on", "off"):
+            body["is_enable"] = is_enable
+        if expire_at:
+            body["expire_at"] = expire_at
+        if group_action:
+            if group_action.get("op") not in ("add", "del"):
+                raise QQApiError("group_action.op 只能是 add / del")
+            body["group_action"] = group_action
+        if remark is not None:
+            body["remark"] = str(remark)[:255]
+        if not body:
+            raise QQApiError("没有需要修改的字段")
+        return await self._request(
+            "PATCH", f"/v2/groups/join_approval_strategy/{strategy_id}", body=body
+        )
+
+    async def delete_join_approval_strategy(self, strategy_id: str) -> dict:
+        """删除策略，成功返回空 dict。"""
+        if not strategy_id:
+            raise QQApiError("strategy_id 不能为空")
+        return await self._request(
+            "DELETE", f"/v2/groups/join_approval_strategy/{strategy_id}"
+        )
+
+    async def execute_join_approval_strategy(self, strategy_id: str) -> dict:
+        """立即全量扫描策略关联的所有群，命中白名单的入群申请自动通过。
+
+        异步执行，官方说明约 10 分钟完成；接口返回即代表任务已受理。
+        """
+        if not strategy_id:
+            raise QQApiError("strategy_id 不能为空")
+        return await self._request(
+            "POST", f"/v2/groups/join_approval_strategy/{strategy_id}/execute"
+        )
+
+    async def update_join_approval_whitelist(self, strategy_id: str, op: str,
+                                             users: list[str]) -> dict:
+        """批量增删白名单 QQ 号码。单次最多 10000 个，策略上限 10W。
+
+        号码一律按字符串传，避免大整数精度丢失。
+        """
+        if not strategy_id:
+            raise QQApiError("strategy_id 不能为空")
+        if op not in ("add", "del"):
+            raise QQApiError("op 只能是 add / del")
+        cleaned = [str(u).strip() for u in (users or []) if str(u).strip()]
+        if not cleaned:
+            raise QQApiError("白名单号码不能为空")
+        if len(cleaned) > 10000:
+            raise QQApiError(f"单次最多 10000 个号码，当前 {len(cleaned)} 个")
+        return await self._request(
+            "POST",
+            f"/v2/groups/join_approval_strategy/{strategy_id}/whitelist_users",
+            body={"op": op, "whitelist_users": cleaned},
+        )

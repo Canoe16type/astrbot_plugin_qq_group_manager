@@ -54,7 +54,7 @@ def main() -> int:
     print("[版本一致性]")
     if ver and os.path.exists(os.path.join(BASE, "CHANGELOG.md")):
         head = open(os.path.join(BASE, "CHANGELOG.md"), encoding="utf-8").read()
-        check(bool(re.search(rf"^## {re.escape(ver)}$", head, re.M)), f"CHANGELOG 有 {ver} 条目")
+        check(bool(re.search(rf"^## {re.escape(ver)}(?:$|[\s（(])", head, re.M)), f"CHANGELOG 有 {ver} 条目")
 
     print()
     if FAILED:

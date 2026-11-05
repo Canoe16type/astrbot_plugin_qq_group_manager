@@ -18,6 +18,7 @@ python3 tools/selftest_lexicon.py        # 词库编译与匹配
 python3 tools/selftest_variant.py        # 变体检测（谐音 / 形近 / 插符号）
 python3 tools/selftest_mod_integration.py  # 审核链路（无 AstrBot 时自动跳过 B 层）
 python3 tools/selftest_admin_register.py   # /管理登记 指令链路
+python3 tools/selftest_rule_spec.py        # 群规文本解析（时长 / 阈值 / 规则字段）
 ```
 
 **提 PR 前至少跑通前两个**，CI 会跑全部。
@@ -32,8 +33,9 @@ python3 tools/selftest_admin_register.py   # /管理登记 指令链路
 | `variant.py` / `data/` | 变体检测（拼音表 + 形近字组） |
 | `qq_api.py` | QQ 官方 API 封装 |
 | `pages/dashboard/` | 管理面板（单页 HTML，无构建步骤） |
+| `docs/` | `GUIDE.md` 完整手册（README 只留快速上手，细节都在这里） |
 | `tools/` | 构建脚本与离线自检（`_plugin_import.py` 负责按目录名导入）；`bench_*.py` 是误杀率 / 绕过率基准，跑一次几秒，用于验证默认值没被调坏 |
-| `tests/` | 行为探针（改动欢迎链路时用它对比前后 trace） |
+| `tests/` | 行为探针（改动欢迎链路时用它对比前后 trace）；`test_join_approval.py` 覆盖入群审批的判定与去重 |
 
 ## 词库相关（重点）
 

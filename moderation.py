@@ -985,8 +985,6 @@ class ModerationStore:
         total = len(items)
         hit = sum(1 for v in items if v.get("violation"))
         cached = sum(1 for v in items if v.get("from_cache"))
-        cost = sum(float(v.get("cost") or 0) for v in items)
-        tokens = sum(int(v.get("tokens") or 0) for v in items)
         today = int(time.time()) - 86400
         today_items = [v for v in items if int(v.get("created_at") or 0) >= today]
         return {
@@ -995,12 +993,10 @@ class ModerationStore:
             "clean": total - hit,
             "from_cache": cached,
             "cache_rate": round(cached / total, 3) if total else 0.0,
-            "cost": round(cost, 4),
-            "tokens": tokens,
             "today_total": len(today_items),
             "today_hit": sum(1 for v in today_items if v.get("violation")),
-            "today_cost": round(sum(float(v.get("cost") or 0) for v in today_items), 4),
-            "today_tokens": sum(int(v.get("tokens") or 0) for v in today_items),
+            # 当日真正调用过模型的条数（关键词直判不计），用于「每日调用上限」熔断
+            "today_llm_calls": sum(1 for v in today_items if str(v.get("model") or "") not in ("", "keyword", "variant")),
             "variant_hits": sum(1 for v in items if v.get("variant_hit")),
             "variant_today": sum(1 for v in today_items if v.get("variant_hit")),
             # 变体累计升级触发过自动禁言的条数（口径见 is_strike_muted，兼容新旧字段）

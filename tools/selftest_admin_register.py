@@ -168,14 +168,18 @@ def build_plugin(main_lib, tmp: str, log: _Log):
         _qq_group_admins={},
     )
     obj.context = types.SimpleNamespace(get_config=lambda: {})
-    # 指令链路上的真实方法
-    for name in ("_run_command", "_handle_command", "_cmd_admin_register", "_is_admin",
-                 "_read_config_value", "_read_path", "_render", "_reply", "_mod_tpl",
-                 "_mod_group_allowed", "_mod_group_enabled", "_mod_settings",
-                 "_get_qq_role",
-                 "_is_qq_admin_openid", "_is_mentioned_bot", "_ensure_member_event_injected"):
-        if hasattr(main_lib.QQGroupManager, name):
-            obj.__dict__[name] = types.MethodType(getattr(main_lib.QQGroupManager, name), obj)
+    # 指令链路上的真实方法：照类上的函数整份绑一遍，不再手抄名单。
+    # （手抄名单每加一个新方法就漏一次：这回落掉的是 _target_group_allowed，
+    #   于是「/管理登记」在自测里抛 AttributeError、一条都不回，看着像功能坏了。）
+    import inspect
+
+    for name, attr in vars(main_lib.QQGroupManager).items():
+        if name in ("initialize", "terminate"):   # Star 生命周期钩子不参与自测
+            continue
+        if not (inspect.isfunction(attr) or isinstance(attr, (staticmethod, classmethod))):
+            continue
+        func = attr.__func__ if isinstance(attr, (staticmethod, classmethod)) else attr
+        obj.__dict__[name] = types.MethodType(func, obj)
     # 与「管理登记」无关的副作用：桩掉
     obj._ensure_poll_task = lambda: None
     obj._record_recent_msg = lambda e: None

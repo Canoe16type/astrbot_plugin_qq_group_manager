@@ -35,6 +35,21 @@ from urllib.parse import parse_qs, urlparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGES = os.path.join(ROOT, "pages", "dashboard")
 
+
+def plugin_version() -> str:
+    """从 metadata.yaml 读版本号，避免预览器把版本写死成过期值。"""
+    try:
+        with open(os.path.join(ROOT, "metadata.yaml"), encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith("version:"):
+                    return line.split(":", 1)[1].strip().strip("\"'")
+    except OSError:
+        pass
+    return "dev"
+
+
+PREVIEW_VERSION = f"v{plugin_version()} (preview)"
+
 GROUP = "C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6"
 
 
@@ -110,28 +125,48 @@ def _members_payload(q: dict) -> dict:
     }
 
 
+def _schema_preview() -> dict:
+    """设置页的假数据：直接用真 _conf_schema.json 的前几个分组 / 配置项。
+
+    早先这里手搓了 "base"/"perm" 这种编出来的 key，结果页面在英文下比对不上
+    先前是手编假 key，键名对不上真 schema，预览看不出配置说明的问题。真 schema 的 key
+    与 JSON 一致，预览才等于线上看到的样子。
+    """
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "_conf_schema.json")
+    groups = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {"groups": [], "providers": [], "reload_required": {}}
+    for gkey, g in list(data.items())[:5]:
+        items = []
+        for k, it in list((g.get("items") or {}).items())[:4]:
+            default = it.get("default", "")
+            items.append({
+                "key": k,
+                "description": it.get("description") or k,
+                "type": it.get("type", "string"),
+                "value": default,
+                "default": default,
+                "hint": it.get("hint", ""),
+                "options": it.get("options") or [],
+            })
+        groups.append({"key": gkey, "name": g.get("description") or gkey, "icon": "⚙️", "items": items})
+    return {"groups": groups, "providers": [], "reload_required": {}}
+
+
 def api_get(path: str, q: dict):
     if path == "mod/groups":
         return {"bots": [{"name": "测试实例", "groups": [
-            {"group": GROUP, "display": "测试（小16 | No.1）"}]}]}
+            {"group": GROUP, "display": "测试（小16 | No.1）", "rule_count": 4}]}]}
     if path == "members":
         return _members_payload(q)
     if path == "status":
-        return {"platform": "qq_official", "version": "v1.1.1-preview"}
+        return {"platform": "qq_official", "version": PREVIEW_VERSION}
     if path == "config/schema":
         groups = []
-        for gi, (gkey, gname) in enumerate((("base", "基础功能"), ("perm", "权限判定"),
-                                            ("recall", "撤回功能"), ("join", "入群审批"))):
-            items = [{
-                "key": f"{gkey}_item{i}",
-                "description": f"{gname} · 示例配置项 {i}",
-                "type": "bool" if i % 3 == 0 else ("int" if i % 3 == 1 else "str"),
-                "value": True if i % 3 == 0 else (600 if i % 3 == 1 else "示例文案"),
-                "default": True if i % 3 == 0 else (600 if i % 3 == 1 else "示例文案"),
-                "hint": "这是预览用的假配置项，仅用于检查排版宽度",
-            } for i in range(4)]
-            groups.append({"key": gkey, "name": gname, "icon": "🌱", "items": items})
-        return {"groups": groups, "providers": [], "reload_required": {}}
+        return _schema_preview()
     if path == "config":
         return {"config": {}}
     if path == "history":
@@ -173,7 +208,17 @@ SHIM = """<script>
       return fetch("/api/" + path, {method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
-    }
+    },
+    /* 预览器不跑真实 SSE：直接给出"已连接"并返回一个假 id，
+       日志历史由 /api/logs/history 提供，够看排版了。 */
+    subscribeSSE: function(path, handlers){
+      handlers = handlers || {};
+      if (handlers.onOpen) setTimeout(handlers.onOpen, 0);
+      return Promise.resolve("preview-sse");
+    },
+    /* 官方 bridge 一定有 ready()（AstrBot dashboard/plugin_page_bridge.js），
+       预览器之前漏了它，导致 app.js 的 init 直接在 catch 里 return、整页卡"加载中…"。 */
+    ready: function(){ return Promise.resolve(); }
   };
 })();
 </script>

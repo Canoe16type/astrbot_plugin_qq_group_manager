@@ -49,10 +49,10 @@ function applyTimeZone(name){
   }
   const chip = $("tzChip");
   if(chip) chip.textContent = tzLabel(TZ);
-  const note = $("tzNote");
-  if(note) note.innerHTML = `时间口径：全部跟随 AstrBot 全局配置 <span class="mono">timezone</span>（当前 <span class="mono">${esc(TZ)}</span>，${esc(tzLabel(TZ))}）；`
-    + `后台配置里的时长一律以<b>秒</b>为单位（600＝10 分钟、86400＝1 天），界面只做换算显示。`
-    + `日志与历史时间同样按该时区渲染，不跟随浏览器时区。`;
+  // 只更新时区两个值，整段文案是静态中文，不必重写 innerHTML
+  const cur = $("tzCur"), lbl = $("tzLbl");
+  if(cur) cur.textContent = TZ;
+  if(lbl) lbl.textContent = tzLabel(TZ);
 }
 const _dtf = () => new Intl.DateTimeFormat("zh-CN",{timeZone:TZ,year:"numeric",month:"2-digit",day:"2-digit",
   hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
@@ -149,6 +149,10 @@ const state = {
   logs: [],            // 全部日志（前端过滤显示）
   sseId: null,
   sseConnected: false,
+  sseConnecting: false,  // 正在建立连接（防重入）
+  sseRetry: 0,           // 连续失败次数，用于指数退避
+  sseGen: 0,             // 连接代次：旧连接的回调靠它作废，避免把 sseId 又写回来
+  sseTimer: null,        // 重连定时器（去重，避免并发重连）
 };
 
 // ---------------- 工具 ----------------
@@ -300,6 +304,7 @@ const TAB_LOADERS = {
   records: () => { loadHistory(); loadRecalls(); if (window.__qqgmRecordsLoad) window.__qqgmRecordsLoad(); },
   logs: () => loadLogHistory(),
   settings: () => loadSettings(),
+  approval: () => loadApprovalStrategies(),
 };
 
 /* ---------------- 顶部标题（跟页签联动，页面里不再重复写 h2） ---------------- */
@@ -312,13 +317,14 @@ const TAB_HEAD = {
   lexicons: ["词典", "关键词维度用的词库：内置开源词库 + 本地自传词库，改动立即生效"],
   records: ["记录", "禁言历史、撤回历史与模型判定记录；试跑用当前选中群的提示词"],
   logs: ["日志", "实时日志流（SSE），可按等级与关键词过滤"],
+  approval: ["入群审批", "官方「入群自动审批策略」：白名单号码申请入群自动通过，按机器人维度管理"],
 };
 function syncTop(name) {
   const m = TAB_HEAD[name];
   if (!m) return;
-  const t = $("topTitle"), sb = $("topSub");
-  if (t) t.textContent = m[0];
-  if (sb) sb.textContent = m[1];
+  const titleEl = $("topTitle"), subEl = $("topSub");
+  if (titleEl) titleEl.textContent = m[0];
+  if (subEl) subEl.textContent = m[1];
 }
 function switchTab(name) {
   const t = document.querySelector('.tab[data-tab="' + name + '"]');
@@ -405,22 +411,32 @@ async function loadStatus() {
     : emptyBox("robot", "未找到启用的 QQ 官方机器人平台");
 
   // 功能开关
-  const reasonInput = $("defaultReasonInput");
-  if (reasonInput && !reasonInput.dataset.dirty) {
-    reasonInput.value = f.default_mute_reason || "违反群规";
-  }
+  /* 概览的功能开关：key = 后端 features 字段，group/schemaKey = 点进去要定位到设置页哪一项 */
   const fmap = [
-    ["enable_mute", "禁言指令"],
-    ["enable_approval", "入群审批"],
-    ["enable_join_request_notify", "申请通知"],
-    ["enable_welcome", "成员入群欢迎"],
-    ["enable_new_group_welcome", "机器人入群·首条消息兜底"],
+    ["enable_mute",                 "禁言指令",              "basic",           "enable_mute"],
+    ["enable_welcome",              "成员入群欢迎",           "basic",           "enable_welcome"],
+    ["enable_group_add_intro",      "机器人入群自我介绍",      "basic",           "enable_group_add_intro"],
+    ["enable_new_group_welcome",    "机器人入群·首条兜底",     "basic",           "enable_new_group_welcome"],
+    ["enable_review",               "群规审核",              "moderation",      "enable"],
+    ["enable_approval",             "入群审批",              "approval",        "enable_approval"],
+    ["enable_join_request_notify",  "新申请群内通知",         "approval",        "enable_join_request_notify"],
+    ["enable_recall",               "撤回指令",              "recall",          "enable_recall"],
+    ["enable_member_remove_notify", "退群通知",              "member_event",    "enable_member_remove_notify"],
+    ["enable_member_registry",      "成员档案",              "member_registry", "enabled"],
   ];
-  $("featureList").innerHTML = fmap.map(([k, name]) => `
-    <div class="feature-item">
+  const fl = $("featureList");
+  fl.innerHTML = fmap.map(([k, name, group, skey]) => `
+    <button type="button" class="feature-item clickable" data-group="${group}" data-skey="${skey}"
+            title="点击跳到「设置 · ${name}」">
       <span class="${f[k] ? "on" : "off"}">${f[k] ? "● 开启" : "○ 关闭"}</span>
       <span class="name">${name}</span>
-    </div>`).join("");
+    </button>`).join("");
+  fl.querySelectorAll("[data-skey]").forEach((b) => {
+    b.addEventListener("click", () => {
+      switchTabSafe("settings");
+      focusSetting(b.dataset.skey, b.dataset.group);
+    });
+  });
 
   // 管理员判定
   const a = s.admin || {};
@@ -832,6 +848,13 @@ function renderLogs() {
   }
 }
 
+function fmtBytes(b) {
+  const n = Number(b) || 0;
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+  return n + " B";
+}
+
 async function loadLogHistory() {
   try {
     const r = await bridge.apiGet("logs", { limit: 200 });
@@ -840,8 +863,10 @@ async function loadLogHistory() {
     const hint = $("logFileHint");
     if (hint) {
       const kd = Number(r.keep_days || 0);
-      hint.textContent = `｜磁盘 ${r.file_count || 0} 个文件 · ${((r.file_bytes || 0) / 1024).toFixed(1)} KB · ` +
-        (kd > 0 ? `自动清理超过 ${kd} 天的文件` : "磁盘日志永久保留（可在设置页改）");
+      hint.textContent =
+        `｜磁盘 ${r.file_count || 0} 个文件 · ${fmtBytes(r.file_bytes)} · ` +
+        (kd > 0 ? `自动清理超过 ${kd} 天的文件` : "磁盘日志永久保留（可在设置页改）") +
+        ` · 内存缓冲 ${r.buffer_entries || 0}/${r.buffer_max || 0} 条 · ${fmtBytes(r.buffer_bytes)}（检索走磁盘）`;
     }
   } catch (e) {
     $("logList").innerHTML = emptyBox("warn", "日志加载失败: " + esc(e.message));
@@ -849,12 +874,21 @@ async function loadLogHistory() {
 }
 
 function connectSSE() {
-  if (state.sseId) return;
+  // 注意：state.sseId 只代表「已成功建立的连接」。断线时必须清掉它，
+  // 否则这个守卫会让所有重连调用直接 return——面板就永久停在「重连中…」。
+  if (state.sseId || state.sseConnecting) return;
+  state.sseConnecting = true;
+  const gen = state.sseGen;
   bridge.subscribeSSE("logs/stream", {
     onOpen() {
+      if (gen !== state.sseGen) return;
+      const wasRetry = state.sseRetry > 0;
       state.sseConnected = true;
+      state.sseRetry = 0;
       $("sseState").textContent = "实时流: 已连接";
       $("sseState").style.color = "var(--green)";
+      // 断线期间后端不会补发，重连成功后重新拉一次历史把缺口补上
+      if (wasRetry) loadLogHistory();
     },
     onMessage(event) {
       let data = event.parsed || event.raw;
@@ -868,14 +902,36 @@ function connectSSE() {
       }
     },
     onError() {
+      if (gen !== state.sseGen) return;   // 旧连接的错误，忽略
       state.sseConnected = false;
-      $("sseState").textContent = "实时流: 断开，重连中…";
-      $("sseState").style.color = "var(--orange)";
-      setTimeout(connectSSE, 3000);
+      state.sseId = null;                 // 关键：允许重连
+      state.sseConnecting = false;
+      state.sseGen += 1;                  // 让本次连接后续的 then 回调失效
+      scheduleSSEReconnect();
     },
-  }).then((id) => { state.sseId = id; }).catch(() => {
-    setTimeout(connectSSE, 3000);
+  }).then((id) => {
+    if (gen !== state.sseGen) return;
+    state.sseId = id;
+    state.sseConnecting = false;
+  }).catch(() => {
+    if (gen !== state.sseGen) return;
+    state.sseConnecting = false;
+    scheduleSSEReconnect();
   });
+}
+
+function scheduleSSEReconnect() {
+  if (state.sseTimer) return;            // 已经排好队了，别重复排
+  const delay = Math.min(15000, 1000 * Math.pow(2, Math.min(state.sseRetry, 4)));
+  state.sseRetry += 1;
+  $("sseState").textContent = `实时流: 断开，${Math.round(delay / 1000)} 秒后重连…`;
+  $("sseState").style.color = "var(--orange)";
+  state.sseTimer = setTimeout(() => {
+    state.sseTimer = null;
+    state.sseId = null;
+    state.sseConnecting = false;
+    connectSSE();
+  }, delay);
 }
 
 $("logLevel").addEventListener("change", renderLogs);
@@ -892,33 +948,6 @@ $("btnLogClear").addEventListener("click", async () => {
     showToast(`清空失败: ${e.message}`);
   }
 });
-
-// ---------------- 默认禁言理由 ----------------
-$("btnSaveReason").addEventListener("click", async () => {
-  const input = $("defaultReasonInput");
-  const msg = $("reasonSaveMsg");
-  const reason = (input.value || "").trim();
-  if (!reason) { msg.textContent = "⚠️ 理由不能为空"; return; }
-  input.dataset.dirty = "1";
-  msg.textContent = "⏳ 保存中…";
-  try {
-    const r = await bridge.apiPost("config", { default_mute_reason: reason });
-    if (r && r.ok) {
-      msg.textContent = "✅ 已保存，即时生效！";
-      msg.style.color = "var(--green)";
-    } else {
-      msg.textContent = `❌ ${(r && r.message) || "保存失败"}`;
-      msg.style.color = "var(--red, #e5534b)";
-    }
-  } catch (e) {
-    msg.textContent = `❌ 保存失败: ${e.message}`;
-    msg.style.color = "var(--red, #e5534b)";
-  }
-});
-$("defaultReasonInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("btnSaveReason").click();
-});
-
 
 /* ================= 群规审核（原独立 page 的内容，已并入本页 tab） ================= */
 (function () {
@@ -966,13 +995,13 @@ let detail = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function toast(msg, isErr) {
+function toast(msg, isErr, ms) {
   const t = $("modToast");
   t.textContent = msg;
   t.style.background = isErr ? "var(--danger)" : "var(--text)";
   t.classList.add("show");
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove("show"), 2200);
+  toast._t = setTimeout(() => t.classList.remove("show"), ms || 2200);
 }
 
 function fmtDur(sec) {
@@ -1352,8 +1381,6 @@ function renderStats() {
     ["判定违规", s.hit || 0],
     ["缓存命中率", ((s.cache_rate || 0) * 100).toFixed(0) + "%"],
     ["今日判定", s.today_total || 0],
-    ["累计花费", (s.cost || 0).toFixed(4) + " 元"],
-    ["今日花费", (s.today_cost || 0).toFixed(4) + " 元"],
     ["变体疑似", s.variant_hits || 0],
     ["变体累计禁言", s.variant_strike_muted || 0],
     ["待办", s.todo_open || 0],
@@ -1377,14 +1404,13 @@ async function loadRecords() {
       `<td>${v.confidence == null ? "-" : Number(v.confidence).toFixed(2)}</td>` +
       `<td>${v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : esc(v.skipped_reason || (v.violation ? "未执行" : "-"))}</td>` +
       `<td>${v.from_cache ? "是" : "否"}</td>` +
-      `<td>${(Number(v.cost) || 0).toFixed(4)}</td>` +
       `<td style="white-space:nowrap"><button class="btn" data-fb="${v.id}">误判</button> ` +
       `<button class="btn danger" data-dv="${v.id}" title="删除这条本地记录">✕</button></td>`;
     tr.querySelector("[data-fb]").onclick = () => markFeedback(v.id);
     tr.querySelector("[data-dv]").onclick = () => delVerdict(v.id);
     rows.appendChild(tr);
   });
-  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="9" style="color:var(--sub)">暂无记录</td></tr>';
+  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="8" style="color:var(--sub)">暂无记录</td></tr>';
 }
 
 /* ---------------- 待办（半自动：机器筛、人确认） ---------------- */
@@ -1751,16 +1777,19 @@ function buildItem(item, group) {
   box.className = "set-item";
   box.dataset.group = group.key;
   box.dataset.key = item.key;
-  box.dataset.search = (item.description + " " + item.key + " " + (item.hint || "")).toLowerCase();
+  const desc = item.description;
+  const hint = item.hint || "";
+  box.dataset.search = (item.description + " " + desc + " " + item.key + " " + (item.hint || "") + " " + hint).toLowerCase();
+  if (hint) box.title = hint;   // 开关行里放不下说明文字，悬浮看
   const needsReload = (setState.reload[group.key] || []).includes(item.key);
   box.innerHTML = `
     <div class="set-label">
       <span class="dot"></span>
-      <span>${esc(item.description)}</span>
+      <span>${esc(desc)}</span>
       <button class="set-reset" title="恢复为默认值：${esc(fmtDefault(item.default).slice(0, 60))}">↺ 默认</button>
     </div>
     ${buildWidget(item, item.value)}
-    <div class="set-hint">${item.hint ? esc(item.hint) : ""}${item.hint && needsReload ? " · " : ""}${needsReload ? "<b>改完需重载插件生效</b>" : ""}</div>`;
+    <div class="set-hint">${hint ? esc(hint) : ""}${hint && needsReload ? " · " : ""}${needsReload ? "<b>改完需重载插件生效</b>" : ""}</div>`;
   box.dataset.needsReload = needsReload ? "1" : "";
   const ctrl = box.querySelector("[data-kind]");
   const stext = box.querySelector(".stext");
@@ -1829,6 +1858,7 @@ function renderSettings() {
     const isTpl = group.key === "templates";
     let lastSub = null;
     let grid = null;
+    let switchRow = null;      // 当前攒着的开关行
     group.items.forEach((item) => {
       if (isTpl) {
         const sub = String(item.description).split("·")[0].trim() || "其他";
@@ -1842,9 +1872,24 @@ function renderSettings() {
           grid.className = "set-items";
           grid.dataset.sub = sub;
           body.appendChild(grid);
+          switchRow = null;
           lastSub = sub;
         }
-      } else if (!grid) {
+      }
+
+      // 开关（bool）单独成行：挤在输入框网格里会被高项撑开、留下大段空白，看着上下黏连
+      if (item.type === "bool") {
+        if (!switchRow) {
+          switchRow = document.createElement("div");
+          switchRow.className = "switch-row";
+          (isTpl && grid ? grid : body).appendChild(switchRow);
+        }
+        switchRow.appendChild(buildItem(item, group));
+        return;
+      }
+      switchRow = null;
+      // 开关行打断了网格，后面的输入项要另起一个，否则 DOM 顺序会插到开关前面
+      if (!grid || grid !== body.lastElementChild) {
         grid = document.createElement("div");
         grid.className = "set-items";
         body.appendChild(grid);
@@ -1892,6 +1937,11 @@ function applyVisibility() {
       const show = hitKw && hitDirty;
       box.style.display = show ? "" : "none";
       if (show) { visible++; totalVisible++; }
+    });
+    // 开关行：里面的项全被过滤掉时整行隐藏，不然会留一条空白
+    sec.querySelectorAll(".switch-row").forEach((row) => {
+      const any = [...row.children].some((c) => c.style.display !== "none");
+      row.style.display = any ? "" : "none";
     });
     // 子分组标题：该子组下没有可见项就一起隐藏
     sec.querySelectorAll(".set-subtitle").forEach((h) => {
@@ -2011,7 +2061,16 @@ if ($("btnSetDiscard")) $("btnSetDiscard").addEventListener("click", discardSett
 const LEX_CATS = { ad: "广告引流", abuse: "辱骂攻击", porn: "色情低俗", illegal: "违法违规", politics: "涉政敏感", spam: "刷屏灌水", other: "其他" };
 const lexState = { list: [], stats: {}, allow: [], manualAllow: [], detailId: "", detail: null, upstream: {}, fetchDirty: false };
 const lexCatName = (k) => LEX_CATS[k] || k || "其他";
-const lexNum = (n) => (Number(n) >= 10000 ? (Number(n) / 10000).toFixed(1) + " 万" : String(Number(n) || 0));
+// 词条数上万的缩写交给 Intl：中文出「1.2万」，英文出「12K」，不用在 JS 里写死量词
+const lexNum = (n) => {
+  const v = Number(n) || 0;
+  if (v < 10000) return String(v);
+  try {
+    return new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 }).format(v);
+  } catch (e) {
+    return Math.round(v / 1000) + "K";
+  }
+};
 const lexFind = (id) => lexState.list.find((x) => x.id === id);
 
 async function loadLexicons(refresh) {
@@ -2710,7 +2769,7 @@ const HELP = {
     { id:"freq", term:"举报频控 / 撤回尝试时限", go:["review","群规审核"],
       def:"举报频控 report_limit_per_hour 默认每人每小时 5 次；撤回尝试时限 recall_max_age_seconds 默认 110 秒，填 0＝不限、总是尝试。", doc:null },
     { id:"autoscan", term:"本群自动巡检（auto_scan）", go:["review","群规审核"],
-      def:"默认关。开启后只对本群生效，默认只跑关键词层（零成本）；要让 AI 也参与，得再开「巡检时调用模型」，并受每日费用熔断（daily_budget）约束。", doc:null },
+      def:"默认关。开启后只对本群生效，默认只跑关键词层（零成本）；要让 AI 也参与，得再开「巡检时调用模型」，并受「每日模型调用上限」约束。", doc:null },
     { id:"commonban", term:"通用禁止项（common_ban）", go:["review","群规审核"],
       def:"跨群共享的一段禁止说明，会追加在每群的群规之前。内容越长越省 token（同一段前缀可复用）。", doc:null },
     { id:"verdict", term:"判定记录 / 试跑", go:["review","群规审核"],
@@ -2823,15 +2882,16 @@ function gotoLabel(gid){
 }
 function card(t){
   const gid=t.go?t.go[0]:null, gname=t.go?t.go[1]:'';
-  const m=t.term.match(/^(\d+)\s*·\s*(.+)$/);
-  const code=m?`<span class="code">${m[1]}</span>`:'', title=m?m[2]:t.term;
+  const term=t.term, body=t.def;
+  const m=term.match(/^(\d+)\s*·\s*(.+)$/);
+  const code=m?`<span class="code">${m[1]}</span>`:'', title=m?m[2]:term;
   const k=curTab+':'+(t.id||t.term);
   const open=!!dq.value.trim()||openKeys.has(k);   /* 搜索时全部展开，否则点击才展开 */
   return `<div class="tcard ${open?'on':''}" data-k="${k}">
     <button class="tq" aria-expanded="${open}">${code}<span class="q">${title}</span>
       <svg class="ico s chev"><use href="#i-chev"/></svg></button>
     <div class="tans">
-      <p>${t.def}</p>
+      <p>${body}</p>
       <div class="acts">
         ${gid?`<button class="mini" data-goto="${gid}" title="跳到对应位置并高亮"><svg class="ico s"><use href="#i-arrow"/></svg>${gotoLabel(gid)}</button>`:''}
         ${t.doc?`<a class="mini ghost" href="${t.doc[1]}" target="_blank" rel="noopener" data-doc="${t.doc[1]}" title="${t.doc[1]}"><svg class="ico s"><use href="#i-doc"/></svg>去官方文档</a>`:''}
@@ -3188,4 +3248,405 @@ document.addEventListener('keydown',e=>{
     if (!$("memGroup").value) groupsLoaded = false; // 群列表可能在别处新增了群
     load();
   };
+})();
+
+/* ---------------- 入群自动审批（QQ 官方 /v2/groups/join_approval_strategy） ---------------- */
+(function () {
+  const S = { list: [], platforms: [], platformId: "", editing: "", wlTarget: "", busy: false, pendingCreate: null, pendingCreateTimer: 0 };
+
+  const box = () => $("appr-rows");
+  const apiGet = (p, q) => bridge.apiGet(p, q || {});
+  const apiPost = (p, b) => bridge.apiPost(p, b || {});
+
+  function rowsMsg(msg, icon) {
+    const tb = box();
+    if (tb) tb.innerHTML = '<tr><td colspan="7">' + emptyBox(icon || "warn", msg) + "</td></tr>";
+  }
+
+  function fmtLeft(d) {
+    if (d === null || d === undefined) return { txt: "—", warn: false };
+    if (d < 0) return { txt: "已过期", warn: true };
+    if (d === 0) return { txt: "今天到期", warn: true };
+    return { txt: "剩 " + d + " 天", warn: d <= 7 };
+  }
+
+  function toRFC(v) {
+    if (!v) return "";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? "" : d.toISOString();
+  }
+
+  /* 官方策略接口是"写完过一会儿列表才变"，只 reload 一次会像没生效。
+     做法：本地状态先重绘（乐观更新），再延迟两次拉官方列表对账。 */
+  let syncTimers = [];
+  const SYNC_DELAYS = [800, 2000, 4500];
+
+  /* 官方列表有 1~3s 延迟：写完先用 pending 兜住"我刚改过"的视觉状态，
+     等官方数据跟上了再自动交还，避免刚点完又弹回旧值的鬼畜现象 */
+  const PENDING_MS = 6000;
+  let pendingDel = new Set();
+  let pendingState = Object.create(null);
+  let pendingTimer = 0;
+
+  function holdPending(fn) {
+    fn();
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      pendingDel = new Set();
+      pendingState = Object.create(null);
+      syncLater();               // 兜底时间到，以官方为准再对一次账
+    }, PENDING_MS);
+  }
+
+  function applyPending(list) {
+    const out = [];
+    list.forEach((s) => {
+      const id = s.strategy_id;
+      if (pendingDel.has(id)) return;
+      if (id in pendingState) {
+        if (!!s.is_enable === pendingState[id]) delete pendingState[id];  // 官方跟上了，解除兜底
+        else s = Object.assign({}, s, { is_enable: pendingState[id] });
+      }
+      out.push(s);
+    });
+    pendingDel.forEach((id) => {
+      if (!list.some((s) => s.strategy_id === id)) pendingDel.delete(id);
+    });
+    return out;
+  }
+  function syncLater() {
+    syncTimers.forEach(clearTimeout);
+    syncTimers = SYNC_DELAYS.map((ms) =>
+      setTimeout(() => loadApprovalStrategies(true), ms));
+  }
+
+  /* 所有按钮统一：点下去立刻有"处理中"反馈，异常也一定会弹提示（不再静默失败） */
+  async function runAct(btn, fn) {
+    if (S.busy) return;                     // 乐观重绘会换掉按钮节点，靠按钮 disabled 拦不住连点
+    if (!btn) {
+      S.busy = true;
+      try { await fn(); } catch (e) { toast("操作失败：" + (e.message || e), true); }
+      finally { S.busy = false; }
+      return;
+    }
+    if (btn.dataset.busy === "1") return;
+    const orig = btn.innerHTML;
+    btn.dataset.busy = "1";
+    btn.disabled = true;
+    btn.textContent = btn.dataset.busyText || "处理中…";
+    S.busy = true;
+    try {
+      await fn();
+    } catch (e) {
+      toast("操作失败：" + (e.message || e), true);
+    } finally {
+      S.busy = false;
+      btn.dataset.busy = "";
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
+
+  async function loadApprovalStrategies(silent) {
+    const q = { _t: Date.now() };            // 顺手破掉可能存在的 GET 缓存
+    if (S.platformId) q.platform_id = S.platformId;
+    let r;
+    try { r = await apiGet("approval/strategies", q); }
+    catch (e) { if (!silent) rowsMsg("加载失败：" + (e.message || e)); return; }
+    if (!r || r.error) { if (!silent) rowsMsg("加载失败：" + ((r && r.error) || "未知错误")); return; }
+    S.platforms = r.platforms || [];
+    S.list = applyPending(r.strategies || []);
+    S.platformId = r.platform_id || S.platformId;
+    if (S.pendingCreate) {
+      const pc = S.pendingCreate;
+      const appeared = pc.id
+        ? S.list.some((s) => s.strategy_id === pc.id)                    // 知道 id 就认 id
+        : S.list.some((s) => !pc.knownIds.has(s.strategy_id));           // 不知道就看有没有新面孔
+      if (appeared) {
+        S.pendingCreate = null;
+        clearTimeout(S.pendingCreateTimer);
+      }
+    }
+    renderPlatforms();
+    renderStrategies();
+  }
+  window.loadApprovalStrategies = loadApprovalStrategies;
+
+  function renderPlatforms() {
+    const sel = $("appr-platform");
+    if (!sel) return;
+    if (!S.platforms.length) {
+      sel.innerHTML = "<option>无可用机器人实例</option>";
+      return;
+    }
+    const ids = S.platforms.map((p) => p.id);
+    const keep = ids.includes(S.platformId) ? S.platformId : ids[0];
+    // 优先显示机器人名称；同名（比如两个号都叫"小助手"）时用 AppID 掩码消歧
+    const seen = {};
+    S.platforms.forEach((p) => {
+      const n = p.name || "";
+      if (n) seen[n] = (seen[n] || 0) + 1;
+    });
+    sel.innerHTML = S.platforms.map((p, i) => {
+      // 没名字的（昵称还没拉取到）显示「机器人 #序号 + AppID」，比光秃秃一串掩码好认
+      const main = p.name || `机器人 #${i + 1} · ${p.appid_masked || p.id}`;
+      const tag = seen[main] > 1 ? `（${p.appid_masked || p.id}）` : "";
+      const off = p.enable ? "" : "（未启用）";
+      const tip = `AppID ${p.appid_masked || p.id}`;
+      return `<option value="${esc(p.id)}" title="${esc(tip)}">${esc(main + tag + off)}</option>`;
+    }).join("");
+    sel.value = keep;
+    S.platformId = keep;
+  }
+
+  /* 官方列表还没同步出来的新策略，先在表里占一行，别让人以为没创建成功 */
+  function pendingRowHtml() {
+    const p = S.pendingCreate;
+    return `<tr class="appr-pending">
+      <td><b class="mono">同步中…</b><div class="sub">刚创建，官方列表还没返回</div></td>
+      <td><div class="appr-groups">${(p.groupsText || []).map((g) => `<span class="lex-tag mono">${esc(g)}</span>`).join("")}</div><div class="sub">${esc(p.mode)} · ${p.count} 个</div></td>
+      <td>—</td>
+      <td>${p.enable ? '<span class="lex-tag ok">启用</span>' : '<span class="lex-tag">停用</span>'}</td>
+      <td>—</td>
+      <td>${esc(p.remark || "—")}</td>
+      <td><div class="appr-ops"><span class="sub">等 1~3s 或点「刷新」</span></div></td>
+    </tr>`;
+  }
+
+  function renderStrategies() {
+    const tb = box();
+    if (!tb) return;
+    // 策略被删掉 / 已不在列表里，就把挂着的白名单面板一起关掉，别留个孤儿
+    if (S.wlTarget && !S.list.some((s) => s.strategy_id === S.wlTarget)) closeWl();
+    const extra = S.pendingCreate ? 1 : 0;
+    if ($("appr-count")) $("appr-count").textContent = `共 ${S.list.length + extra} 条（上限 20）`;
+    if (!S.list.length && !extra) {
+      rowsMsg("还没有策略，点右上角「＋ 新建策略」加一条", "warn");
+      return;
+    }
+    const rows = S.list.map((s) => {
+      const gs = (s.group_ids && s.group_ids.length) ? s.group_ids : (s.group_openids || []);
+      const chips = gs.slice(0, 3).map((g) => `<span class="lex-tag mono">${esc(String(g))}</span>`).join("")
+        + (gs.length > 3 ? `<span class="lex-tag">+${gs.length - 3}</span>` : "")
+        + (gs.length ? "" : `<span class="lex-tag warn">未关联群</span>`);
+      const mode = s.group_mode === "id" ? "群号" : "openid";
+      const left = fmtLeft(s.expire_in_days);
+      return `<tr>
+        <td><b class="mono">${esc(s.strategy_id)}</b><div class="sub">创建 ${esc(s.created_at || "—")}</div></td>
+        <td><div class="appr-groups">${chips}</div><div class="sub">${esc(mode)} · ${gs.length} 个</div></td>
+        <td><b>${s.whitelist_user_count || 0}</b></td>
+        <td>${s.is_enable ? '<span class="lex-tag ok">启用</span>' : '<span class="lex-tag">停用</span>'}</td>
+        <td class="${left.warn ? "appr-warn" : ""}">${esc(s.expire_at || "—")}<div class="sub">${esc(left.txt)}</div></td>
+        <td>${esc(s.remark || "—")}</td>
+        <td><div class="appr-ops">
+          <button class="btn small" data-act="edit" data-id="${esc(s.strategy_id)}">编辑</button>
+          <button class="btn small btn-ghost" data-act="wl" data-id="${esc(s.strategy_id)}">白名单</button>
+          <button class="btn small btn-ghost" data-act="toggle" data-id="${esc(s.strategy_id)}">${s.is_enable ? "停用" : "启用"}</button>
+          <button class="btn small btn-ghost" data-act="exec" data-id="${esc(s.strategy_id)}">扫描</button>
+          <button class="btn small btn-ghost" data-act="del" data-id="${esc(s.strategy_id)}">删除</button>
+        </div></td>
+      </tr>`;
+    });
+    if (S.pendingCreate) rows.unshift(pendingRowHtml());
+    tb.innerHTML = rows.join("");
+  }
+
+  function findSid(id) { return S.list.find((x) => x.strategy_id === id); }
+
+  function openEditor(id) {
+    const s = id ? findSid(id) : null;
+    S.editing = id || "";
+    $("appr-editor").hidden = false;
+    $("appr-editor-title").textContent = s ? `编辑策略 ${s.strategy_id}` : "新建策略";
+    $("appr-op-wrap").hidden = !s;
+    $("appr-group-op").value = "";
+    $("appr-mode").value = s ? (s.group_mode || "id") : "id";
+    $("appr-groups").value = "";
+    $("appr-groups").placeholder = s
+      ? "留空＝不修改关联群；要增删请先在上面选操作，再填群"
+      : "123456789, 987654321";
+    $("appr-expire").value = "";
+    $("appr-remark").value = s ? (s.remark || "") : "";
+    $("appr-enable").checked = s ? !!s.is_enable : true;
+    $("appr-editor-hint").textContent = s
+      ? "到期时间留空＝保持原样；群标识形式须与创建时一致。"
+      : "到期时间留空＝一年后自动过期；建完记得加白名单并点「扫描」。";
+    $("appr-editor").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function closeWl() {
+    S.wlTarget = "";
+    clearTimeout(S.wlHintTimer);
+    if ($("appr-wl")) $("appr-wl").hidden = true;
+    if ($("appr-wl-users")) $("appr-wl-users").value = "";
+    if ($("appr-wl-hint")) $("appr-wl-hint").textContent = "";
+  }
+
+  function openWl(id) {
+    const s = findSid(id);
+    S.wlTarget = id;
+    $("appr-wl").hidden = false;
+    $("appr-wl-title").textContent = `白名单 · ${id}`;
+    $("appr-wl-users").value = "";
+    $("appr-wl-hint").textContent = s ? `当前约 ${s.whitelist_user_count || 0} 个号码` : "";
+    $("appr-wl").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  async function reload() {
+    await loadApprovalStrategies();
+    syncLater();
+  }
+
+  /* --- 事件绑定（脚本在 body 末尾，DOM 已就绪） --- */
+  const psel = $("appr-platform");
+  if (psel) psel.addEventListener("change", () => {
+    S.platformId = psel.value;
+    rowsMsg("加载中…", "refresh");
+    loadApprovalStrategies();
+  });
+  if ($("btn-appr-refresh")) $("btn-appr-refresh").addEventListener("click", () => {
+    rowsMsg("加载中…", "refresh");
+    loadApprovalStrategies();
+  });
+  if ($("btn-appr-new")) $("btn-appr-new").addEventListener("click", () => openEditor(""));
+  if ($("btn-appr-editor-close")) $("btn-appr-editor-close").addEventListener("click", () => {
+    $("appr-editor").hidden = true;
+  });
+  if ($("btn-appr-cancel")) $("btn-appr-cancel").addEventListener("click", () => {
+    $("appr-editor").hidden = true;
+  });
+  if ($("btn-appr-wl-close")) $("btn-appr-wl-close").addEventListener("click", () => {
+    closeWl();
+  });
+
+  if (box()) box().addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const id = btn.dataset.id, act = btn.dataset.act;
+    const s = findSid(id);
+    if (act === "edit") { openEditor(id); return; }
+    if (act === "wl") { openWl(id); return; }
+
+    if (act === "toggle") {
+      const next = !(s && s.is_enable);
+      const prev = s ? s.is_enable : null;
+      btn.dataset.busyText = next ? "启用中…" : "停用中…";
+      await runAct(btn, async () => {
+        if (s) { s.is_enable = next; renderStrategies(); }   // 先本地翻转，状态立刻变
+        const r = await apiPost("approval/toggle", { platform_id: S.platformId, strategy_id: id, enabled: next });
+        if (r.error) {
+          if (s) { s.is_enable = prev; renderStrategies(); }
+          toast(r.error, true);
+          return;
+        }
+        holdPending(() => { pendingState[id] = next; });
+        toast(next ? "已启用" : "已停用");
+        await reload();
+      });
+      return;
+    }
+    if (act === "exec") {
+      btn.dataset.busyText = "扫描中…";
+      await runAct(btn, async () => {
+        const r = await apiPost("approval/execute", { platform_id: S.platformId, strategy_id: id });
+        if (r.error) { toast(r.error, true); return; }
+        toast(r.message || "已提交扫描，官方异步执行约 10 分钟", false, 4000);
+      });
+      return;
+    }
+    if (act === "del") {
+      const ok = await showConfirm(`删除策略 ${id}？关联群和白名单会一起失效，且不可恢复。`);
+      if (!ok) return;
+      btn.dataset.busyText = "删除中…";
+      await runAct(btn, async () => {
+        const idx = S.list.findIndex((x) => x.strategy_id === id);
+        const removed = idx >= 0 ? S.list.splice(idx, 1)[0] : null;
+        if (removed) renderStrategies();                    // 先摘掉这一行
+        const r = await apiPost("approval/delete", { platform_id: S.platformId, strategy_id: id });
+        if (r.error) {
+          if (removed) { S.list.splice(idx, 0, removed); renderStrategies(); }
+          toast(r.error, true);
+          return;
+        }
+        holdPending(() => { pendingDel.add(id); });
+        if (S.wlTarget === id) closeWl();      // 白名单面板绑的是这条策略，跟着一起关
+        toast("已删除");
+        await reload();
+      });
+    }
+  });
+
+  if ($("btn-appr-save")) $("btn-appr-save").addEventListener("click", async () => {
+    const groups = ($("appr-groups").value || "").trim();
+    if (!S.editing && !groups) { toast("先填至少一个群", true); return; }
+    const body = {
+      platform_id: S.platformId,
+      strategy_id: S.editing || "",
+      group_mode: $("appr-mode").value,
+      groups,
+      group_op: S.editing ? ($("appr-group-op").value || "") : "",
+      is_enable: !!$("appr-enable").checked,
+      expire_at: toRFC($("appr-expire").value),
+      remark: ($("appr-remark").value || "").trim(),
+    };
+    const btn = $("btn-appr-save");
+    const isNew = !S.editing;
+    btn.dataset.busyText = "保存中…";
+    await runAct(btn, async () => {
+      const r = await apiPost("approval/save", body);
+      if (r.error) { toast(r.error, true); return; }
+      toast(r.message || "已保存", false, isNew ? 4000 : 2200);
+      $("appr-editor").hidden = true;
+      S.editing = "";
+      if (isNew) {
+        const newId = String((r.result && r.result.strategy_id) || "");
+        S.pendingCreate = {
+          id: newId,
+          groupsText: (body.groups || []).slice(0, 3).map(String),
+          count: (body.groups || []).length,
+          mode: body.group_mode === "openid" ? "openid" : "群号",
+          enable: !!body.is_enable,
+          remark: body.remark || "",
+          knownIds: new Set(S.list.map((x) => x.strategy_id)),
+        };
+        renderStrategies();
+        clearTimeout(S.pendingCreateTimer);
+        S.pendingCreateTimer = setTimeout(() => {
+          if (!S.pendingCreate) return;
+          S.pendingCreate = null;
+          renderStrategies();
+          toast("官方列表还没同步出来，点右上角「↻ 刷新」再看一次", true, 6000);
+        }, 12000);
+      }
+      await reload();          // reload 内部带延迟对账，新建的策略会自己冒出来
+    });
+  });
+
+  const wlSend = async (op, btn) => {
+    const users = ($("appr-wl-users").value || "").trim();
+    if (!S.wlTarget) { toast("先选一条策略", true); return; }
+    if (!users) { toast("先填号码", true); return; }
+    btn.dataset.busyText = op === "add" ? "加入中…" : "移出中…";
+    await runAct(btn, async () => {
+      const r = await apiPost("approval/whitelist", {
+        platform_id: S.platformId, strategy_id: S.wlTarget, op, users,
+      });
+      if (r.error) { toast(r.error, true); return; }
+      toast(r.message || "已提交", false, 3200);
+      $("appr-wl-users").value = "";
+      await reload();
+    });
+  };
+  if ($("btn-appr-wl-add")) $("btn-appr-wl-add").addEventListener("click", (e) => wlSend("add", e.currentTarget));
+  if ($("btn-appr-wl-del")) $("btn-appr-wl-del").addEventListener("click", (e) => wlSend("del", e.currentTarget));
+  if ($("btn-appr-wl-exec")) $("btn-appr-wl-exec").addEventListener("click", async (e) => {
+    if (!S.wlTarget) { toast("先选一条策略", true); return; }
+    const btn = e.currentTarget;
+    btn.dataset.busyText = "扫描中…";
+    await runAct(btn, async () => {
+      const r = await apiPost("approval/execute", { platform_id: S.platformId, strategy_id: S.wlTarget });
+      if (r.error) { toast(r.error, true); return; }
+      toast(r.message || "已提交扫描，官方异步执行约 10 分钟", false, 4000);
+    });
+  });
 })();

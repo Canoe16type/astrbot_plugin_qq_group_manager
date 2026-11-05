@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        请先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题faq)，很多问题（撤回 2 分钟时限、退群通知不生效、机器人不是群管）都能在那里找到答案。
+        请先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题)，很多问题（撤回 2 分钟时限、退群通知不生效、机器人不是群管）都能在那里找到答案。
 
         ⚠️ **提交前请删掉日志里的 AppID / AppSecret / openid / 群号 / 成员昵称。**
   - type: input
@@ -14,14 +14,14 @@ body:
     attributes:
       label: 插件版本
       description: 在 AstrBot 插件管理页或仓库 Release 里能看到
-      placeholder: "1.0.1"
+      placeholder: "1.2.0"
     validations:
       required: true
   - type: input
     id: astrbot-version
     attributes:
       label: AstrBot 版本
-      placeholder: "4.29.1"
+      placeholder: "4.29.4"
     validations:
       required: true
   - type: input
@@ -50,7 +50,7 @@ body:
       options:
         - 禁言 / 解禁
         - 消息撤回
-        - 入群审批 / 欢迎
+        - 入群审批 / 自动审批策略 / 欢迎
         - 群规审核（/举报）
         - 词典 / 词库
         - 变体检测 / 待办队列

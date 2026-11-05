@@ -54,6 +54,7 @@
       <button class="tab active" data-tab="status"><svg class="ico"><use href="#i-overview"/></svg><span class="lbl">概览</span></button>
       <button class="tab" data-tab="settings"><svg class="ico"><use href="#i-settings"/></svg><span class="lbl">设置</span></button>
       <button class="tab" data-tab="ops"><svg class="ico"><use href="#i-groups"/></svg><span class="lbl">群管</span><span class="badge hidden" id="reqBadge">0</span></button>
+      <button class="tab" data-tab="approval"><svg class="ico"><use href="#i-shield"/></svg><span class="lbl">入群审批</span></button>
       <button class="tab" data-tab="moderation"><svg class="ico"><use href="#i-review"/></svg><span class="lbl">群规审核</span></button>
       <button class="tab" data-tab="members"><svg class="ico"><use href="#i-groups"/></svg><span class="lbl">成员档案</span></button>
       <button class="tab" data-tab="lexicons"><svg class="ico"><use href="#i-book"/></svg><span class="lbl">词典</span></button>
@@ -65,7 +66,7 @@
         <svg class="ico only-light"><use href="#i-moon"/></svg>
         <svg class="ico only-dark"><use href="#i-sun"/></svg>
       </button>
-      <small>插件 v<span id="pluginVersion">1.1.1</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
+      <small>插件 v<span id="pluginVersion">—</span><br><span id="pollStatus" title="轮询任务状态">--</span></small>
     </div>
   </aside>
 
@@ -76,7 +77,7 @@
         <div class="sub" id="topSub">机器人平台、功能开关与全局设置一览</div>
       </div>
       <div class="chip"><span class="led pulse"></span><span class="ctxt mono" id="tzChip" title="时间按 AstrBot 全局配置 timezone 显示">UTC+8</span></div>
-      <button class="hbtn" id="helpBtn"><svg class="ico s"><use href="#i-help"/></svg>帮助 <kbd>Ctrl+K</kbd></button>
+      <button class="hbtn" id="helpBtn"><svg class="ico s"><use href="#i-help"/></svg><span>帮助</span> <kbd>Ctrl+K</kbd></button>
     </header>
     <div class="scroll">
 
@@ -98,7 +99,7 @@
  </div>
 
  <div class="kpi-row" id="kpiRow"></div>
-      <div class="tnote" id="tzNote">时间口径：全部跟随 AstrBot 全局配置 <span class="mono">timezone</span>（默认 <span class="mono">Asia/Shanghai</span>，UTC+8）；后台配置里的时长一律以<b>秒</b>为单位（600＝10 分钟、86400＝1 天），界面只做换算显示。</div>
+      <div class="tnote" id="tzNote">时间口径：全部跟随 AstrBot 全局配置 <span class="mono">timezone</span>（当前 <span class="mono" id="tzCur">Asia/Shanghai</span>，<span id="tzLbl">UTC+8</span>）；后台配置里的时长一律以<b>秒</b>为单位（600＝10 分钟、86400＝1 天），界面只做换算显示。日志与历史时间同样按该时区渲染，不跟随浏览器时区。</div>
 
  <div class="card-grid">
  <div class="card">
@@ -107,7 +108,7 @@
  </div>
 
  <div class="card">
- <h3> 功能开关 <span class="hint">可在「设置」页直接修改</span></h3>
+ <h3> 功能开关 <span class="hint">点击任一功能，直接跳到「设置」里对应的位置</span></h3>
  <div id="featureList" class="grid-4"><div class="empty"><svg class="ico eico" aria-hidden="true"><use href="#i-settings"/></svg><span>加载中…</span></div></div>
  </div>
 
@@ -118,15 +119,6 @@
 
  </div>
 
- <div class="card slim">
- <h3> 默认禁言理由</h3>
- <div class="reason-row">
- <input type="text" id="defaultReasonInput" maxlength="50" placeholder="例如：违反群规" autocomplete="off" />
- <button class="btn" id="btnSaveReason"> 保存</button>
- </div>
- <span class="hint">/群管 禁言 不带理由时使用，保存后立即生效；也可以到「设置」页统一改。</span>
- <div id="reasonSaveMsg" class="hint"></div>
- </div>
 
  <div class="card">
  <div class="card-head">
@@ -171,6 +163,99 @@
  </section>
 
 <!-- ============ 成员档案（openid -> 昵称/备注） ============ -->
+ <section id="tab-approval" class="panel">
+ <div class="page-head">
+ <h2>入群自动审批</h2>
+ <p>
+ 用 QQ 官方的「入群自动审批策略」管白名单：<b>白名单里的号码申请入群会自动通过</b>，其余照旧走人工审核。
+ 注意两点 —— ① <b>机器人必须在该群拥有管理员身份</b>，策略才会真正生效；② 策略是机器人级别的，
+ 一个机器人最多 20 条，每条最多关联 100 个群。
+ </p>
+ </div>
+
+ <div class="card">
+ <div class="card-head">
+ <h3>策略列表</h3>
+ <span class="sub" id="appr-count"></span>
+ </div>
+ <div class="row-actions">
+ <select class="sel" id="appr-platform" title="策略按机器人（AppID）维度管理"></select>
+ <button class="btn small" id="btn-appr-refresh">↻ 刷新</button>
+ <button class="btn small" id="btn-appr-new">＋ 新建策略</button>
+ <span class="lex-hint">官方接口 60 QPM；列表按创建时间倒序。创建/删除后官方列表有 1~3 秒延迟，若没立刻变化点「↻ 刷新」。</span>
+ </div>
+ <div class="table-wrap">
+ <table>
+ <thead>
+ <tr><th>策略</th><th>关联群</th><th>白名单</th><th>状态</th><th>到期</th><th>备注</th><th>操作</th></tr>
+ </thead>
+ <tbody id="appr-rows">
+ <tr><td colspan="7"><div class="empty"><svg class="ico eico spin" aria-hidden="true"><use href="#i-refresh"/></svg><span>加载中…</span></div></td></tr>
+ </tbody>
+ </table>
+ </div>
+ </div>
+
+ <div class="card" id="appr-editor" hidden>
+ <div class="card-head">
+ <h3 id="appr-editor-title">新建策略</h3>
+ <button class="btn small btn-ghost" id="btn-appr-editor-close">收起</button>
+ </div>
+ <div class="appr-form">
+ <label>关联群标识
+ <select class="sel" id="appr-mode">
+ <option value="id">QQ 群号（推荐）</option>
+ <option value="openid">群 openid</option>
+ </select>
+ </label>
+ <label id="appr-op-wrap" hidden>群变更操作
+ <select class="sel" id="appr-group-op">
+ <option value="">不修改关联群</option>
+ <option value="add">新增到本策略</option>
+ <option value="del">从本策略移除</option>
+ </select>
+ </label>
+ <label class="wide">群列表（逗号 / 空格 / 换行分隔，最多 100 个）
+ <textarea id="appr-groups" rows="3" placeholder="123456789, 987654321"></textarea>
+ </label>
+ <label>到期时间（留空＝一年后）
+ <input type="datetime-local" id="appr-expire">
+ </label>
+ <label>备注（最多 255 字）
+ <input type="text" id="appr-remark" maxlength="255" placeholder="例如：老群友回流白名单">
+ </label>
+ <label class="chk">
+ <input type="checkbox" id="appr-enable" checked> 创建后立即启用
+ </label>
+ </div>
+ <div class="row-actions">
+ <button class="btn" id="btn-appr-save">保存</button>
+ <button class="btn btn-ghost" id="btn-appr-cancel">取消</button>
+ <span class="lex-hint" id="appr-editor-hint"></span>
+ </div>
+ </div>
+
+ <div class="card" id="appr-wl" hidden>
+ <div class="card-head">
+ <h3 id="appr-wl-title">白名单</h3>
+ <button class="btn small btn-ghost" id="btn-appr-wl-close">收起</button>
+ </div>
+ <p class="lex-hint">
+ 号码一律按字符串提交，避免大整数精度问题；单次最多 1 万个，单策略上限 10 万。
+ 加完白名单后点「立即扫描」，官方会异步扫一遍已有关联群（约 10 分钟）。
+ </p>
+ <label class="wide">QQ 号码（逗号 / 空格 / 换行分隔）
+ <textarea id="appr-wl-users" rows="4" placeholder="1234567, 1234568"></textarea>
+ </label>
+ <div class="row-actions">
+ <button class="btn small" id="btn-appr-wl-add">＋ 加入白名单</button>
+ <button class="btn small btn-ghost" id="btn-appr-wl-del">－ 移出白名单</button>
+ <button class="btn small btn-ghost" id="btn-appr-wl-exec">⚡ 立即扫描</button>
+ <span class="lex-hint" id="appr-wl-hint"></span>
+ </div>
+ </div>
+ </section>
+
  <section id="tab-members" class="panel">
  <div class="page-head">
  <h2> 成员档案</h2>
@@ -290,23 +375,28 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <!-- ② 举报设置 -->
  <section class="mod-pane" id="mod-pane-settings">
  <p class="desc">举报设置同样按群独立。修改后点底部“保存”。</p>
- <div class="grid">
+ <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-enabled" /><span>启用本群 <code>/群管 举报</code> 审核</span></label>
  <label class="field check"><input type="checkbox" id="s-dry_run" /><span><b>试运行</b>（只判定、不撤回不禁言，建议新群先开着）</span></label>
  <label class="field check"><input type="checkbox" id="s-auto_scan" /><span>隐藏开关：<b>本群自动巡检</b>（默认关，仅本群生效）</span></label>
  <label class="field check"><input type="checkbox" id="s-auto_scan_llm" /><span>巡检时调用模型（默认关，只跑零成本关键词）</span></label>
- <div class="desc" style="margin:6px 0 2px">维度开关（按实现分层：语义与群规共用一次模型调用，不能只关其中一个）</div>
+ </div>
+ <p class="desc">维度开关（按实现分层：语义与群规共用一次模型调用，不能只关其中一个）</p>
+ <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-enable_keyword" /><span>维度：<b>关键词层</b>（词库 + 本群自定义词，零 API 成本）</span></label>
  <label class="field check"><input type="checkbox" id="s-enable_model" /><span>维度：<b>模型层</b>（语义 + 群规；关闭＝不调用模型，判定只剩关键词层）</span></label>
  <label class="field check"><input type="checkbox" id="s-enable_vision" /><span>维度：<b>图片</b>参与判定（关闭＝只看文字，图片不进提示词）</span></label>
  <label class="field check"><input type="checkbox" id="s-keep_context" /><span>静默留存最近消息（仅供审核取上下文，仅存本地）</span></label>
  <label class="field check"><input type="checkbox" id="s-reply_when_clean" /><span>未违规时也在群里回复一句</span></label>
+ </div>
+ <div class="grid input-zone">
  <label class="field"><span>上下文条数</span><input type="number" id="s-context_size" min="0" max="20" /></label>
  <label class="field"><span>置信度阈值（低于此值不自动执行）</span><input type="number" id="s-confidence_threshold" step="0.01" min="0" max="1" /></label>
  <label class="field"><span>单次禁言上限（秒）</span><input type="number" id="s-max_mute_seconds" min="60" /></label>
  <label class="field"><span>撤回尝试时限（秒，官方硬限 120；0=不限，总是尝试）</span><input type="number" id="s-recall_max_age_seconds" min="0" /></label>
  <label class="field"><span>每人每小时举报上限（0=不限）</span><input type="number" id="s-report_limit_per_hour" min="0" /></label>
- <label class="field"><span>每日费用熔断（元，0=不限）</span><input type="number" id="s-daily_budget" step="0.01" min="0" /></label>
+ <label class="field"><span>每日模型调用上限（次，0=不限）</span><input type="number" id="s-daily_budget" step="1" min="0" /></label>
+ </div>
  <div class="beta-box">
   <div class="beta-head">
    <span class="beta-badge">测试中</span>
@@ -333,8 +423,11 @@ A1B2C3D4E5F6...  , 小红"></textarea>
   <label class="field"><span>自动禁言：冷却（小时，0＝不冷却）</span><input type="number" id="s-variant_strike_cooldown_hours" min="0" max="168" /></label>
   </div>
  </div>
+ <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-todo_enabled" /><span><b>待办队列</b>：低置信未处理 / 变体疑似 / 变体累计达标 自动进待办，等人确认</span></label>
  <label class="field check"><input type="checkbox" id="s-escalate_enabled" /><span><b>复犯累进</b>：窗口内重复违规，禁言时长按倍数递增</span></label>
+ </div>
+ <div class="grid input-zone">
  <label class="field"><span>复犯：前科统计窗口（天）</span><input type="number" id="s-escalate_window_days" min="1" max="365" /></label>
  <label class="field"><span>复犯：每次前科增加倍率（1＝每次翻倍）</span><input type="number" id="s-escalate_step" step="0.5" min="0" max="10" /></label>
  <label class="field"><span>复犯：倍率上限</span><input type="number" id="s-escalate_max_multiplier" step="0.5" min="1" max="20" /></label>
@@ -607,7 +700,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <div class="table-wrap">
  <table class="tbl">
  <thead>
- <tr><th>时间</th><th>对象</th><th>维度</th><th>类型</th><th>置信度</th><th>动作</th><th>缓存</th><th>花费</th><th>操作</th></tr>
+ <tr><th>时间</th><th>对象</th><th>维度</th><th>类型</th><th>置信度</th><th>动作</th><th>缓存</th><th>操作</th></tr>
  </thead>
  <tbody id="verdict-rows"></tbody>
  </table>
@@ -691,8 +784,6 @@ A1B2C3D4E5F6...  , 小红"></textarea>
     <div id="dlist"></div>
   </div>
 </aside>
-
-
 <script src="app.js" defer></script>
 </body>
 </html>
