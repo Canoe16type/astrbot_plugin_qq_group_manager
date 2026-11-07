@@ -21,8 +21,10 @@ from pathlib import Path
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 LEVEL_NAMES = {10: "DEBUG", 20: "INFO", 30: "WARNING", 40: "ERROR"}
 
-# 日志文件名的日期部分，用于判断文件年龄（同时兼容旧文件名兜底用 mtime）
-LOG_FILE_RE = re.compile(r"^(?:astrbot_plugin_qq_group_manager|qq_group_manager)_(\d{8})\.log$")
+# 日志文件名的日期部分，用于判断文件年龄（取不到的再退回 mtime）。
+# 这里只认「_YYYYMMDD.log」结尾，不写死插件名前缀：插件改名/复用本模块时
+# 前缀会变，写死会导致日期解析失败、文件永远按 mtime 判断年龄。
+LOG_FILE_RE = re.compile(r"_(\d{8})\.log$")
 # 允许的日志文件名前缀：新前缀＝插件 id，旧前缀仅为兼容 ≤1.0.0 留下的文件
 LEGACY_LOG_PREFIX = "qq_group_manager"
 DEFAULT_KEEP_DAYS = 14          # 默认磁盘留存天数
@@ -56,9 +58,9 @@ class PluginLogger:
         self._pending_bytes = 0
         self._last_flush = time.time()
         self._closed = False
-        self._flusher = threading.Thread(
-            target=self._flush_loop, name="qgm-log-flush", daemon=True)
-        self._flusher.start()
+        # 注意：后台落盘线程必须等下面所有属性（to_file / log_dir / file_path）
+        # 初始化完再启动，否则它第一次 flush 会撞上还没赋值的属性。
+        self._flusher: threading.Thread | None = None
         self.to_file = to_file
         self.file_path: str | None = None
         self.keep_days = max(0, int(keep_days or 0))
@@ -69,9 +71,28 @@ class PluginLogger:
             self.file_path = os.path.join(self.log_dir, self._today_name())
         # 启动即按留存天数清一次历史日志（即便本次未开启文件落盘，也顺手清）
         self.cleanup_old_files(force=True)
+        self._flusher = threading.Thread(
+            target=self._flush_loop, name="qgm-log-flush", daemon=True)
+        self._flusher.start()
 
-    def _today_name(self) -> str:
-        return f"{self.plugin_name}_{datetime.now().strftime('%Y%m%d')}.log"
+    def _today_name(self, now: datetime | None = None) -> str:
+        now = now or datetime.now()
+        return f"{self.plugin_name}_{now.strftime('%Y%m%d')}.log"
+
+    def _roll_file_if_needed(self) -> None:
+        """跨天切换写入目标文件（调用方负责持锁）。
+
+        1.2.x 之前 ``file_path`` 只在启动时算一次，机器人长期不重启就会出现：
+        今天的日志一直追加到「启动那天」的文件里，面板按日期查不到；更糟的是
+        ``cleanup_old_files`` 按文件名里的日期判断年龄，跑满 ``keep_days`` 天后
+        会把正在写的这个文件当成过期文件删掉，当天日志随之清空。
+        """
+        if not (self.to_file and self.log_dir):
+            return
+        want = os.path.join(self.log_dir, self._today_name())
+        if want != self.file_path:
+            self.file_path = want
+            self._perm_fixed = False
 
     def _resolve_dir(self, log_dir: str | None) -> str | None:
         """统一日志目录：显式传入的目录直接用它，否则用 plugin_data/<插件id>（与插件数据同目录）。"""
@@ -121,7 +142,7 @@ class PluginLogger:
         removed = 0
         for p in self._log_files():
             ts = None
-            m = LOG_FILE_RE.match(os.path.basename(p))
+            m = LOG_FILE_RE.search(os.path.basename(p))
             if m:
                 try:
                     ts = datetime.strptime(m.group(1), "%Y%m%d").timestamp()
@@ -209,6 +230,7 @@ class PluginLogger:
     def flush(self) -> None:
         """把待写队列合并写入当天日志文件（线程安全，可随时调）。"""
         with self._lock:
+            self._roll_file_if_needed()
             if not self._pending or not self.file_path:
                 return
             lines = "".join(self._pending)

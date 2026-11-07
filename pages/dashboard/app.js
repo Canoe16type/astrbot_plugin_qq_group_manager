@@ -368,6 +368,8 @@ async function loadStatus() {
     return;
   }
   const s = state.status;
+  // 渲染阶段的异常也要兜住：否则任何一个卡片渲染出错都会静默卡在「加载中」
+  try {
   const pv = $("pluginVersion");
   if (pv && s.version) pv.textContent = s.version;
   $("pollStatus").textContent = s.poll_running ? "轮询运行中" : "轮询未启动";
@@ -379,12 +381,20 @@ async function loadStatus() {
   const FEATURE_KEYS = ["enable_mute", "enable_approval", "enable_join_request_notify", "enable_welcome", "enable_new_group_welcome"];
   const onCount = FEATURE_KEYS.filter((k) => f[k]).length;
 
-  // Hero 状态条
+  // Hero 状态条 + KPI 共用的申请通道信息（必须在 if 外声明，KPI 也要用）
+  const ap = s.approval || {};
+  const jmode = ap.join_event_mode || "interval";
+  const btnOn = !!(ap.buttons && ap.buttons.enabled && ap.buttons.channel_ready);
+  const jmodeLabel = { event_first: "事件为主", interval: "纯轮询", off: "仅事件" }[jmode] || "纯轮询";
+  const online = jmode === "off" ? true : !!s.poll_running;
+
   const hs = $("heroState");
   if (hs) {
-    hs.textContent = s.poll_running ? "● 轮询运行中" : "● 轮询未启动";
-    hs.className = "hero-badge " + (s.poll_running ? "on" : "off");
-    $("heroDesc").textContent = `${plats.length} 个机器人平台 · ${groups.length} 个已知群 · ${s.pending_count || 0} 个待处理申请`;
+    hs.textContent = jmode === "off"
+      ? "● 仅事件通道"
+      : (s.poll_running ? (jmode === "event_first" ? "● 事件 + 轮询兜底" : "● 轮询运行中") : "● 轮询未启动");
+    hs.className = "hero-badge " + (online ? "on" : "off");
+    $("heroDesc").textContent = `${plats.length} 个机器人平台 · ${groups.length} 个已知群 · ${s.pending_count || 0} 个待处理申请 · 审批按钮${btnOn ? "已启用" : "未启用"}`;
   }
 
   // KPI 指标
@@ -394,7 +404,7 @@ async function loadStatus() {
       <div class="kpi"><div class="kpi-val">${groups.length}</div><div class="kpi-label">已知群</div></div>
       <div class="kpi ${(s.pending_count || 0) > 0 ? "o" : "g"}"><div class="kpi-val">${s.pending_count || 0}</div><div class="kpi-label">待处理入群申请</div></div>
       <div class="kpi p"><div class="kpi-val">${onCount}<small>/ ${FEATURE_KEYS.length}</small></div><div class="kpi-label">功能开关已开启</div></div>
-      <div class="kpi g"><div class="kpi-val">${s.poll_interval == null ? "—" : s.poll_interval}<small>${s.poll_interval == null ? "" : "秒"}</small></div><div class="kpi-label">入群申请轮询间隔</div></div>`;
+      <div class="kpi g"><div class="kpi-val">${jmodeLabel}</div><div class="kpi-label">${jmode === "off" ? "申请获取方式（不轮询）" : `申请获取方式 · 轮询 ${(ap.poll_interval_effective ?? s.poll_interval) || "—"} 秒`}</div></div>`;
   }
 
   // 平台
@@ -478,6 +488,15 @@ async function loadStatus() {
   // 记录 tab 的群筛选下拉（撤回历史那份以前漏了填充）
   fillHistoryGroupSelect();
   fillRecallGroupSelect();
+  } catch (e) {
+    console.error("[qqgm] status render failed", e);
+    ["platformList", "featureList", "adminInfo", "groupList"].forEach((id) => {
+      const el = $(id);
+      if (el) el.innerHTML = emptyBox("warn", "状态渲染失败: " + esc(e.message) + "（接口数据正常，属前端 bug，请反馈）");
+    });
+    const k = $("kpiRow");
+    if (k) k.innerHTML = "";
+  }
 }
 
 $("btnRefreshStatus").addEventListener("click", loadStatus);
@@ -521,8 +540,10 @@ async function loadRequests() {
       if (n) { badge.textContent = n; badge.classList.remove("hidden"); }
       else { badge.classList.add("hidden"); }
     }
-    box.innerHTML = list.length
-      ? list.map((it) => `
+    box.innerHTML = (
+      (r.errors || []).map((er) => `<div class="row-item"><div class="left"><span class="hint">⚠️ ${esc(er.group_display || "")}（${esc(er.bot || "")}）查询失败，已跳过：${esc(er.error || "")}</span></div></div>`).join("")
+      + (list.length
+        ? list.map((it) => `
         <div class="row-item">
           <div class="left">
             <span class="seq">${it.seq}</span>
@@ -533,7 +554,8 @@ async function loadRequests() {
           </div>
           <div class="sub">${esc(it.apply_at)}</div>
         </div>`).join("")
-      : emptyBox("ok", all ? "当前没有待处理的入群申请 ✅" : "这个群当前没有待处理的入群申请 ✅");
+        : emptyBox("ok", all ? "当前没有待处理的入群申请 ✅" : "这个群当前没有待处理的入群申请 ✅"))
+    );
   } catch (e) {
     box.innerHTML = emptyBox("warn", `加载失败: ${esc(e.message)}`);
   }
@@ -1895,7 +1917,10 @@ function openTplDialog(key) {
   _tplCur = { key, item, format: meta.format || "text" };
   $("tplDlgTitle").textContent = item.description || key;
   $("tplDlgHint").textContent = (item.hint ? item.hint + " · " : "") +
-    "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）";
+    "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）" +
+    (key === "msg_join_request_notify"
+      ? " ⚠️ 这条消息可以带「通过/拒绝」按钮，而按钮只在 Markdown 消息里渲染：选了纯文本/图片会没有按钮（插件会自动改用 Markdown 发送；若被平台拒绝则退回纯文本并只剩文字提示）。"
+      : "");
   $("tplDlgText").value = field ? field.get() : (meta.value || "");
   $("tplImgUrl").value = meta.url || "";
   $("tplImgW").value = meta.width || "";
@@ -3012,6 +3037,16 @@ const HELP = {
       def:"用 event_id 去回复不在白名单里的事件就会报这个码，改成主动消息即可（但要过 24 小时窗口）。", doc:["发送群聊消息", DOC.msg] },
     { id:"memberadd", term:"GROUP_MEMBER_ADD · 成员入群事件", go:["switches","成员入群欢迎"],
       def:"intent 1<<24。事件体只有 timestamp / group_openid / member_openid（<b>没有</b>昵称、没有 user_openid），而且它不在 event_id 被动回复白名单里，所以入群欢迎只能发主动消息：受主动消息频控，群里没给机器人开主动推送时会被拒。插件收到这个事件就按「消息模板 · 成员入群 · 欢迎语」发一条，同一成员 10 分钟内只欢迎一次（审批通过时已欢迎过的不会再重复）。", doc:["群成员加入", DOC.memberadd] },
+    { id:"joinreq", term:"GROUP_JOIN_REQUEST · 入群申请事件", go:["approve","入群审批"],
+      def:"intent 1<<24（与成员加入同一位）。1.4.0 起这是入群申请通知的<b>主通道</b>：用户一提交申请事件就到，不用等轮询。事件体比 join_request_list 的单条更全（带 username / verify_info / apply_source / auto_approved）。前置条件：机器人必须是群管理员，否则平台根本不推这个事件。它不在 event_id 被动回复白名单里，所以申请通知仍走主动消息。", doc:null },
+    { id:"joinmode", term:"申请获取方式 event_first / interval / off", go:["approve","入群审批"],
+      def:"event_first（默认）＝事件为主 + 低频轮询兜底（默认 300 秒），既快又省接口；interval＝纯轮询 30 秒一次（1.4.0 之前的旧行为）；off＝只收事件、完全不轮询，申请仍可用 /群管 审批 即时拉取。同一个群 2 秒内到达的多条申请会合并成一条通知，不会刷屏。", doc:null },
+    { id:"botauth", term:"审批按钮（消息内联键盘）怎么工作", go:["approve","入群审批"],
+      def:"申请通知消息下方挂「通过 / 拒绝」按钮：点一下直接审批，不用打指令。同一申请的两个按钮共用 group_id，点完一个另一个会变灰（官方内联键盘的互斥机制），避免「通过完又点拒绝」。按钮通过 action.type=1（回调）把 data 回传给插件，data 里只放「动作 + 申请人 openid + 申请时间」，真实数据以插件本地待审批列表为准，所以伪造 data 无效。", doc:null },
+    { id:"interaction", term:"INTERACTION_CREATE · 按钮点击事件", go:["approve","入群审批"],
+      def:"intent 1<<26。AstrBot 的 qqofficial 适配器收到点击后，会先 PUT /interactions/{id} 返回 code=0（客户端停止转圈），再把它转成一条普通事件交给插件，消息链里是一个按钮组件。所以插件<b>不能</b>重复回应同一个 interaction_id（会报错），处理结果改用 event_id=互动事件 id 发被动消息回执。", doc:null },
+    { id:"40034029", term:"40034029 · 内联键盘行/列超限", go:["approve","入群审批"],
+      def:"官方内联键盘上限是 5 行 × 5 个按钮。插件按申请数自动限制行数（默认每条通知最多 3 个申请，可在「每条通知最多带几个申请」调整）。真被拒了会自动去掉按钮重发一次，保住正文。", doc:null },
     { id:"openid", term:"openid / user_openid 到底有什么区别", go:["groups","群列表"],
       def:"openid 按「机器人 + 用户」分配：同一个人在不同群、不同机器人下 ID 都不同，不能跨群复用，换机器人会重新分配。插件靠 platform_id 区分不同机器人，所以面板是「机器人 → 群名 → 设置」三级。", doc:["消息收发概述", DOC.overview] },
     { id:"intent", term:"Intent 位（1<<24 / 1<<25）", go:["switches","功能开关"],
@@ -3145,7 +3180,11 @@ const HELP = {
     { id:"q3", term:"禁言 / 解禁报错（HTTP 错误 / code）", go:["mute","禁言"],
       def:"机器人不是群主或管理员 → 去群里把它设为管理员。code 11251 → 这是主动消息受限，影响欢迎语这类主动推送，不影响指令回复。其他 code 连 HTTP 状态码一起反馈。", doc:["发送群聊消息", DOC.msg] },
     { id:"q4", term:"入群申请没有自动通知", go:["approve","入群审批"],
-      def:"确认「新申请群内通知」已开；在群里发一条指令触发轮询启动（状态页可看轮询状态）；轮询间隔保持 ≥ 10 秒（接口约 30 QPM，过小会自动兜底为 10 秒）；确认机器人有查看入群申请的权限。", doc:null },
+      def:"按顺序查：①「新申请群内通知」是否开着；②机器人是不是群管理员——不是的话平台不推申请事件（11703），轮询也拉不到，日志会提示一次然后退避；③看面板概览的「申请获取方式」：event_first 下通知靠事件即时到达，事件没来就等兜底轮询（默认 300 秒）；④确认群在「生效群范围」里；⑤主动消息被限（11251）时通知发不出去，可先用 /群管 审批 看列表。", doc:null },
+    { id:"q9", term:"审批按钮点了没反应 / 变灰了", go:["approve","入群审批"],
+      def:"先分清三种情况：①按钮直接点不动——「按钮可点范围」设的是 admin，只有群主/管理员能点；②点了没反馈——多半是当前 AstrBot 版本不支持按钮事件，启动日志会有「按钮自动禁用，退回纯文本通知」的告警，升级 AstrBot 即可；③提示「这条申请已处理或已失效」——别人先处理了，或申请已被自动审批策略放行，属于正常保护。", doc:null },
+    { id:"q10", term:"同一批入群申请收到好几条通知", go:["approve","入群审批"],
+      def:"1.4.0 起事件与轮询共用一张通知去重表（同一条申请 10 分钟内只推一次），且同一群 2 秒内的多条申请会合并成一条。如果仍重复：检查是不是开了多个 AstrBot 实例连同一个机器人（去重表在内存里，不跨实例）；或频繁重启导致内存表清空——重启后原来就在队列里的申请会再推一次。", doc:null },
     { id:"q5", term:"退群通知不生效 / 只显示「某位成员」", go:["members","成员档案"],
       def:"分两种情况：① 完全不发——确认「群成员事件 → 退群通知」已开，然后重启一次 AstrBot（或等下一条群消息触发重连注入），日志里出现「未找到平台名为 qq_official 的适配器实例」就是这个原因；② 发了但没名字——正常，事件里只有 openid，官方成员接口是内邀能力（11253），去「成员档案」给这个人补一次名字即可。通知默认走主动消息，因为 GROUP_MEMBER_REMOVE 不支持 event_id 被动回复（40034027）。", doc:null },
     { id:"q6", term:"设置改了没生效", go:["global","全局作用域"],

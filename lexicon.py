@@ -969,7 +969,9 @@ class LexiconManager:
             cur = self.get(target_id)
             if cur and cur["source"] == "builtin":
                 return {"ok": False, "error": "内置词库不可覆盖，请换个名字新建"}
-            lid = target_id
+            # 只认已存在的自定义词库：target_id 是前端传来的自由字符串，
+            # 直接拿它当文件名会让 "custom-../../x" 这类值把 json 写到数据目录之外
+            lid = cur["id"] if cur else f"custom-{slugify(display)}"
         exists = self.get(lid)
         if exists and mode != "overwrite":
             return {"ok": False, "error": f"已存在同名词库「{exists['name']}」，请改名或选择覆盖",
@@ -990,6 +992,10 @@ class LexiconManager:
                       version: str = "", kind: str = "rules", regexes: Optional[dict] = None,
                       match: str = MATCH_AUTO) -> str:
         slug = lid.split("-", 1)[1] if lid.startswith("custom-") else slugify(name)
+        # 兜底防目录穿越：id 里万一带了 / 或 .. 也会被压成安全文件名
+        # （只在含危险字符时才改写，避免把磁盘上已有的 "a--b.json" 洗成 "a-b.json"）
+        if re.search(r"[^0-9a-zA-Z\u4e00-\u9fa5_-]", slug):
+            slug = slugify(slug, fallback="lexicon")
         path = os.path.join(self.custom_dir, f"{slug}.json")
         if regexes:
             # 正则单独放 regexes 区，categories 里只留字面量词，

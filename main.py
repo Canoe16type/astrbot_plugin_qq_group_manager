@@ -45,11 +45,29 @@ from astrbot.api.web import json_response, request, stream_response
 
 from .plugin_logger import PluginLogger
 from .qq_api import QQApi, QQApiError
+from . import button_kit
 from . import member_event
 from . import member_registry as member_registry_lib
 from . import lexicon as lexicon_lib
 from . import moderation
 from . import variant as variant_lib
+
+# ----------------------------------------------------------------------
+# 按钮点击通道能力探测
+# ----------------------------------------------------------------------
+# AstrBot 4.29 起，按钮点击事件在「唤醒检查」阶段**只会交给挂了
+# ButtonActionFilter 的 handler**，其余 handler 一律被 continue 掉
+# （核心实现见 astrbot/core/pipeline/waking_check/stage.py：
+#   if event.is_button_interaction() and not any(
+#       isinstance(f, ButtonActionFilter) for f in handler.event_filters
+#   ): continue
+# ）
+# 推论：普通的消息 handler（event_message_type）永远收不到按钮点击，
+# 必须用一个独立的 @filter.button_action() handler 来接。
+# 旧版本 AstrBot 没有这个 filter，那就干脆不渲染按钮，
+# 免得出现「点得动但服务端毫无反应」的死按钮。
+_BUTTON_ACTION_DECORATOR = getattr(filter, "button_action", None)
+_BUTTON_ACTION_SUPPORTED = callable(_BUTTON_ACTION_DECORATOR)
 
 
 class _TplText(str):
@@ -87,6 +105,12 @@ PLUGIN_NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__))) or "a
 # 收进 data/logs）。初始化早期（self.logger / PluginLogger 还没构造完）也用它，
 # 插件不得使用 stdlib logging，出口只能是 astrbot.api.logger。
 WEB_API_PREFIX = PLUGIN_NAME
+# 腾讯 QQ 官方机器人的两种接入形态（都是同一套开放平台 API、同样的 appid/secret）：
+#   - qq_official：AstrBot 内置 WebSocket 适配器（botpy），成员事件注入只对它有效；
+#   - qq_official_webhook：4.16 起提供的 Webhook 适配器，事件由平台推到本地 HTTP。
+# 面板/API 只关心「有哪些机器人实例、appid 是什么」，所以两种都要认；
+# 否则用 Webhook 模式的人打开面板会看到「没有机器人」，所有页签都是空的。
+QQ_PLATFORM_NAMES = ("qq_official", "qq_official_webhook")
 # 旧版数据目录名，仅用于迁移与清理兼容，禁止再用于新路径
 LEGACY_PLUGIN_NAME = "qq_group_manager"
 
@@ -104,7 +128,7 @@ class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
     """重定向时复检目标地址，防止 302 跳内网。"""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
-        err = Main._check_url_public(newurl)
+        err = QQGroupManager._check_url_public(newurl)
         if err:
             raise ValueError(f"重定向到不安全的地址（{err}）")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
@@ -124,6 +148,22 @@ def _read_plugin_version() -> str:
 
 
 PLUGIN_VERSION = _read_plugin_version()
+
+
+def _write_json_atomic(path: str, payload, *, indent: int = 1) -> None:
+    """原子写 JSON：先写临时文件，再 os.replace 顶上去。
+
+    这些文件（群列表 / 禁言历史 / 撤回历史 / 自我介绍状态）都是「整份重写」，
+    直接 open(w) 会在写一半时崩溃、掉电、磁盘写满的情况下留下被截断的 JSON，
+    下次启动 json.load 失败 → 整份数据静默清零。临时文件 + os.replace 是
+    同目录下的原子替换，最坏情况是保留旧文件，不会丢结构。
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=indent)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def _patch_botpy_quote_fields() -> None:
@@ -185,8 +225,6 @@ def _patch_botpy_quote_fields() -> None:
         base.__getattr__ = _patched_getattr
         base._qq_group_manager_quote_patched = True
     except Exception as e:  # pragma: no cover
-        import sys
-
         logger.warning(
             f"botpy 引用字段 patch 失败（引用撤回可能不可用）: {e}"
         )
@@ -197,7 +235,7 @@ _patch_botpy_quote_fields()
 DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\s*$", re.I)
 
 # 管理指令集合（需要管理员权限）
-ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批", "/通过", "/拒绝", "/撤回", "/审核", "/群名", "/管理登记", "/成员")
+ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批", "/通过", "/拒绝", "/撤回", "/审核", "/群名", "/管理登记", "/成员", "/汇报", "/体检")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
 # 说明：这些名字现在挂在指令组「群管」下作为子指令（面板里是 1 条组 + 子指令），
@@ -207,10 +245,45 @@ ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批"
 REGISTERED_COMMANDS = (
     "禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝",
     "撤回", "审核", "群名", "管理登记", "群管", "举报", "群规", "成员",
+    "汇报", "体检",
 )
 
 # 禁言历史：每群最多保留的条数
 HISTORY_MAX_PER_GROUP = 500
+
+
+# 退群清理：各类数据的可读名（日志 / 回执里给用户看）
+_PURGE_LABELS = {
+    "known_groups": "已知群记录",
+    "mute_history": "禁言历史",
+    "recall_history": "撤回历史",
+    "members": "成员档案",
+    "rules": "群规",
+    "settings": "审核设置",
+    "verdicts": "判定记录",
+    "group_meta": "群名/备注",
+    "admins": "提醒名单",
+    "templates": "群话术覆盖",
+    "welcome_dedupe": "入群欢迎去重",
+    "notify_task": "待推送通知",
+    "nick_cache": "昵称缓存",
+    "pending": "申请缓存",
+}
+
+
+def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") -> str:
+    """把清理结果字典拼成一句人能读的话。"""
+    if not summary:
+        return empty
+    parts = []
+    for k, v in summary.items():
+        label = _PURGE_LABELS.get(k, k)
+        try:
+            n = int(v or 0)
+        except (TypeError, ValueError):
+            n = 0
+        parts.append(f"{label} {n} 条" if n > 1 else label)
+    return "、".join(parts)
 
 
 def _recall_hint(err: object) -> str:
@@ -502,6 +575,24 @@ class QQGroupManager(Star):
         self._join_error_code: dict[str, int | None] = {}   # group_openid -> 最近一次错误码
         self._join_backoff: dict[str, float] = {}           # group_openid -> 下次允许轮询的时间戳
         self._join_denied_logged: set[str] = set()          # 已提示过 11703 的群
+        # ---- 1.4.0 入群申请事件化 + 消息按钮 ----
+        # GROUP_JOIN_REQUEST 事件到达时间（按群）：用来判断「事件通道是否真的在工作」，
+        # 以及 event_first 模式下轮询要不要兜底。
+        self._join_event_at: dict[str, float] = {}
+        # 事件总数 / 最近一次全局时间（面板「概览」展示用）
+        self._join_event_total = 0
+        self._join_event_last = 0.0
+        # 互动事件（按钮点击）去重：同一个 interaction 只处理一次。
+        # 官方「同一 interaction_id 只能回应一次」，但用户可能连点，这里做幂等。
+        self._interaction_done: dict[str, float] = {}
+        # 互动事件统计（面板展示）
+        self._interaction_total = 0
+        self._interaction_last = 0.0
+        self._interaction_last_result = ""
+        # 申请事件合并队列：同一群 2 秒内到达的多个申请合并成一条通知，
+        # 避免「三个人同时申请 → 群里刷三条消息」。
+        self._join_fresh: dict[str, list[dict]] = {}
+        self._join_notify_tasks: dict[str, asyncio.Task] = {}
         self._member_event_ok = False  # 群成员事件注入是否已成功
         self._last_inject_attempt = 0.0  # 最近一次注入尝试时间戳（防频繁重连）
         self._mute_history: dict[str, list[dict]] = {}  # group_openid -> [记录]
@@ -555,6 +646,11 @@ class QQGroupManager(Star):
         # 撤回 API 不认），因此引用撤回时用"原文匹配"找回真实消息 ID。
         self._recent_group_msgs: dict[str, list[dict]] = {}
         self._poll_task: Optional[asyncio.Task] = None
+        # 定时汇报（日报）后台任务与"今天已经发过"的日期标记
+        self._report_task: Optional[asyncio.Task] = None
+        self._report_last_day: str = ""
+        # 最近一次有活动的群（日报默认发到这里；在 _record_recent_msg 里更新）
+        self._last_active_group: str = ""
         self._initialized = False
         # 防重入：同一消息可能被多个正则 handler 命中（如 /禁言 与 /禁言历史），
         # 用消息 ID 在短时间内去重，避免重复执行导致重复回复。
@@ -565,6 +661,7 @@ class QQGroupManager(Star):
         self._load_intro_state()
         self._load_mute_history()
         self._load_recall_history()
+        self._load_report_state()
         self._register_web_apis()
         self.logger.info(
             f"QQ 群管插件已加载 (log_level={self._read_config_value(('log', 'log_level'), default='DEBUG', legacy_keys=('log_level',))}, "
@@ -624,8 +721,7 @@ class QQGroupManager(Star):
 
     def _save_known_groups(self) -> None:
         try:
-            with open(self._groups_file(), "w", encoding="utf-8") as f:
-                json.dump(self._known_groups, f, ensure_ascii=False, indent=1)
+            _write_json_atomic(self._groups_file(), self._known_groups)
         except Exception as e:
             self.logger.warning(f"保存已知群列表失败: {e}")
 
@@ -659,10 +755,10 @@ class QQGroupManager(Star):
 
     def _save_intro_state(self) -> None:
         try:
-            p = self._intro_state_path()
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump({"done": self._intro_done, "pending": self._intro_pending},
-                          f, ensure_ascii=False, indent=1)
+            _write_json_atomic(
+                self._intro_state_path(),
+                {"done": self._intro_done, "pending": self._intro_pending},
+            )
         except Exception as e:
             self.logger.warning(f"[入群事件] 自我介绍状态保存失败: {e}")
 
@@ -753,6 +849,257 @@ class QQGroupManager(Star):
         else:
             self.logger.warning(f"[入群事件] 自我介绍未发出，等本群首条消息用旧方案兜底: {group}")
 
+    # ------------------------------------------------------------------
+    # 机器人被移出群：GROUP_DEL_ROBOT 事件 + bot_state 兜底校验
+    #   事件是官方在「机器人被移出群」瞬间推过来的，最权威；
+    #   GET /v2/groups/{group_openid}/bot_state 用来二次确认（以及给
+    #   /群管 体检 手动巡检用）。两者都不依赖群里有新消息。
+    # ------------------------------------------------------------------
+    async def _on_group_del_robot(self, data, pid: str) -> None:
+        """GROUP_DEL_ROBOT：机器人被移出群（被踢／主动退群都算）。
+
+        数据回收是主目的：群都没了，成员档案、群规、判定记录、禁言/撤回历史
+        留着只会让面板越堆越乱，openid 也认不出是谁。
+        """
+        group = str(getattr(data, "group_openid", "") or "")
+        if not group:
+            return
+        op = str(getattr(data, "op_member_openid", "") or "")
+        ts = getattr(data, "timestamp", "")
+        self.logger.info(
+            f"[退群事件] 机器人被移出群 {group}"
+            + (f"（操作人={op[:10]}…）" if op else "")
+            + (f" timestamp={ts}" if ts else "")
+        )
+
+        if not self._purge_enabled():
+            self.logger.info(
+                "[退群事件] 自动清理已关闭（basic.enable_group_del_purge），"
+                "仅记录日志，不动数据"
+            )
+            return
+
+        # bot_state 二次确认：接口可用时以它为准（能挡掉误推事件），
+        # 接口不可用（11253 无权限／网络错）就以事件为准 —— 事件本身已经够权威。
+        state, detail = await self._check_group_presence(group, pid)
+        if state == "in":
+            self.logger.warning(
+                f"[退群事件] bot_state 显示机器人仍在群（{detail}），"
+                f"疑似误推或已被重新拉回，本次跳过清理: {group}"
+            )
+            return
+        self.logger.info(f"[退群事件] bot_state 校验结果：{detail}")
+
+        summary = self._purge_group_data(
+            group, pid, reason=f"机器人被移出群（操作人={op[:10] or '未知'}）"
+        )
+        self.logger.info(
+            f"[退群事件] 已清理群 {group} 的数据：" + _purge_summary_text(summary)
+        )
+
+    def _purge_enabled(self) -> bool:
+        return bool(
+            self._read_config_value(
+                ("basic", "enable_group_del_purge"),
+                default=True,
+                legacy_keys=("enable_group_del_purge",),
+            )
+        )
+
+    async def _check_group_presence(
+        self, group: str, pid: str = ""
+    ) -> tuple[str, str]:
+        """用 bot_state 接口确认机器人还在不在这个群。
+
+        Returns:
+            (state, detail)，state 取值：
+
+            - ``in``      —— 接口正常返回了机器人在群的信息；
+            - ``absent``  —— 接口明确报「查不到这个群／不在群里」（404、
+              `11293 鉴权失败，机器人非群成员`，或文案含「非群成员」等）；
+            - ``unknown`` —— 没权限（11253，该接口仅白名单机器人可用）、
+              网络失败、频控等，**一律不当作离群**，避免误删用户数据。
+        """
+        group = str(group or "")
+        if not group:
+            return "unknown", "群 openid 为空，无法查询"
+        try:
+            api = self._get_api(pid) if pid else self._api_for_group_or_default(group, "")
+        except Exception as e:                       # noqa: BLE001
+            return "unknown", f"拿不到 API 客户端: {e}"
+        if api is None:
+            return "unknown", "没有可用的机器人实例"
+        try:
+            info, err = await api.get_group_bot_state(group)
+        except Exception as e:                       # noqa: BLE001
+            return "unknown", f"调用 bot_state 异常: {e}"
+
+        if err is None:
+            if not info:
+                return "in", "接口无错误但返回空对象（视为在群）"
+            role = str(info.get("member_role") or "?")
+            joined = str(info.get("joined_at") or "?")
+            proactive = info.get("allow_proactive_msg")
+            return "in", f"在群（role={role}，入群时间={joined}，主动消息={proactive}）"
+
+        code = getattr(err, "code", None)
+        status = getattr(err, "status", None)
+        text = str(err)
+        if code == 11253:
+            return (
+                "unknown",
+                "bot_state 接口无权限（11253：仅白名单机器人可用），无法确认，按事件为准",
+            )
+        # 11293 = 「鉴权失败，机器人非群成员」：这是**明确离群**，不是无权限。
+        # 平台用 400 而非 404 返回它，且文案里没有「不存在」，早期只看关键词会误判成 unknown。
+        if code == 11293:
+            return "absent", f"机器人非群成员（{text}）"
+        lowered = text.lower()
+        absent_hint = (
+            status == 404
+            or any(
+                k in text
+                for k in (
+                    "不在群", "未在群", "非群成员", "不是群成员", "群不存在", "不存在",
+                )
+            )
+            or any(
+                k in lowered
+                for k in (
+                    "not found", "not in group", "not a member",
+                    "not a group member", "invalid group",
+                )
+            )
+        )
+        if absent_hint:
+            return "absent", f"不在群（{text}）"
+        return "unknown", f"查询失败，无法确认（{text}）"
+
+    def _purge_group_data(self, group: str, pid: str = "", reason: str = "") -> dict:
+        """把一个群在本插件里的所有痕迹清掉，返回各表删除数量。
+
+        覆盖：已知群列表、群管自我介绍状态、禁言历史、撤回历史、成员档案、
+        群规/审核设置/判定记录/群名备注/提醒名单、入群欢迎去重、各种
+        按群缓存与待推送任务。
+        """
+        group = str(group or "")
+        if not group:
+            return {}
+        reason = reason or "手动清理"
+        out: dict[str, object] = {}
+
+        # ① 已知群列表
+        if self._known_groups.pop(group, None) is not None:
+            self._save_known_groups()
+            out["known_groups"] = 1
+
+        # ② 群管自我介绍状态（发过的标记 / 待兜底标记）
+        touched = False
+        if self._intro_done.pop(group, None) is not None:
+            touched = True
+        if self._intro_pending.pop(group, None) is not None:
+            touched = True
+        if touched:
+            self._save_intro_state()
+
+        # ③ 禁言历史 / 撤回历史
+        if self._mute_history.pop(group, None) is not None:
+            self._save_mute_history()
+            out["mute_history"] = 1
+        if self._recall_history.pop(group, None) is not None:
+            self._save_recall_history()
+            out["recall_history"] = 1
+
+        # ④ 成员档案
+        try:
+            n = self.members.purge_group(group)
+            if n:
+                out["members"] = n
+        except Exception as e:                       # noqa: BLE001
+            self.logger.warning(f"[清理] 成员档案清理失败: {e}")
+
+        # ⑤ 群规 / 审核设置 / 判定记录 / 群名备注 / 提醒名单 / 群模板
+        try:
+            removed = self.mod.purge_group(group)
+            if any(int(v or 0) for v in removed.values()):
+                out.update({k: v for k, v in removed.items() if int(v or 0)})
+        except Exception as e:                       # noqa: BLE001
+            self.logger.warning(f"[清理] 审核数据清理失败: {e}")
+
+        # ⑥ 入群欢迎去重表（键是 "群:成员"）
+        prefix = f"{group}:"
+        stale = [k for k in self._join_welcomed if k.startswith(prefix)]
+        for k in stale:
+            self._join_welcomed.pop(k, None)
+        if stale:
+            out["welcome_dedupe"] = len(stale)
+
+        # ⑦ 按群内存缓存 / 待推送任务
+        for attr in (
+            "_nick_cache", "_pending", "_notified", "_seen_requests",
+            "_join_error_code", "_join_backoff", "_join_event_at",
+            "_join_fresh", "_recent_group_msgs",
+        ):
+            bucket = getattr(self, attr, None)
+            if isinstance(bucket, dict) and bucket.pop(group, None) is not None:
+                out[attr.lstrip("_")] = 1
+        for attr in ("_member_perm_blocked", "_join_denied_logged"):
+            bucket = getattr(self, attr, None)
+            if isinstance(bucket, set):
+                bucket.discard(group)
+        task = self._join_notify_tasks.pop(group, None)
+        if task is not None and not task.done():
+            task.cancel()
+            out["notify_task"] = 1
+        if self._last_active_group == group:
+            self._last_active_group = ""
+
+        self.logger.info(f"[清理] 群 {group} 数据已清理（{reason}）：{_purge_summary_text(out)}")
+        return out
+
+    async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str]) -> None:
+        """/群管 体检：逐个确认机器人还在不在已记录的群里。
+
+        默认只报告；带 ``清理`` 才真删数据（避免一次手滑清一堆群）。
+        bot_state 需要白名单权限，拿不到权限的群一律标「无法确认」，不动数据。
+        """
+        do_purge = any(str(p).lower() in ("清理", "purge", "clean") for p in parts[1:])
+        cur = event.get_group_id()
+        groups = dict(self._managed_groups())
+        if cur and cur not in groups:
+            groups[cur] = event.get_platform_id()
+
+        if not groups:
+            await self._reply(event, "还没有记录到任何群，等机器人在群里收到消息或收到入群事件后再说。")
+            return
+
+        lines = [f"【群管体检】已知群 {len(groups)} 个" + ("（检出离群会自动清理）" if do_purge else "（只报告，不改数据；加「清理」才会删）")]
+        stat = {"in": 0, "absent": 0, "unknown": 0}
+        purged = 0
+        for g, pid in list(groups.items())[:20]:      # 上限 20 个，避免回执太长
+            state, detail = await self._check_group_presence(g, pid)
+            stat[state] = stat.get(state, 0) + 1
+            label = self.mod.display_name(g) or g
+            tail = f"…{g[-6:]}"
+            if state == "in":
+                lines.append(f"✅ {label}（{tail}）{detail}")
+            elif state == "absent":
+                if do_purge and self._purge_enabled():
+                    summary = self._purge_group_data(g, pid, reason="/群管 体检 检出离群")
+                    purged += 1
+                    lines.append(f"❌ {label}（{tail}）{detail}，已清理：{_purge_summary_text(summary, empty='无残留数据')}")
+                else:
+                    lines.append(f"❌ {label}（{tail}）{detail}" + ("（加「清理」可删除本群数据）" if not do_purge else "（自动清理开关已关，未删除）"))
+            else:
+                lines.append(f"⚠️ {label}（{tail}）{detail}")
+        if len(groups) > 20:
+            lines.append(f"……还有 {len(groups) - 20} 个群没检查（一次最多 20 个，可分批用 /群管 成员 查看）")
+        lines.append(
+            f"小结：在群 {stat.get('in', 0)}｜离群 {stat.get('absent', 0)}｜无法确认 {stat.get('unknown', 0)}"
+            + (f"｜已清理 {purged} 个群" if purged else "")
+        )
+        await self._reply(event, "\n".join(lines))
+
     # ---------- 禁言历史（长期存储） ----------
 
     def _history_file(self) -> str:
@@ -784,11 +1131,10 @@ class QQGroupManager(Star):
 
     def _save_mute_history(self) -> None:
         try:
-            with open(self._history_file(), "w", encoding="utf-8") as f:
-                json.dump(
-                    {"seq": self._history_seq, "records": self._mute_history},
-                    f, ensure_ascii=False, indent=1,
-                )
+            _write_json_atomic(
+                self._history_file(),
+                {"seq": self._history_seq, "records": self._mute_history},
+            )
         except Exception as e:
             self.logger.warning(f"保存禁言历史失败: {e}")
 
@@ -828,6 +1174,38 @@ class QQGroupManager(Star):
         return n
 
     # ------------------------------------------------------------------
+    # 日报状态（"今天已发过"必须落盘，否则重载插件会重复推送）
+    # ------------------------------------------------------------------
+    def _report_state_path(self) -> str:
+        return os.path.join(self._plugin_data_dir(), "report_state.json")
+
+    def _load_report_state(self) -> None:
+        """读取上次日报日期。
+
+        内存标记只在本次进程内有效，而 AstrBot 在 WebUI 里保存配置、重载插件
+        都会重建插件实例 —— 只要当天日报已经发过，重启后 30 秒内又会再发一遍，
+        群里就是重复推送。所以把日期落盘。
+        """
+        try:
+            with open(self._report_state_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            day = str((data or {}).get("last_day") or "").strip()
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+                self._report_last_day = day
+        except FileNotFoundError:
+            return
+        except Exception as e:  # 坏了不影响功能，当今天没发过
+            self.logger.warning(f"[日报] 状态读取失败: {e}")
+
+    def _save_report_state(self) -> None:
+        try:
+            _write_json_atomic(
+                self._report_state_path(), {"last_day": self._report_last_day}
+            )
+        except Exception as e:
+            self.logger.warning(f"[日报] 状态保存失败: {e}")
+
+    # ------------------------------------------------------------------
     # 撤回历史（永久保存原始消息，便于备份查验）
     # ------------------------------------------------------------------
     def _recall_history_file(self) -> str:
@@ -852,11 +1230,10 @@ class QQGroupManager(Star):
 
     def _save_recall_history(self) -> None:
         try:
-            with open(self._recall_history_file(), "w", encoding="utf-8") as f:
-                json.dump(
-                    {"seq": self._recall_seq, "records": self._recall_history},
-                    f, ensure_ascii=False, indent=1,
-                )
+            _write_json_atomic(
+                self._recall_history_file(),
+                {"seq": self._recall_seq, "records": self._recall_history},
+            )
         except Exception as e:
             self.logger.warning(f"保存撤回历史失败: {e}")
 
@@ -1049,6 +1426,42 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     TPL_FORMAT_KINDS = ("text", "markdown", "image")
 
+    # 这些错误码说明「消息本体没问题、是键盘/格式参数不被接受」，
+    # 遇到时去掉键盘重发一次即可保住正文：
+    #   305007   键盘样式参数错误
+    #   40034029 内联键盘行/列超限
+    #   40034124 markdown 消息参数错误
+    #   22006    消息类型与内容不匹配
+    #   40011021 rows.buttons.group_id 无效（markdown 通道特有的严校验）
+    KEYBOARD_DROP_CODES = {305007, 40034029, 40034124, 22006, 40011021}
+
+    # 这些错误码跟「消息用什么格式」无关（无权限 / 频控 / 不在群 / 被禁言 /
+    # 内容超长），换 markdown、换纯文本都一样失败，别再白跑降级阶梯。
+    FATAL_SEND_CODES = {
+        11251, 40034100, 40034101, 40034105, 40054002, 40054003, 40054007, 40054010,
+    }
+
+
+    # 新增模板的内置兜底文案。
+    # 为什么需要：升级后 AstrBot 可能还没把新模板项写进配置文件，
+    # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
+    # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
+    TPL_FALLBACKS = {
+        "msg_join_request_auto_approved": (
+            "✅ 新成员 {username} 的入群申请已由自动审批策略通过（策略 {strategy}）"
+        ),
+        "msg_join_request_button_ok": "✅ 已通过 {username} 的入群申请",
+        "msg_join_request_button_rejected": "🚫 已拒绝 {username} 的入群申请",
+        "msg_join_request_button_gone": (
+            "⚠️ 这条入群申请已处理或已失效（可能刚被其他人处理），无需重复操作"
+        ),
+        "msg_join_request_button_denied": "⛔ 你没有处理入群申请的权限，请让群主/管理员操作",
+        "msg_join_request_button_failed": "❌ 处理 {username} 的入群申请失败：{error}",
+        "msg_report_daily": (
+            "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人"
+        ),
+    }
+
     def _tpl_formats_path(self) -> str:
         return os.path.join(self._plugin_data_dir(), "msg_formats.json")
 
@@ -1086,6 +1499,8 @@ class QQGroupManager(Star):
 
     def _render(self, key: str, **kw) -> str:
         tpl = str(self._read_config_value(("templates", key), default="", legacy_keys=(key,)))
+        if not tpl.strip():
+            tpl = self.TPL_FALLBACKS.get(key, "")
         # {at} 内置模块：调用方传 at=<openid> 时直接展开成 @ 标签；
         # 没传就保留占位符，交给 _reply() 用「消息发送者」兜底展开。
         target = str(kw.get("at") or "").strip()
@@ -1242,18 +1657,25 @@ class QQGroupManager(Star):
             self.logger.error(f"回复消息失败: {e}")
 
     async def _send_group_proactive(
-        self, group_openid: str, text: str, platform_id: str, *, at_openid: str = ""
+        self, group_openid: str, text: str, platform_id: str, *, at_openid: str = "",
+        keyboard: dict | None = None,
     ) -> bool:
         """主动往群里发一条模板消息（入群欢迎这类「没有可回复事件」的场景）。
 
         为什么必须走主动消息：官方 ``event_id`` 被动回复只支持 3 个事件
         （INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE），
-        GROUP_MEMBER_ADD 不在白名单里，拿它的事件 id 去回会直接 40034027。
+        GROUP_MEMBER_ADD、GROUP_JOIN_REQUEST 都不在白名单里，拿它们的事件 id
+        去回会直接 40034027。
         代价是受主动消息频控（未认证 30 条/分钟、单群 20 条/分钟、每群每天
         1000 条），且用户可在 QQ 客户端关掉「允许主动发送」。
 
         模板格式为图片（image）时只发配文：入群瞬间没有可渲染图片的消息上下文，
         图片模板退化成文字，总比什么都不发好。
+
+        Args:
+            keyboard: 内联键盘（按钮）。按钮相关错误码（305007 键盘参数错误、
+                40034029 行列超限、40034124 markdown 参数错误、22006 类型不匹配）
+                出现时会**去掉键盘重发一次**——宁可少按钮，也别把通知丢了。
 
         Returns:
             True 表示接口调用成功。
@@ -1274,23 +1696,68 @@ class QQGroupManager(Star):
                 f"[主动消息] 群 {str(group_openid)[-6:]} 找不到可用 API 客户端，发送跳过"
             )
             return False
-        if fmt == "markdown":
+        # ---- 发送阶梯：按钮优先，逐级降级，正文最后兜底 ----
+        # 为什么不「失败就丢按钮」：markdown 通道对 keyboard 的校验比文本通道严
+        # （实测 group_id 含冒号就 40011021 整条拒发），一次失败直接丢按钮，等于
+        # 把最值钱的功能丢了。所以按「损失从小到大」逐级试：
+        #   ① markdown + 完整键盘（有互斥变灰）
+        #   ② markdown + 去掉 group_id 的键盘（按钮还在，只是不互斥）
+        #   ③ markdown 纯正文（保住排版）
+        #   ④ 纯文本（保住内容）
+        plans: list = []
+        if keyboard:
+            plans.append((True, keyboard))
+            if button_kit.has_group_id(keyboard):
+                stripped = button_kit.without_group_id(keyboard)
+                if stripped:
+                    plans.append((True, stripped))
+            plans.append((True, None))
+            plans.append((False, None))
+        elif fmt == "markdown":
+            plans.append((True, None))
+            plans.append((False, None))
+        else:
+            plans.append((False, None))
+
+        last_err = None
+        for idx, (md, kb) in enumerate(plans):
+            kwargs: dict = {"markdown": True} if md else {}
+            if kb:
+                kwargs["keyboard"] = kb
             try:
-                await api.send_group_message(group_openid, content, markdown=True)
+                await api.send_group_message(group_openid, content, **kwargs)
+                if keyboard and kb is None:
+                    self.logger.warning(
+                        "[主动消息] 已降级为无按钮消息（正文送达，但群里没有"
+                        "「通过/拒绝」按钮）；审批可用 /群管 审批 或面板操作"
+                    )
+                elif keyboard and kb is not keyboard:
+                    self.logger.info(
+                        "[主动消息] 去掉 group_id（按钮互斥分组）后重发成功，按钮可用"
+                    )
                 return True
             except QQApiError as e:
-                # 主动 Markdown 在部分机器人上会被权限/内容校验拦掉，
-                # 退回纯文本：宁可少点格式，也别把欢迎语丢了。
-                self.logger.warning(f"[主动消息] Markdown 发送失败，退回纯文本: {e}")
-        try:
-            await api.send_group_message(group_openid, content)
-            return True
-        except QQApiError as e:
+                last_err = e
+                code = getattr(e, "code", None)
+                if code in self.FATAL_SEND_CODES and keyboard:
+                    # 权限 / 频控 / 不在群：换格式一样失败，别为了按钮白刷四档请求。
+                    # 注意只在「带按钮」时短路：无按钮的 markdown 降级只有一两档，
+                    # 且正文优先，宁可多试一次也别把欢迎语/通知丢了。
+                    self.logger.warning(
+                        f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败: {e}；"
+                        f"{self._explain_send_error(code)}"
+                    )
+                    return False
+                if idx + 1 < len(plans):
+                    self.logger.warning(
+                        f"[主动消息] 第 {idx + 1} 档发送失败（code={code}），继续降级: {e}"
+                    )
+        if last_err is not None:
             self.logger.warning(
-                f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败: {e}；"
-                f"{self._explain_send_error(getattr(e, 'code', None))}"
+                f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败（所有降级档位均失败）: "
+                f"{last_err}；{self._explain_send_error(getattr(last_err, 'code', None))}"
             )
-            return False
+        return False
 
     # ------------------------------------------------------------------
     # 群消息入口（指令走标准正则过滤器；普通消息仅做新群欢迎）
@@ -1322,6 +1789,7 @@ class QQGroupManager(Star):
             g = event.get_group_id()
             if not g:
                 return
+            self._last_active_group = g
             msg_id = str(getattr(event.message_obj, "message_id", "") or "")
             if not msg_id:
                 return
@@ -1408,6 +1876,7 @@ class QQGroupManager(Star):
                 self._last_cmd_ts = now
 
             self._ensure_poll_task()
+            self._ensure_report_task()  # WebUI 刚打开日报开关时，靠这条路径自愈
             self._record_recent_msg(event)  # 引用撤回：原文匹配需要消息缓存
             await self._maybe_welcome_new_group(event)
             text = self._extract_text(event)
@@ -1425,7 +1894,7 @@ class QQGroupManager(Star):
             if not first.startswith("/"):
                 if not self._is_mentioned_bot(event):
                     return
-                if first not in ("禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝", "撤回", "群管", "举报", "群规", "审核", "群名", "管理登记"):
+                if first not in ("禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝", "撤回", "群管", "举报", "群规", "审核", "群名", "管理登记", "汇报", "体检"):
                     return
             await self._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:
@@ -1434,10 +1903,47 @@ class QQGroupManager(Star):
 
             self.logger.debug(traceback.format_exc())
 
+    if _BUTTON_ACTION_SUPPORTED:
+
+        @_BUTTON_ACTION_DECORATOR()
+        async def on_button_action(self, event: AstrMessageEvent):
+            """消息按钮点击入口（入群审批的「通过 / 拒绝」）。
+
+            必须是**独立 handler**：AstrBot 的唤醒检查阶段对按钮事件只放行挂了
+            ``ButtonActionFilter`` 的 handler，普通 ``event_message_type`` 的
+            handler 会被直接 continue 掉。
+
+            开发期首版把认领逻辑写在 ``on_group_message`` 里，结果点击只触发了
+            客户端本地的 visited_label（按钮变「已通过」）+ 适配器的
+            ``on_interaction_result(0)`` 应答，服务端一次都没执行：申请没被通过、
+            欢迎语没发、回执也没有 —— 看上去点了，其实什么都没发生。
+            """
+            try:
+                if not await self._handle_button_interaction(event):
+                    return
+                try:
+                    event.stop_event()
+                except Exception:  # noqa: BLE001 - 老版本没有 stop_event 也无妨
+                    pass
+            except Exception as e:  # noqa: BLE001 - 回调路径绝不把异常抛给平台
+                self.logger.error(f"处理按钮点击异常: {e}")
+                import traceback
+
+                self.logger.debug(traceback.format_exc())
+
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
         """普通群消息：仅做新群欢迎与轮询兜底，不处理指令。"""
         try:
+            # 按钮点击**不应该**走到这里（唤醒阶段只放行按钮专用 handler），
+            # 保留这次尝试只是为了兼容极老版本 AstrBot 或未来行为变化：
+            # 真要有人把按钮事件漏进来，至少不会一路空转到其他插件/大模型。
+            if await self._handle_button_interaction(event):
+                try:
+                    event.stop_event()
+                except Exception:
+                    pass
+                return
             g = event.get_group_id()
             if g:
                 sid = event.get_sender_id()
@@ -1524,6 +2030,11 @@ class QQGroupManager(Star):
                 "需群主在群设置/添加机器人时的权限项里开启；同一机器人其他群可能正常。"
             ),
             40054005: "40054005＝msg_seq 去重：被动回复复用同一个 event_id 时要自增 msg_seq。",
+            40011021: (
+                "40011021＝键盘里的 group_id 无效：markdown 消息对按钮互斥分组的校验"
+                "比文本消息严，只认短 ASCII 值（插件已改用哈希短 ID，出现此码说明"
+                "配置里塞了自定义键盘）。"
+            ),
         }
         return table.get(c, f"错误码 {c} 未收录，建议对照平台文档或看 AstrBot / 适配器日志里的原始响应。")
 
@@ -1603,9 +2114,12 @@ class QQGroupManager(Star):
             return
 
         now = time.time()
-        key = f"{group_openid}:{member_openid}"
-        last = float(self._join_welcomed.get(key) or 0)
-        if last and now - last < self.JOIN_WELCOME_DEDUPE_SECONDS:
+        # 先抢占槽位再发：审批通过路径和入群事件路径是两条独立的并发流程，
+        # 谁先到谁发，"检查→发送→写记录"的旧写法在两者交错时必然双发。
+        if not self._claim_join_welcome(group_openid, member_openid):
+            last = float(
+                self._join_welcomed.get(f"{group_openid}:{member_openid}") or 0
+            )
             self.logger.info(
                 f"[入群欢迎] 群 {str(group_openid)[-6:]} 成员 "
                 f"{member_registry_lib.short_id(member_openid)} "
@@ -1624,7 +2138,7 @@ class QQGroupManager(Star):
                 username = ""
 
         try:
-            group_name = self.mod.get_group_meta(group_openid).get("name") or group_openid
+            group_name = self._welcome_group_name(group_openid)
         except Exception:  # noqa: BLE001
             group_name = group_openid
 
@@ -1637,24 +2151,57 @@ class QQGroupManager(Star):
         )
         if not str(text or "").strip():
             self.logger.info("[入群欢迎] 欢迎语模板为空，跳过")
+            self._release_join_welcome(group_openid, member_openid)
             return
 
         ok = await self._send_group_proactive(
             group_openid, text, platform_id or "", at_openid=member_openid
         )
         if ok:
-            self._join_welcomed[key] = now
-            self._prune_join_welcomed(now)
             self.logger.info(
                 f"[入群欢迎] 群 {str(group_openid)[-6:]} 已向 "
                 f"{member_registry_lib.short_id(member_openid)} 发送欢迎语"
             )
         else:
+            # 发失败就释放槽位，下次事件重推还能再试一次
+            self._release_join_welcome(group_openid, member_openid)
             self.logger.warning(
                 f"[入群欢迎] 群 {str(group_openid)[-6:]} 欢迎语发送失败："
                 f"主动消息需要该群允许机器人推送（部分群需群主在权限项里开启），"
                 f"也可能撞上频控或用户在客户端关掉了「允许主动发送」"
             )
+
+    def _claim_join_welcome(self, group_openid: str, member_openid: str) -> bool:
+        """抢占该成员本次入群的欢迎发送权（先写表、后发送）。
+
+        审批通过（按钮/指令/轮询）和 GROUP_MEMBER_ADD 是两条独立流程，
+        而且事件往往比审批流程的后续代码先跑完，所以"发送前检查、发送后
+        记录"必然漏掉并发窗口。改成发送前先把时间戳写进表里：谁先占到谁发，
+        另一条路径直接跳过。
+
+        Returns:
+            True 表示抢到（由本次调用负责发欢迎），False 表示窗口内已有人欢迎过。
+        """
+        now = time.time()
+        key = f"{group_openid}:{member_openid}"
+        last = float(self._join_welcomed.get(key) or 0)
+        if last and now - last < self.JOIN_WELCOME_DEDUPE_SECONDS:
+            return False
+        self._join_welcomed[key] = now
+        self._prune_join_welcomed(now)
+        return True
+
+    def _release_join_welcome(self, group_openid: str, member_openid: str) -> None:
+        """承认领失败／占位作废时把槽位还回去。"""
+        self._join_welcomed.pop(f"{group_openid}:{member_openid}", None)
+
+    def _welcome_group_name(self, group_openid: str) -> str:
+        """欢迎语里用的群名：优先真实群名，取不到才退回 openid。"""
+        try:
+            name = str(self.mod.get_group_meta(group_openid).get("name") or "").strip()
+        except Exception:  # noqa: BLE001
+            name = ""
+        return name or group_openid
 
     def _prune_join_welcomed(self, now: float | None = None) -> None:
         """清理入群欢迎去重表：过期记录删掉，最多留 500 条。"""
@@ -1913,6 +2460,16 @@ class QQGroupManager(Star):
         """查看待处理的入群申请"""
         await self._run_command(event, forced_cmd="/审批", skip=1)
 
+    @qgm_group.command("汇报")
+    async def g_report_daily(self, event: AstrMessageEvent):
+        """立刻查看群管日报（待处理申请 + 禁言人数）"""
+        await self._run_command(event, forced_cmd="/汇报", skip=1)
+
+    @qgm_group.command("体检")
+    async def g_presence_check(self, event: AstrMessageEvent):
+        """确认机器人还在不在已记录的群里（可选清理离群数据）"""
+        await self._run_command(event, forced_cmd="/体检", skip=1)
+
     @qgm_group.command("通过")
     async def g_approve(self, event: AstrMessageEvent):
         """通过入群申请（序号）"""
@@ -1985,7 +2542,28 @@ class QQGroupManager(Star):
         """
         self._refresh_timezone()
         self._ensure_poll_task()
+        self._ensure_report_task()
         self._ensure_member_event_injected()
+        # 1.4.0：把「申请从哪来」和「按钮能不能用」在启动日志里讲清楚，
+        # 排障时第一眼就能看出是配置问题还是平台问题。
+        mode = self._join_event_mode()
+        buttons_on, perm, limit = self._join_button_options()
+        self.logger.info(
+            f"[审批] 申请获取方式={mode}"
+            f"（{'事件为主+兜底轮询' if mode == 'event_first' else '纯轮询' if mode == 'interval' else '仅事件'}），"
+            f"兜底间隔={self._poll_interval_seconds()}s"
+        )
+        if buttons_on and not self._button_channel_ready():
+            self.logger.warning(
+                "[审批] 已开启「申请通知带审批按钮」，但当前 AstrBot 不满足按钮通道要求"
+                "（需要 AstrMessageEvent.get_button_interaction + filter.button_action，"
+                "后者缺失时点击事件会在唤醒阶段被丢弃），按钮自动禁用，退回纯文本通知"
+            )
+        elif buttons_on:
+            self.logger.info(
+                f"[审批] 审批按钮已启用：权限={perm}（{'仅群主/管理员' if perm == 'admin' else '所有人可点，插件复核'}），"
+                f"每条通知最多 {limit} 个申请"
+            )
         # 变体索引跟着词库走：这里同步建一次（词库没变时只是签名比对，很便宜），
         # 避免第一条举报进来时才现建、把审核延迟拉长。
         try:
@@ -2022,6 +2600,24 @@ class QQGroupManager(Star):
             except (asyncio.CancelledError, Exception):
                 pass
 
+        # 定时汇报任务同理：不取消的话重载后会和新实例一起发，一天变两条
+        rtask = self._report_task
+        self._report_task = None
+        if rtask and not rtask.done():
+            rtask.cancel()
+            try:
+                await rtask
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # 入群申请的「合并推送」任务也要收掉：它 sleep(2s) 后才真正发消息，
+        # 插件重载时旧实例的任务若还活着，会和（可能已经重发一遍的）新实例
+        # 各推一条，群里就重复了。取消掉最稳，漏掉的那批下次事件会重新触发。
+        for jtask in list(self._join_notify_tasks.values()):
+            if jtask and not jtask.done():
+                jtask.cancel()
+        self._join_notify_tasks.clear()
+
         # 成员档案攒在内存里（发言计数 60s 才落一次盘），退出前补一次
         try:
             self.members.save()
@@ -2048,6 +2644,217 @@ class QQGroupManager(Star):
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = asyncio.create_task(self._poll_loop())
             self.logger.debug("已启动入群申请轮询任务")
+
+    # ------------------------------------------------------------------
+    # 定时汇报（群管日报）
+    # ------------------------------------------------------------------
+    # 为什么是「后台任务 + 每分钟对点」而不是 cron：
+    #   插件里没有调度器依赖，AstrBot 也不给插件注册 cron 的稳定接口；
+    #   自建一个 30 秒 tick 的 asyncio 任务最简单，且能在插件重载后自愈。
+    # 为什么要「过了时间点就补发」而不是「整点才发」：
+    #   AstrBot 重启/插件热重载很容易错过整分钟，严格对点会整天不发。
+    #   代价是同一分钟内可能晚几分钟发，但一天只有一条，可以接受。
+    def _report_options(self) -> tuple[bool, tuple[int, int], str]:
+        """(是否开启, (时, 分), 目标群 openid)。配置非法时逐项兜底，不抛异常。"""
+        enabled = bool(self._read_config_value(
+            ("approval", "report_enabled"), default=False, legacy_keys=("report_enabled",),
+        ))
+        raw_time = str(self._read_config_value(
+            ("approval", "report_time"), default="09:00", legacy_keys=("report_time",),
+        ) or "").strip()
+        hh, mm = 9, 0
+        m = re.fullmatch(r"\s*(\d{1,2})\s*[:：]\s*(\d{1,2})\s*", raw_time)
+        if m:
+            h, mi = int(m.group(1)), int(m.group(2))
+            if 0 <= h <= 23 and 0 <= mi <= 59:
+                hh, mm = h, mi
+            else:
+                self.logger.warning(f"[日报] 汇报时间 {raw_time!r} 超出范围，按 09:00 处理")
+        elif raw_time:
+            self.logger.warning(f"[日报] 汇报时间 {raw_time!r} 格式不对（要 HH:MM），按 09:00 处理")
+        target = str(self._read_config_value(
+            ("approval", "report_group"), default="", legacy_keys=("report_group",),
+        ) or "").strip()
+        return enabled, (hh, mm), target
+
+    def _match_group(self, token: str) -> tuple[str, str] | None:
+        """把一个「群 openid / 群备注名 / 群名」解析成 (group_openid, platform_id)。"""
+        pid = self._known_groups.get(token)
+        if pid:
+            return token, pid
+        # 填的不是 openid 时，按「备注名 / 群名」再认一次：
+        # WebUI 里翻 openid 太反人类，管理员多半直接写群叫什么。
+        for g in self._known_groups:
+            try:
+                meta = self.mod.get_group_meta(g) or {}
+                names = {
+                    str(meta.get("alias") or "").strip(),
+                    str(meta.get("name") or "").strip(),
+                    str(self.mod.display_name(g) or "").strip(),
+                }
+            except Exception:  # noqa: BLE001
+                names = set()
+            if token in {n for n in names if n}:
+                self.logger.info(f"[日报] 汇报群按名称匹配到 {token} → {g[-6:]}")
+                return g, self._known_groups[g]
+        return None
+
+    def _report_candidates(self, target: str) -> list[tuple[str, str]]:
+        """定时汇报要发到哪些群（按群逐个汇报，不再只挑一个群）。
+
+        - 留空（默认）＝**所有已知群**，各自群里有待处理申请就发到各自群；
+        - 填了＝只汇报匹配到的群，支持逗号 / 空格分隔多个 openid 或群名，
+          适合「只想让主群收日报」的场景。
+        """
+        if not target:
+            return list(self._known_groups.items())
+        out: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for token in re.split(r"[,，;；\s]+", target):
+            token = token.strip()
+            if token:
+                hit = self._match_group(token)
+                if hit is None:
+                    self.logger.warning(
+                        f"[日报] 汇报群 {token!r} 既不是已知 openid 也匹配不到群名，已跳过"
+                    )
+                    continue
+                if hit[0] not in seen:
+                    seen.add(hit[0])
+                    out.append(hit)
+        return out
+
+    def _ensure_report_task(self) -> None:
+        """确保日报任务在跑。WebUI 里刚打开开关时也能立刻生效（不用重载插件）。"""
+        if not self._report_options()[0]:
+            return
+        if self._report_task is None or self._report_task.done():
+            self._report_task = asyncio.create_task(self._report_loop())
+            enabled, (hh, mm), target = self._report_options()
+            self.logger.info(
+                f"[日报] 定时汇报任务启动：每天 {hh:02d}:{mm:02d}（时区 {active_timezone_name()}），"
+                f"汇报范围={target or '所有已知群（按群逐个汇报）'}"
+            )
+
+    async def _report_loop(self) -> None:
+        while True:
+            try:
+                await self._maybe_send_report()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001
+                self.logger.error(f"[日报] 汇报任务异常: {e}")
+            await asyncio.sleep(30)
+
+    def _local_now(self):
+        tz = _active_tz()
+        return datetime.now(tz) if tz else datetime.now()
+
+    async def _maybe_send_report(self) -> None:
+        """每 30 秒被叫一次：到点后把「有未处理申请的群」逐个汇报一遍，每天一轮。
+
+        为什么按群发而不是发到一个汇总群：待处理申请是**各群自己的事**，
+        汇报发到群里是给该群管理员看的（谁申请进这个群、这个群还压着几条），
+        汇总到一个群既没意义也容易泄别的群的信息。
+        """
+        enabled, (hh, mm), target = self._report_options()
+        if not enabled:
+            return
+        now = self._local_now()
+        today = now.strftime("%Y-%m-%d")
+        if self._report_last_day == today:
+            return
+        if (now.hour, now.minute) < (hh, mm):
+            return
+        groups = self._report_candidates(target)
+        if not groups:
+            self.logger.warning("[日报] 还没有任何已知群，今天跳过定时汇报")
+            self._report_last_day = today  # 避免每 30 秒刷一次日志
+            self._save_report_state()
+            return
+
+        sent = skipped = failed = 0
+        for group_openid, platform_id in groups:
+            try:
+                pending = await self._refresh_requests(group_openid, platform_id)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(
+                    f"[日报] 拉取群 {group_openid[-6:]} 待处理申请失败，改用缓存: {e}"
+                )
+                pending = self._pending_list(group_openid)
+            # 拉取失败时缓存可能是旧的，宁可这轮不发，也别推一条「假日报」
+            err = self._join_error_code.get(group_openid)
+            if err:
+                self.logger.warning(
+                    f"[日报] 群 {group_openid[-6:]} 申请列表不可用（code={err}），本轮跳过"
+                )
+                skipped += 1
+                continue
+            if not pending:
+                skipped += 1
+                continue
+            text = await self._build_report_text(group_openid, platform_id, pending=pending)
+            ok = await self._send_group_proactive(group_openid, text, platform_id)
+            if ok:
+                sent += 1
+                self.logger.info(
+                    f"[日报] 已发送到群 {group_openid[-6:]}"
+                    f"（待处理 {len(pending)} 条，{now.strftime('%H:%M')}）"
+                )
+            else:
+                failed += 1
+                self.logger.warning(
+                    f"[日报] 群 {group_openid[-6:]} 发送失败；"
+                    "主动消息可能受权限/频控限制，可用 /群管 汇报 手动查看"
+                )
+        self._report_last_day = today
+        self._save_report_state()
+        self.logger.info(
+            f"[日报] 本轮完成：发送 {sent} 群 / 无待处理跳过 {skipped} 群 / 失败 {failed} 群"
+        )
+
+    async def _build_report_text(
+        self, group_openid: str, platform_id: str, *, pending: list[dict] | None = None,
+    ) -> str:
+        """拼日报正文：待处理申请（含名单）+ 当前禁言人数。
+
+        Args:
+            pending: 已经拉好的待处理列表（定时汇报会先拉一次用于判断「要不要发」），
+                不传则内部自己拉。
+        """
+        now = self._local_now()
+        if pending is None:
+            try:
+                pending = await self._refresh_requests(group_openid, platform_id)
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"[日报] 拉取待处理申请失败，改用缓存: {e}")
+                pending = self._pending_list(group_openid)
+        if pending:
+            limit = 10
+            lines = [self._fmt_request_line(i + 1, r) for i, r in enumerate(pending[:limit])]
+            if len(pending) > limit:
+                lines.append(f"…另有 {len(pending) - limit} 条，发 /群管 审批 全部 查看")
+            text_list = "\n".join(lines)
+        else:
+            text_list = "暂无待处理申请 ✅"
+
+        muted = 0
+        try:
+            data = await self._get_api(platform_id).get_mute_state(group_openid)
+            muted = len(data.get("members") or [])
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug(f"[日报] 查询禁言人数失败（按 0 计）: {e}")
+
+        meta = self.mod.get_group_meta(group_openid)
+        return str(self._render(
+            "msg_report_daily",
+            date=now.strftime("%Y-%m-%d"),
+            time=now.strftime("%H:%M"),
+            pending_count=len(pending),
+            list=text_list,
+            muted_count=muted,
+            group=str(meta.get("name") or "") or group_openid[-6:],
+        ))
 
     # ------------------------------------------------------------------
     # 新群欢迎（机器人进入新群首次交互）
@@ -2138,7 +2945,7 @@ class QQGroupManager(Star):
 
         # /举报：所有群成员都能用（举报的意义就在于此），不受管理员门槛限制
         if cmd == "/举报":
-            await self._cmd_report(event, parts)
+            await self._cmd_report_violation(event, parts)
             return
 
         # /群规：查看对所有人生效；增删改在 _cmd_rules 内部单独校验管理员
@@ -2187,7 +2994,11 @@ class QQGroupManager(Star):
         elif cmd == "/查禁言":
             await self._cmd_list_mutes(event)
         elif cmd == "/审批":
-            await self._cmd_list_requests(event)
+            await self._cmd_list_requests(event, parts)
+        elif cmd == "/汇报":
+            await self._cmd_report(event)
+        elif cmd == "/体检":
+            await self._cmd_presence(event, parts)
         elif cmd in ("/通过", "/拒绝"):
             await self._cmd_review(event, cmd, parts)
         elif cmd == "/管理登记":
@@ -2965,8 +3776,11 @@ class QQGroupManager(Star):
         """拉取最新申请并更新缓存，返回当前待审批列表。"""
         # 注意：本方法内部会更新 self._pending[group_openid]，
         # 调用方若需对比"新申请"，必须先保存上一轮缓存再调用。
-        api = self._get_api(platform_id)
+        # _get_api 也可能抛 QQApiError（平台实例不存在 / 未配置 appid），
+        # 必须一起包在 try 里：否则汇总模式下「某一个群的机器人已下线」
+        # 会让整个 /requests 接口 500，前端整页显示「加载失败」。
         try:
+            api = self._get_api(platform_id)
             data = await api.get_join_request_list(group_openid, limit=20)
             items = data.get("list") or []
             self._pending[group_openid] = items[-50:]
@@ -2985,30 +3799,118 @@ class QQGroupManager(Star):
             return self._pending_list(group_openid)
 
     def _fmt_request_line(self, idx: int, r: dict) -> str:
-        name = r.get("username") or r.get("member_openid", "?")
+        return f"{idx}. {self._request_brief(r)}"
+
+    # 待处理列表每页条数（被动回复，一条消息塞太多会被平台截断）
+    REQUEST_PAGE_SIZE = 10
+
+    @staticmethod
+    def _request_brief(r: dict) -> str:
+        """申请的一行摘要（不含序号）：昵称 (来源 时间) 验证消息。"""
+        name = r.get("username") or r.get("member_openid") or "?"
         t = fmt_rfc3339(r.get("apply_at", ""))
-        vmsg = ""
+        source = "邀请" if r.get("apply_source") == "invited" else "主动"
+        brief = f"{name} ({source} {t})"
         try:
             vi = r.get("verify_info") or {}
             if vi.get("method") == "verify_message" and vi.get("verify_message"):
-                vmsg = f" 验证消息: {vi['verify_message']}"
-        except Exception:
+                brief += f" 验证消息: {vi['verify_message']}"
+        except Exception:  # noqa: BLE001
             pass
-        source = "邀请" if r.get("apply_source") == "invited" else "主动"
-        return f"{idx}. {name} ({source} {t}){vmsg}"
+        return brief
 
-    async def _cmd_list_requests(self, event: AstrMessageEvent) -> None:
+    async def _cmd_list_requests(
+        self, event: AstrMessageEvent, parts: list[str] | None = None
+    ) -> None:
+        """待处理入群申请：本群 / 全部群，可翻页。
+
+        用法：
+            /群管 审批            本群第 1 页
+            /群管 审批 2          本群第 2 页
+            /群管 审批 全部       所有已知群汇总
+            /群管 审批 全部 2     汇总的第 2 页
+        """
         g = event.get_group_id()
+        args = [a for a in (parts or [])[1:]]
+        all_groups = any(a in ("全部", "全群", "所有", "all") for a in args)
+        page = 1
+        for a in args:
+            if a.isdigit():
+                page = max(1, int(a))
+        if all_groups:
+            await self._list_requests_all_groups(event, page)
+            return
+
         pending = self._pending_list(g)
         if not pending:
             pending = await self._refresh_requests(g, event.get_platform_id())
         if not pending:
             await self._reply(event, self._render("msg_requests_empty"))
             return
-        lines = [
-            self._fmt_request_line(i + 1, r) for i, r in enumerate(pending)
-        ]
+        per = self.REQUEST_PAGE_SIZE
+        total = len(pending)
+        pages = max(1, (total + per - 1) // per)
+        page = min(page, pages)
+        chunk = pending[(page - 1) * per: page * per]
+        lines = [f"（本群 {total} 条，第 {page}/{pages} 页）"]
+        for i, r in enumerate(chunk, start=(page - 1) * per + 1):
+            # 序号用全局序号，保证 /群管 通过 N 与本列表一一对应
+            lines.append(self._fmt_request_line(i, r))
+        if page < pages:
+            lines.append(f"下一页：/群管 审批 {page + 1}")
         await self._reply(event, self._render("msg_requests_list", list="\n".join(lines)))
+
+    async def _list_requests_all_groups(self, event: AstrMessageEvent, page: int) -> None:
+        """按群汇总所有待处理申请（被动回复）。
+
+        为什么要这个：群内通知受内联键盘行数、消息长度限制，一个群申请多了
+        根本看不全；管理员想一次看完全部群的情况，只能翻面板。
+        """
+        groups = self._managed_groups()
+        if not groups:
+            await self._reply(event, self._render("msg_requests_empty"))
+            return
+        rows: list[str] = []
+        total = 0
+        for gid, pid in groups.items():
+            try:
+                items = await self._refresh_requests(gid, pid)
+            except Exception as e:  # noqa: BLE001
+                self.logger.debug(f"[审批] 汇总时拉取群 {gid} 失败: {e}")
+                items = self._pending_list(gid)
+            if not items:
+                continue
+            name = self.mod.display_name(gid) or gid[-6:]
+            total += len(items)
+            rows.append(f"【{name}】{len(items)} 条")
+            for i, r in enumerate(items, start=1):
+                rows.append(f"  {i}. {self._request_brief(r)}")
+            rows.append("  处理：/群管 通过 序号（在该群发）")
+        if not rows:
+            await self._reply(event, self._render("msg_requests_empty"))
+            return
+        per = 30
+        pages = max(1, (len(rows) + per - 1) // per)
+        page = min(max(1, page), pages)
+        chunk = rows[(page - 1) * per: page * per]
+        head = f"（全部群汇总：{len(groups)} 个群，共 {total} 条，第 {page}/{pages} 页）"
+        body = "\n".join([head] + chunk)
+        if page < pages:
+            body += f"\n下一页：/群管 审批 全部 {page + 1}"
+        await self._reply(event, self._render("msg_requests_list", list=body))
+
+    async def _cmd_report(self, event: AstrMessageEvent) -> None:
+        """被动版日报：/群管 汇报 —— 立刻回一条，不等定时任务。
+
+        和定时汇报共用 _build_report_text，区别只是「回复当前消息」而不是主动推送：
+        主动消息要过频控、还依赖群未关闭主动消息，手动查的时候用被动回复更稳。
+        """
+        g = event.get_group_id()
+        if not g:
+            await self._reply(event, "这个指令要在群里发哈。")
+            return
+        text = await self._build_report_text(g, event.get_platform_id())
+        await self._reply(event, text)
 
     async def _cmd_review(self, event: AstrMessageEvent, cmd: str, parts: list[str]) -> None:
         g = event.get_group_id()
@@ -3040,56 +3942,123 @@ class QQGroupManager(Star):
 
         target = pending[idx - 1]
         member_openid = target.get("member_openid", "")
-        join_request_id = target.get("join_request_id", "")
         username = target.get("username", member_openid)
         reason = " ".join(parts[2:]) if len(parts) > 2 else None
-
-        api = self._get_api(event.get_platform_id())
         op = "approve" if cmd == "/通过" else "decline"
-        try:
-            await api.approve_join_request(
-                g, member_openid, join_request_id,
-                op=op, reject_reason=reason,
-            )
-        except QQApiError as e:
-            self.logger.error(f"审批失败: {e}")
-            await self._reply(event, self._render("msg_approve_failed", error=str(e)))
+
+        ok, err = await self._apply_join_decision(
+            event, g, event.get_platform_id(), target, op, reason=reason, via="指令"
+        )
+        if not ok:
+            await self._reply(event, self._render("msg_approve_failed", error=err))
             return
-        # 从缓存移除
-        pending.pop(idx - 1)
-        self._pending[g] = pending
-        self.logger.info(f"审批完成: group={g} op={op} member={member_openid} reason={reason}")
         if op == "approve":
             await self._reply(
                 event, self._render("msg_approve_success", username=username)
             )
-            if bool(self._read_config_value(("basic", "enable_welcome"), default=True, legacy_keys=("enable_welcome",))):
-                welcome = self._render(
-                    "msg_welcome_after_approve",
-                    username=username,
-                    group_name=g,
-                    bot_name=event.get_platform_id(),
-                    at=member_openid,
-                )
-                if await self._send_group_proactive(
-                    g, welcome, event.get_platform_id(), at_openid=member_openid
-                ):
-                    self.logger.info(f"已向群 {g} 推送欢迎语")
-                    # 记一笔：成员紧接着真进群时 GROUP_MEMBER_ADD 会再来一次，
-                    # 这里已经欢迎过就别重复欢迎了（去重窗口见 JOIN_WELCOME_DEDUPE_SECONDS）。
-                    self._join_welcomed[f"{g}:{member_openid}"] = time.time()
-                    self._prune_join_welcomed()
-                else:
-                    self.logger.warning(
-                        f"主动推送欢迎语失败（主动消息受限或频控），欢迎语已附在回复中"
-                    )
-                    await self._reply(
-                        event, f"{welcome}\n（主动推送受限，欢迎语如上）"
-                    )
+            welcome_left = await self._welcome_after_approve(
+                event, g, event.get_platform_id(), member_openid, username
+            )
+            if welcome_left:
+                await self._reply(event, welcome_left)
         else:
             await self._reply(
                 event, self._render("msg_reject_success", username=username)
             )
+
+    async def _apply_join_decision(
+        self, event: Optional[AstrMessageEvent], group_openid: str, platform_id: str,
+        req: dict, op: str, *, reason: str | None = None, via: str = "指令",
+    ) -> tuple[bool, str]:
+        """执行一次入群审批，并同步本地缓存（指令与按钮**共用这一份实现**）。
+
+        在 1.4.0 之前，审批逻辑只存在于 ``_cmd_review`` 里；消息按钮上线后如果
+        再复制一份，两边很容易漂移（比如一边删了缓存、另一边没删，导致申请
+        反复出现在列表里）。所以这里下沉成唯一出口。
+
+        Args:
+            event: 来源事件，可为 None（按钮路径也会传，仅用于日志/展示）。
+            req: 申请条目（至少含 ``member_openid`` / ``join_request_id``）。
+            op: ``approve`` / ``decline``。
+            via: 日志里的来源标记（指令 / 按钮）。
+
+        Returns:
+            ``(是否成功, 错误描述)``。
+        """
+        member_openid = str(req.get("member_openid") or "")
+        join_request_id = str(req.get("join_request_id") or "")
+        api = self._get_api(platform_id)
+        try:
+            await api.approve_join_request(
+                group_openid, member_openid, join_request_id,
+                op=op, reject_reason=reason,
+            )
+        except QQApiError as e:
+            self.logger.error(f"[审批] 失败（{via}）: {e} group={group_openid[-6:]}")
+            return False, str(e)
+        # 从待审批缓存移除，并清掉通知去重键——否则这条申请被处理掉之后，
+        # 轮询仍可能因为去重表还没过期而反复提示。
+        self._pending[group_openid] = [
+            x for x in (self._pending.get(group_openid) or [])
+            if self._req_key(x) != self._req_key(req)
+        ]
+        self._notified.get(group_openid, {}).pop(self._req_key(req), None)
+        self.logger.info(
+            f"[审批] 完成（{via}）: group={group_openid[-6:]} op={op} "
+            f"member={member_openid[-6:]} reason={reason or '-'}"
+        )
+        return True, ""
+
+    async def _welcome_after_approve(
+        self, event: Optional[AstrMessageEvent], group_openid: str, platform_id: str,
+        member_openid: str, username: str,
+    ) -> Optional[str]:
+        """审批通过后发欢迎语（主动消息优先，推不上去就把文案交回调用方）。
+
+        从 ``_cmd_review`` 里抽出来，让按钮路径也能复用同一套降级逻辑。
+
+        Args:
+            event: 来源事件，可为 None（按钮路径拿不到可回复的 msg_id，仅记日志）。
+
+        Returns:
+            主动消息推成功、欢迎语功能关闭、或文案为空时返回 None；
+            主动消息推失败时返回欢迎语文案，**调用方必须把它附在自己的回复里发出去**
+            —— 早期这里用 ``self._reply(event, ...)`` 兜底，但按钮事件的 event
+            没有 msg_id，适配器会直接跳过发送，欢迎语就这么静默消失了。
+        """
+        if not bool(self._read_config_value(
+            ("basic", "enable_welcome"), default=True, legacy_keys=("enable_welcome",)
+        )):
+            return None
+        if not self._claim_join_welcome(group_openid, member_openid):
+            # 成员真进群的 GROUP_MEMBER_ADD 已经先发过欢迎了，这里别再补一条
+            self.logger.info(
+                f"群 {group_openid[-6:]} 成员 "
+                f"{member_registry_lib.short_id(member_openid)} 刚欢迎过，审批路径跳过欢迎语"
+            )
+            return None
+        welcome = self._render(
+            "msg_welcome_after_approve",
+            username=username,
+            group_name=self._welcome_group_name(group_openid),
+            bot_name=platform_id,
+            at=member_openid,
+        )
+        if await self._send_group_proactive(
+            group_openid, welcome, platform_id, at_openid=member_openid
+        ):
+            self.logger.info(f"已向群 {group_openid[-6:]} 推送欢迎语")
+            return None
+        self.logger.warning(
+            "主动推送欢迎语失败（主动消息受限或频控），改由调用方随回执一起发出"
+        )
+        text = str(welcome or "").strip()
+        if not text:
+            self._release_join_welcome(group_openid, member_openid)
+            return None
+        # 这段文案马上就要由调用方发出去（回执/指令回复），槽位保持占用：
+        # 否则成员真正进群触发 GROUP_MEMBER_ADD 时会再欢迎一遍。
+        return text
 
     # ------------------------------------------------------------------
     # 入群申请轮询
@@ -3107,9 +4076,18 @@ class QQGroupManager(Star):
         return dict(self._known_groups)
 
     async def _poll_loop(self) -> None:
-        self.logger.info("入群申请轮询任务启动")
+        mode = self._join_event_mode()
+        self.logger.info(
+            "入群申请轮询任务启动"
+            f"（模式={mode}：event_first=事件为主+低频兜底，interval=纯轮询，off=关闭）"
+        )
         while True:
+            mode = self._join_event_mode()
             try:
+                if mode == "off":
+                    # 关闭轮询：只保留事件通道。申请仍可通过 /群管 审批 指令即时拉取。
+                    await asyncio.sleep(300)
+                    continue
                 groups = self._managed_groups()
                 if not groups:
                     self.logger.debug("轮询: 暂无可管理群，跳过")
@@ -3120,14 +4098,33 @@ class QQGroupManager(Star):
                         self.logger.error(f"轮询群 {g} 失败: {e}")
             except Exception as e:
                 self.logger.error(f"轮询循环异常: {e}")
-            interval = self._read_config_value(
-                ("approval", "poll_interval"), default=30, legacy_keys=("poll_interval",)
+            await asyncio.sleep(self._poll_interval_seconds())
+
+    def _poll_interval_seconds(self) -> int:
+        """本轮轮询间隔（秒）。
+
+        - ``interval``：用户配的 ``poll_interval``（老行为，默认 30s）；
+        - ``event_first``：读 ``poll_interval_fallback``（默认 300s），下限 60s。
+          事件通道已经把「即时性」接走了，轮询只负责「事件漏推时补一刀」，
+          没必要继续 30 秒一次去撞 30 QPM 的接口频控。
+        """
+        mode = self._join_event_mode()
+        if mode == "event_first":
+            raw = self._read_config_value(
+                ("approval", "poll_interval_fallback"), default=300,
+                legacy_keys=("poll_interval_fallback",),
             )
             try:
-                interval = int(interval)
+                return max(60, int(raw))
             except (TypeError, ValueError):
-                interval = 30
-            await asyncio.sleep(max(10, interval))
+                return 300
+        raw = self._read_config_value(
+            ("approval", "poll_interval"), default=30, legacy_keys=("poll_interval",)
+        )
+        try:
+            return max(10, int(raw))
+        except (TypeError, ValueError):
+            return 30
 
     async def _poll_group(self, group_openid: str, platform_id: str) -> None:
         # 用轮询任务自己维护的 _seen_requests 判断新申请，而不是拿共享的
@@ -3153,34 +4150,480 @@ class QQGroupManager(Star):
         self._seen_requests[group_openid] = {self._req_key(r) for r in items}
         if not new:
             return
-        self.logger.info(f"群 {group_openid} 发现 {len(new)} 个新入群申请")
-        if not bool(self._read_config_value(("approval", "enable_join_request_notify"), default=True, legacy_keys=("enable_join_request_notify",))):
+        self.logger.info(f"群 {group_openid} 轮询发现 {len(new)} 个入群申请")
+        await self._notify_join_requests(group_openid, platform_id, new, source="轮询")
+
+    # ------------------------------------------------------------------
+    # 入群申请 · 事件通道（1.4.0 起的主通道：GROUP_JOIN_REQUEST）
+    # ------------------------------------------------------------------
+    # 设计取舍：
+    # - 事件是**推送**：申请一提交就到，不用等下一轮轮询；平台只在机器人是
+    #   群管理员时才推（官方前置条件）。
+    # - 事件体比 join_request_list 的单条更全（多 username / verify_info /
+    #   auto_approved），所以事件到了就直接用事件体，不额外打接口。
+    # - 事件不能当被动消息回复（event_id 白名单只有 INTERACTION_CREATE /
+    #   GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE），通知仍然走主动消息。
+    # - 轮询不删，降级成兜底（event_first 模式，默认 5 分钟一次）。
+    JOIN_NOTIFY_DEDUPE_SECONDS = 600  # 同一条申请 10 分钟内只推一次
+
+    def _join_event_mode(self) -> str:
+        mode = str(self._read_config_value(
+            ("approval", "join_event_mode"), default="event_first",
+            legacy_keys=("join_event_mode",),
+        ) or "event_first").strip().lower()
+        return mode if mode in ("event_first", "interval", "off") else "event_first"
+
+    def _join_notify_enabled(self) -> bool:
+        return bool(self._read_config_value(
+            ("approval", "enable_join_request_notify"), default=True,
+            legacy_keys=("enable_join_request_notify",),
+        ))
+
+    def _join_button_options(self) -> tuple[bool, str, int]:
+        """(是否带按钮, 按钮权限 admin|everyone, 每条通知最多几个申请)。"""
+        enabled = bool(self._read_config_value(
+            ("approval", "notify_buttons"), default=True, legacy_keys=("notify_buttons",),
+        ))
+        perm = str(self._read_config_value(
+            ("approval", "button_permission"), default="admin",
+            legacy_keys=("button_permission",),
+        ) or "admin").strip().lower()
+        if perm not in ("admin", "everyone"):
+            perm = "admin"
+        try:
+            limit = int(self._read_config_value(
+                ("approval", "button_max_requests"), default=3,
+                legacy_keys=("button_max_requests",),
+            ) or 3)
+        except (TypeError, ValueError):
+            limit = 3
+        return enabled, perm, max(1, min(limit, button_kit.MAX_ROWS))
+
+    def _upsert_pending(self, group_openid: str, req: dict) -> bool:
+        """把一条申请并入待审批缓存，返回它是否是**新**申请。
+
+        去重键与轮询一致（member_openid + apply_at）。事件体字段比轮询结果全，
+        所以命中已有条目时用事件体覆盖（``username`` / ``verify_info`` 以事件为准）。
+        """
+        pending = self._pending.setdefault(group_openid, [])
+        key = self._req_key(req)
+        for idx, old in enumerate(pending):
+            if self._req_key(old) == key:
+                pending[idx] = {**old, **req}
+                return False
+        pending.append(req)
+        if len(pending) > 50:
+            del pending[:-50]
+        return True
+
+    async def _on_group_join_request(self, data: dict, platform_id: str | None = None) -> None:
+        """GROUP_JOIN_REQUEST 事件入口（由 member_event 注入的 handler 调过来）。"""
+        if not isinstance(data, dict):
             return
-        lines = []
-        pending = self._pending[group_openid]
-        for r in new:
+        group_openid = str(data.get("group_openid") or "")
+        member_openid = str(data.get("member_openid") or "")
+        if not group_openid or not member_openid:
+            self.logger.debug(f"[入群申请] 事件字段不完整，忽略: {list(data)[:6]}")
+            return
+        if not self._group_in_scope(group_openid, platform_id):
+            self.logger.debug(f"[入群申请] 群 {group_openid[-6:]} 不在管理范围，忽略")
+            return
+
+        now = time.time()
+        self._join_event_at[group_openid] = now
+        self._join_event_last = now
+        self._join_event_total += 1
+
+        apply_at = str(data.get("apply_at") or "")
+        req = {
+            "join_request_id": str(data.get("join_request_id") or ""),
+            "member_openid": member_openid,
+            "username": str(data.get("username") or ""),
+            "apply_at": apply_at,
+            "apply_source": str(data.get("apply_source") or ""),
+            "invited_by": str(data.get("invited_by") or ""),
+            "risk_tips": str(data.get("risk_tips") or ""),
+            "verify_info": data.get("verify_info") or {},
+            "bot": bool(data.get("bot")),
+            "_from": "event",
+        }
+        is_new = self._upsert_pending(group_openid, req)
+        if req["username"]:
             try:
-                idx = pending.index(r) + 1
-            except ValueError:
+                self._nick_cache.setdefault(group_openid, {})[member_openid] = req["username"]
+            except Exception:
+                pass
+
+        # 自动审批策略已经放行：这不是「待审批」，只发一条结果提示（可关）。
+        auto = data.get("auto_approved") if isinstance(data, dict) else None
+        if isinstance(auto, dict) and auto.get("strategy_id"):
+            strategy = str(auto.get("strategy_id"))
+            self.logger.info(
+                f"[入群申请] 群 {group_openid[-6:]} 成员 {member_openid[-6:]} 已被策略 {strategy} 自动通过"
+            )
+            # 自动通过 = 不需要人工处理，从待审批缓存里摘掉
+            self._pending[group_openid] = [
+                x for x in self._pending.get(group_openid, [])
+                if self._req_key(x) != self._req_key(req)
+            ]
+            if bool(self._read_config_value(
+                ("approval", "notify_auto_approved"), default=True,
+                legacy_keys=("notify_auto_approved",),
+            )):
+                text = self._render(
+                    "msg_join_request_auto_approved",
+                    username=req["username"] or member_openid[-6:],
+                    strategy=strategy,
+                    group_name=group_openid,
+                )
+                if await self._send_group_proactive(
+                    group_openid, text, platform_id or self._known_groups.get(group_openid, "")
+                ):
+                    self.logger.info(f"[入群申请] 已推送自动通过提示到群 {group_openid[-6:]}")
+            return
+
+        self.logger.info(
+            f"[入群申请] 群 {group_openid[-6:]} 收到申请"
+            f"（{'新申请' if is_new else '刷新已有申请'}）"
+            f" member={member_openid[-6:]} source={req['apply_source'] or '?'}"
+        )
+        if not is_new:
+            # 同一申请重复推送（断线重连补事件）：缓存已更新，通知去重交给 _notified。
+            pass
+        if not self._join_notify_enabled():
+            return
+        if is_new:
+            # 进合并队列，2 秒内的多条申请一起发（见 _flush_join_notify）
+            self._join_fresh.setdefault(group_openid, []).append(req)
+            self._schedule_join_notify(group_openid, platform_id)
+        else:
+            # 重复推送（断线补事件）：缓存已刷新，通知窗口内不再重复发，
+            # 但如果是「上一批还没发出」的新申请，仍然让它照常合并发送。
+            if self._join_fresh.get(group_openid):
+                self._schedule_join_notify(group_openid, platform_id)
+
+    JOIN_NOTIFY_DEBOUNCE_SECONDS = 2.0
+
+    def _schedule_join_notify(self, group_openid: str, platform_id: str | None) -> None:
+        """安排一次「合并推送」。已有待发任务时直接复用，不再叠加定时器。"""
+        task = self._join_notify_tasks.get(group_openid)
+        if task is not None and not task.done():
+            return
+        try:
+            self._join_notify_tasks[group_openid] = asyncio.create_task(
+                self._flush_join_notify(group_openid, platform_id)
+            )
+        except RuntimeError as e:
+            # 没有事件循环（理论上不会发生，事件回调本身就在循环里）。
+            # 批次会留在 _join_fresh 里，下一条事件到达时会再次触发合并推送。
+            self.logger.warning(f"[入群申请] 无法创建合并任务（{e}），等下次事件重试")
+
+    async def _flush_join_notify(self, group_openid: str, platform_id: str | None) -> None:
+        """等一小会儿把同批申请合并成一条通知发出。"""
+        try:
+            await asyncio.sleep(self.JOIN_NOTIFY_DEBOUNCE_SECONDS)
+            batch = self._join_fresh.pop(group_openid, [])
+            if not batch:
+                return
+            if not self._join_notify_enabled():
+                self.logger.debug("[入群申请] 通知已关闭，合并批次丢弃")
+                return
+            self.logger.debug(f"[入群申请] 合并推送 {len(batch)} 条申请")
+            await self._notify_join_requests(
+                group_openid, platform_id, batch, source="事件"
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.error(f"[入群申请] 合并推送失败: {e}")
+        finally:
+            self._join_notify_tasks.pop(group_openid, None)
+
+    async def _notify_join_requests(
+        self, group_openid: str, platform_id: str | None, reqs: list[dict],
+        *, source: str = "轮询",
+    ) -> int:
+        """把一批新申请推送到群里（事件与轮询共用），返回实际推送的条数。
+
+        统一出口的好处：按钮、去重、失败降级只有一份实现——
+        之前事件/轮询各写一套的话，按钮很容易只在其中一条路径上生效。
+        """
+        if not reqs:
+            return 0
+        api = self._api_for_group_or_default(group_openid, platform_id or "")
+        if api is None:
+            self.logger.warning(
+                f"[入群申请] 群 {group_openid[-6:]} 找不到可用 API 客户端，通知跳过"
+            )
+            return 0
+
+        now = time.time()
+        dedupe_sec = self.JOIN_NOTIFY_DEDUPE_SECONDS
+        notified = self._notified.setdefault(group_openid, {})
+        fresh = [
+            r for r in reqs
+            if now - notified.get(self._req_key(r), 0) >= dedupe_sec
+        ]
+        if not fresh:
+            self.logger.debug(f"[入群申请] {source}通知：{len(reqs)} 条申请近期已通知过，跳过")
+            return 0
+
+        pending = self._pending.get(group_openid) or []
+        lines = []
+        for r in fresh:
+            try:
+                idx = next(
+                    i + 1 for i, x in enumerate(pending) if self._req_key(x) == self._req_key(r)
+                )
+            except StopIteration:
                 idx = len(pending)
             lines.append(self._fmt_request_line(idx, r))
         text = self._render("msg_join_request_notify", list="\n".join(lines))
-        api = self._get_api(platform_id)
-        # 防重复推送：多个轮询任务并发时，同一申请短时间内（10 分钟）只推一次。
-        # 注意：必须在 send 成功后才记录，失败可重试。
-        now = time.time()
-        notified = self._notified.setdefault(group_openid, {})
-        fresh = [r for r in new if now - notified.get(self._req_key(r), 0) >= 600]
-        if not fresh:
-            self.logger.debug("新申请已在近期通知过，跳过重复推送")
-            return
+
+        buttons_on, perm, limit = self._join_button_options()
+        keyboard = None
+        if buttons_on and self._button_channel_ready():
+            keyboard = button_kit.join_request_keyboard(
+                fresh, permission=perm, max_requests=limit
+            )
+            if len(fresh) > limit:
+                self.logger.info(
+                    f"[入群申请] {len(fresh)} 条新申请，按钮只带前 {limit} 条"
+                    f"（行数上限 {button_kit.MAX_ROWS}），其余请用 /群管 审批 处理"
+                )
+        elif buttons_on:
+            self.logger.info("[入群申请] 当前 AstrBot 版本不支持按钮回调，转为纯文本通知")
+
+        ok = await self._send_group_proactive(
+            group_openid, text, platform_id or "", keyboard=keyboard
+        )
+        if not ok:
+            self.logger.warning(
+                f"[入群申请] 群 {group_openid[-6:]} 推送申请通知失败"
+                f"（QQ 主动消息可能受权限/频控限制，可用 /群管 审批 手动查看）"
+            )
+            return 0
+        for r in fresh:
+            notified[self._req_key(r)] = now
+        self.logger.info(
+            f"[入群申请] 已推送 {len(fresh)} 条申请通知到群 {group_openid[-6:]}"
+            f"（来源={source}，按钮={button_kit.describe_keyboard(keyboard) if keyboard else '无'}）"
+        )
+        return len(fresh)
+
+    # ------------------------------------------------------------------
+    # 消息按钮回调（INTERACTION_CREATE → AstrBot 的按钮事件）
+    # ------------------------------------------------------------------
+    # 链路（这条链路有平台差异，写清楚免得以后踩坑）：
+    #   用户点按钮 → 平台推 INTERACTION_CREATE（intent 1<<26，botpy 自带 parser）
+    #   → AstrBot 的 qqofficial 适配器 _handle_interaction_create 里
+    #     **先 PUT /interactions/{id} 回 code=0**，再把点击转成一条普通
+    #     AstrBotMessageEvent（消息链里是一个 ButtonInteraction 组件，
+    #     message_str 为空，sender=group_member_openid，group_id=group_openid）
+    #   → 插件用专门的 on_button_action（@filter.button_action）认领：
+    #     唤醒阶段只放行挂了 ButtonActionFilter 的 handler，普通消息 handler
+    #     根本收不到按钮事件。
+    #
+    # 两个由此推出的结论：
+    # 1. 插件**不能**再自己 PUT 一次（官方「同一 interaction_id 只能回应一次」，
+    #    重复回应会报错），所以操作失败/无权限的反馈只能靠回一条消息。
+    # 2. 回执要用 event_id=<互动事件 id> 直连 API：适配器处理按钮点击时没有
+    #    登记 msg_id，event.send() 走 send_by_session 会因「没有 msg_id」被跳过。
+    def _button_channel_ready(self) -> bool:
+        """当前 AstrBot 是否既能把点击转成事件、又肯把它交给本插件。
+
+        两个条件缺一不可：
+        1. ``AstrMessageEvent.get_button_interaction``（事件里带得出点击对象）；
+        2. ``filter.button_action``（能注册带 ButtonActionFilter 的 handler）。
+        少了第 2 条，点击事件会在唤醒阶段被丢掉，插件永远收不到 —— 这就是
+        开发期首版「点了按钮只变灰、服务端啥也没发生」的原因。
+        """
+        if not _BUTTON_ACTION_SUPPORTED:
+            return False
+        return callable(getattr(AstrMessageEvent, "get_button_interaction", None))
+
+    def _button_interaction_of(self, event: AstrMessageEvent):
+        """取出事件里的按钮点击对象；不是按钮事件就返回 None。"""
+        getter = getattr(event, "get_button_interaction", None)
+        if callable(getter):
+            try:
+                bi = getter()
+            except Exception:
+                bi = None
+            if bi is not None:
+                return bi
+        # 兼容路径：没有 get_button_interaction 的版本，用鸭子类型在消息链里找
         try:
-            await api.send_group_message(group_openid, text)
-            self.logger.info(f"已推送入群申请通知到群 {group_openid}")
-            for r in fresh:
-                notified[self._req_key(r)] = now
-        except QQApiError as e:
-            self.logger.warning(f"推送申请通知失败: {e}（QQ 主动消息可能受 24h 互动限制）")
+            comps = event.get_messages() or []
+        except Exception:
+            comps = []
+        for comp in comps:
+            if hasattr(comp, "interaction_id") and hasattr(comp, "action_id"):
+                return comp
+        return None
+
+    def _button_operator_allowed(self, operator: str, perm: str) -> bool:
+        """按钮操作者权限复核（平台一道闸 + 插件一道闸）。
+
+        - 按钮 ``permission.type=1``（perm=admin）时，客户端只让群主/管理员
+          点得动 —— 这是第一道闸。官方群消息里拿不到 ``member_role``，
+          插件无法自己验群角色，所以这种情况下信任平台。
+        - ``admin_openids`` 名单命中直接放行（插件自定义管理员可能不是
+          QQ 群管理员，靠名单补上）。
+        - ``perm=everyone`` 时**绝不**信任平台：必须名单命中，
+          否则任何群成员点一下就能放人进群。
+        """
+        extra = self._read_config_value(
+            ("admin", "admin_openids"), default=[], legacy_keys=("admin_openids",)
+        ) or []
+        if operator and operator in [str(x) for x in extra]:
+            return True
+        return perm == "admin"
+
+    async def _reply_button_result(
+        self, event: Optional[AstrMessageEvent], group_openid: str,
+        platform_id: str, text: str,
+    ) -> None:
+        """按钮操作的回执：优先 passive（event_id=互动事件 id），再退主动消息/普通回复。"""
+        content = str(text or "").strip()
+        if not content:
+            return
+        bi = self._button_interaction_of(event) if event is not None else None
+        iid = str(getattr(bi, "interaction_id", "") or "") if bi is not None else ""
+        api = self._api_for_group_or_default(group_openid, platform_id or "") if group_openid else None
+        if api is not None and iid:
+            try:
+                await api.send_group_message(group_openid, content, event_id=iid)
+                return
+            except QQApiError as e:
+                self.logger.warning(
+                    f"[按钮] 被动回执失败（event_id={iid[:8]}…），改用普通回复: {e}"
+                )
+        if api is not None and group_openid:
+            if await self._send_group_proactive(group_openid, text, platform_id or ""):
+                return
+        if event is not None:
+            await self._reply(event, text)
+
+    async def _handle_button_interaction(self, event: AstrMessageEvent) -> bool:
+        """处理消息按钮点击，返回 True 表示这条事件已被本插件消费。"""
+        bi = self._button_interaction_of(event)
+        if bi is None:
+            return False
+        data = str(getattr(bi, "data", "") or "")
+        if not data.startswith(button_kit.CALLBACK_PREFIX):
+            return False  # 其他插件/其他用途的按钮，不插手
+
+        iid = str(getattr(bi, "interaction_id", "") or "")
+        now = time.time()
+        # 幂等：同一 interaction 只处理一次（用户连点会重复推事件）
+        self._interaction_done = {
+            k: v for k, v in self._interaction_done.items() if now - v < 3600
+        }
+        if iid and iid in self._interaction_done:
+            self.logger.debug(f"[按钮] interaction {iid[:8]}… 重复点击，忽略")
+            return True
+        if iid:
+            self._interaction_done[iid] = now
+        self._interaction_total += 1
+        self._interaction_last = now
+
+        group_openid = str(event.get_group_id() or "")
+        operator = str(event.get_sender_id() or "")
+        platform_id = event.get_platform_id()
+        action = button_kit.parse_join_action(data)
+        if action is None or not group_openid:
+            self._interaction_last_result = "数据无效"
+            self.logger.warning(
+                f"[按钮] 回调数据无法解析或不在群场景（可能被伪造）：{data[:60]}"
+            )
+            await self._reply_button_result(
+                event, group_openid, platform_id,
+                self._render("msg_join_request_button_gone"),
+            )
+            return True
+
+        if not self._group_in_scope(group_openid, platform_id):
+            # 通知只发在生效范围内的群；配置被改过之后仍可能点到旧消息上的按钮，
+            # 这里也要挡一道，避免越权处理。
+            self._interaction_last_result = "群不在生效范围"
+            self.logger.warning(
+                f"[按钮] 群 {group_openid[-6:]} 不在生效范围内，忽略本次点击"
+            )
+            return True
+
+        _on, perm, _limit = self._join_button_options()
+        if not self._button_operator_allowed(operator, perm):
+            self._interaction_last_result = "无权限"
+            self.logger.warning(
+                f"[按钮] 操作者 {operator[-6:]} 不在管理员名单，拒绝其审批操作"
+            )
+            await self._reply_button_result(
+                event, group_openid, platform_id,
+                self._render("msg_join_request_button_denied"),
+            )
+            return True
+
+        # 真值以本地待审批列表为准：button_data 是不可信输入，只当「意图」。
+        key = (str(action["member_openid"]), str(action["apply_at"]))
+        pending = self._pending.get(group_openid) or []
+        target = next((x for x in pending if self._req_key(x) == key), None)
+        if target is None:
+            # 缓存里没有：可能刚被指令处理掉，也可能缓存丢了 —— 主动拉一次对账
+            try:
+                fresh = await self._refresh_requests(group_openid, platform_id)
+            except Exception:
+                fresh = []
+            target = next(
+                (x for x in (fresh or []) if self._req_key(x) == key), None
+            )
+        if target is None:
+            self._interaction_last_result = "已处理/已失效"
+            self.logger.info(
+                f"[按钮] 申请已不在待审批列表（member={key[0][-6:]} apply_at={key[1]}），"
+                f"回执「已处理或已失效」"
+            )
+            await self._reply_button_result(
+                event, group_openid, platform_id,
+                self._render("msg_join_request_button_gone"),
+            )
+            return True
+
+        op = "approve" if action["op"] == button_kit.OP_APPROVE else "decline"
+        username = str(target.get("username") or key[0][-6:])
+        ok, err = await self._apply_join_decision(
+            event, group_openid, platform_id, target, op, via="按钮"
+        )
+        if not ok:
+            self._interaction_last_result = f"失败: {err}"
+            await self._reply_button_result(
+                event, group_openid, platform_id,
+                self._render("msg_join_request_button_failed", username=username, error=err),
+            )
+            return True
+
+        if op == "approve":
+            self._interaction_last_result = f"通过 {username}"
+            # 先试一次主动推送欢迎语；推不上去（@ 的成员还没真正进群、或主动消息
+            # 受限）就把它和回执合并，用 passive（event_id=互动事件 id）一次发出：
+            # 这条通道不吃主动消息配额，也不依赖 msg_id，可靠得多。
+            text = self._render("msg_join_request_button_ok", username=username)
+            welcome_left = await self._welcome_after_approve(
+                event, group_openid, platform_id,
+                str(target.get("member_openid") or ""), username,
+            )
+            if welcome_left:
+                text = f"{text}\n\n{welcome_left}"
+            await self._reply_button_result(
+                event, group_openid, platform_id, text
+            )
+        else:
+            self._interaction_last_result = f"拒绝 {username}"
+            await self._reply_button_result(
+                event, group_openid, platform_id,
+                self._render("msg_join_request_button_rejected", username=username),
+            )
+        return True
 
     # ------------------------------------------------------------------
     # Web API（WebUI）
@@ -3216,15 +4659,34 @@ class QQGroupManager(Star):
     _MOD_MODULE_RE = re.compile(r"\{at\}|\{avatar(?::\d+)?\}")
 
     def _mod_tpl(self, group: str, key: str, **kw) -> str:
-        """话术渲染：本群覆盖 -> 全局自定义 -> 内置默认。
+        """话术渲染：本群覆盖 -> 面板全局话术 -> 插件配置 -> 内置默认。
 
         注意 moderation.render_tpl 会把「未提供的 {变量}」一并清空，
         所以内置模块占位符（{at} / {avatar}）必须先换成哨兵保护起来，
         渲染完再还原，否则会像写错变量一样被静默吃掉。
         """
-        tpl = (self.mod.get_templates(group) or {}).get(key)
-        if not tpl:
-            tpl = moderation.DEFAULT_TEMPLATES.get(key, "")
+        # 第三步「插件配置」以前是漏的：面板「消息模板」页保存 mod_* 时写的是
+        # 插件配置（web_tpl_formats_save → _write_config_value），而这里只看
+        # moderation 存储里的全局/群覆盖，于是「改了审核话术但群里没变」。
+        store = getattr(self.mod, "templates", None)
+        if not isinstance(store, dict):
+            store = {}
+        group_override = ((store.get("groups") or {}).get(group) or {}).get(key)
+        global_override = (store.get("global") or {}).get(key)
+        if group_override:
+            tpl = group_override
+        elif global_override:
+            tpl = global_override
+        else:
+            tpl = ""
+            if hasattr(self, "config"):
+                tpl = self._read_config_value(
+                    ("templates", key), default="", legacy_keys=(key,)
+                )
+            if not str(tpl or "").strip():
+                # 回落到 moderation 自己的取法（含内置默认），保持可注入/可测试
+                tpl = ((self.mod.get_templates(group) or {}).get(key)
+                       or moderation.DEFAULT_TEMPLATES.get(key, ""))
         target = str(kw.pop("at", "") or "")
         guards: list[str] = []
 
@@ -4175,7 +5637,11 @@ class QQGroupManager(Star):
             self.logger.debug(f"[审核] 自动巡检异常: {e}")
 
     # ---------------- /举报 ----------------
-    async def _cmd_report(self, event: AstrMessageEvent, parts: list[str]) -> None:
+    async def _cmd_report_violation(
+        self, event: AstrMessageEvent, parts: list[str]
+    ) -> None:
+        """/举报：引用违规消息 → 群规审核（原实现曾误命名为 _cmd_report，
+        与「/群管 汇报」的日报方法重名，被后者覆盖导致 /汇报 直接 TypeError）。"""
         event.call_llm = True
         g = event.get_group_id()
         if not g:
@@ -4522,8 +5988,9 @@ class QQGroupManager(Star):
                 await self._reply(event, "已发送 ✅ 此后本群不再触发「首条消息欢迎」。")
             else:
                 await self._reply(
+                    event,
                     "发送失败。主动消息要求群内 24 小时内有人 @ 过机器人（11251），"
-                    "先在本群 @ 我一下再试；入群事件那条路不受此限制。"
+                    "先在本群 @ 我一下再试；入群事件那条路不受此限制。",
                 )
             return
         if sub == "测试":
@@ -4556,7 +6023,7 @@ class QQGroupManager(Star):
         # 默认：状态
         s = self.mod.stats(g)
         await self._reply(event, (
-            f"【本群审核状态】" + chr(10) + ""
+            "【本群审核状态】" + chr(10) + ""
             f"举报审核：{'开启' if st.get('enabled') else '关闭'}｜试运行：{'开' if st.get('dry_run') else '关'}"
             f"｜巡检：{'开' if st.get('auto_scan') else '关'}" + chr(10) + ""
             f"群规：{len(self.mod.get_rules(g))} 条｜阈值：{st.get('confidence_threshold')}｜上限：{fmt_duration(int(st.get('max_mute_seconds') or 0))}" + chr(10) + ""
@@ -5274,14 +6741,14 @@ class QQGroupManager(Star):
         except ValueError:
             ip = None
         if ip is not None:
-            if Main._ip_is_public(ip):
+            if QQGroupManager._ip_is_public(ip):
                 return ""
             return "不抓取本机 / 内网地址"
         # 域名：解析结果全部为公网才放行（解析失败就交给 urlopen 报错）
         try:
             for info in socket.getaddrinfo(host, None):
                 addr = info[4][0]
-                if not Main._ip_is_public(ipaddress.ip_address(addr)):
+                if not QQGroupManager._ip_is_public(ipaddress.ip_address(addr)):
                     return "该域名解析到本机 / 内网地址，已拒绝"
         except (socket.gaierror, ValueError):
             pass
@@ -5297,7 +6764,7 @@ class QQGroupManager(Star):
     @staticmethod
     def _fetch_upstream_raw(url: str, timeout: float = LEXICON_UPSTREAM_TIMEOUT) -> bytes:
         """阻塞下载（放到线程里跑）。中文路径必须转义，否则 urllib 会按 ascii 编码报错。"""
-        err = Main._check_url_public(url)
+        err = QQGroupManager._check_url_public(url)
         if err:
             raise ValueError(err)
         safe_url = urllib.parse.quote(url.strip(), safe=":/?&=#%+")
@@ -5861,7 +7328,7 @@ class QQGroupManager(Star):
         try:
             for p in self.context.platform_manager.platform_insts:
                 meta = p.meta()
-                if meta.name != "qq_official":
+                if meta.name not in QQ_PLATFORM_NAMES:
                     continue
                 cfg = getattr(p, "config", None) or {}
                 appid = str(cfg.get("appid", ""))
@@ -5911,6 +7378,32 @@ class QQGroupManager(Star):
             "pending_count": sum(len(v) for v in self._pending.values()),
             "poll_interval": int(self._read_config_value(("approval", "poll_interval"), default=30, legacy_keys=("poll_interval",)) or 30),
             "poll_running": bool(self._poll_task and not self._poll_task.done()),
+            # 1.4.0：申请获取方式（事件为主 / 纯轮询 / 仅事件）与按钮通道状态
+            "approval": {
+                "join_event_mode": self._join_event_mode(),
+                "poll_interval_effective": self._poll_interval_seconds(),
+                "poll_interval_fallback": int(self._read_config_value(("approval", "poll_interval_fallback"), default=300, legacy_keys=("poll_interval_fallback",)) or 300),
+                "buttons": {
+                    "enabled": bool(self._join_button_options()[0]),
+                    "channel_ready": self._button_channel_ready(),
+                    "permission": self._join_button_options()[1],
+                    "max_requests": self._join_button_options()[2],
+                },
+                "join_event": {
+                    "total": self._join_event_total,
+                    "last_at": self._join_event_last,
+                    "last_text": fmt_ts(self._join_event_last) if self._join_event_last else "",
+                    # 有群收到过事件 = 事件通道确实在推；一个都没收到多半是
+                    # 机器人不是群管理员（平台不推），或者注入后还没重连完成
+                    "groups_seen": len(self._join_event_at),
+                },
+                "interaction": {
+                    "total": self._interaction_total,
+                    "last_at": self._interaction_last,
+                    "last_text": fmt_ts(self._interaction_last) if self._interaction_last else "",
+                    "last_result": self._interaction_last_result,
+                },
+            },
             "log": {
                 "level": str(self._read_config_value(("log", "log_level"), default="DEBUG", legacy_keys=("log_level",))),
                 "entries": self.logger.last_index + 1,
@@ -5944,14 +7437,29 @@ class QQGroupManager(Star):
         """
         out: list[dict] = []
         for g, pid in self._known_groups.items():
-            meta = self.mod.get_group_meta(g)
+            # 逐群容错：群名/备注/机器人标签任一取不到，都退回可用的最小信息，
+            # 不能让一个坏条目把整个下拉框和 /requests 打成 500。
+            name = alias = display = ""
+            bot = ""
+            try:
+                meta = self.mod.get_group_meta(g) or {}
+                name = str(meta.get("name") or "")
+                alias = str(meta.get("alias") or "")
+                display = self.mod.display_name(g) or ""
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"读取群 {g} 元数据失败（已跳过展示名）: {e}")
+            try:
+                bot = self._bot_label(pid).get("display") or pid or ""
+            except Exception as e:  # noqa: BLE001
+                self.logger.warning(f"读取群 {g} 的机器人信息失败: {e}")
+                bot = pid or ""
             out.append({
                 "group_openid": g,
                 "platform_id": pid,
-                "name": str(meta.get("name") or ""),
-                "alias": str(meta.get("alias") or ""),
-                "display": self.mod.display_name(g),
-                "bot": self._bot_label(pid).get("display") or pid,
+                "name": name,
+                "alias": alias,
+                "display": display or name or alias,
+                "bot": bot,
             })
         return out
 
@@ -6208,15 +7716,54 @@ class QQGroupManager(Star):
 
         不传（或传 all）＝汇总全部已知群的申请（每条带所属群，便于分群查看）；
         传具体群＝只刷新并展示那一个群。_refresh_requests 内部失败会退回本地缓存。
+
+        最外层再包一层兜底：面板这一块宁可显示「哪一步挂了」，也不要整块
+        「加载失败: Internal server error」——500 一到前端就只剩一句通用报错，
+        排查时完全看不出是哪一步炸的（历史现象：群选择器/群名元数据坏掉也会 500）。
         """
+        try:
+            return await self._web_requests_impl()
+        except Exception as ex:  # noqa: BLE001
+            import traceback
+
+            tb = traceback.format_exc()
+            self.logger.error(f"[/requests] 查询待审批列表失败: {ex}\n{tb}")
+            return json_response({
+                "error": "requests_failed",
+                "message": str(ex) or ex.__class__.__name__,
+                "scope": "all",
+                "group_openid": "",
+                "platform_id": "",
+                "group_display": "",
+                "groups": [],
+                "selected": [],
+                "requests": [],
+                "errors": [{"group_openid": "", "group_display": "全部", "bot": "",
+                            "error": str(ex) or ex.__class__.__name__}],
+            })
+
+    async def _web_requests_impl(self):
         sel, err = self._pick_groups(request.query.get("group_openid", type=str) or "")
         if err:
             return json_response(err)
         rows: list[dict] = []
+        errors: list[dict] = []
         for e in sel:
             g, pid = e["group_openid"], e["platform_id"]
             label = e.get("display") or g[:12]
-            pending = await self._refresh_requests(g, pid)
+            # 逐群容错：机器人下线 / 平台实例被删 / 单群接口报错，只跳过该群，
+            # 不能把整页打成 500（历史 bug：一个失效群让「待处理申请」整块加载失败）
+            try:
+                pending = await self._refresh_requests(g, pid)
+            except Exception as ex:  # noqa: BLE001
+                self.logger.warning(f"群 {g} 拉取待审批申请失败，已跳过: {ex!s}")
+                errors.append({
+                    "group_openid": g,
+                    "group_display": label,
+                    "bot": e.get("bot") or "",
+                    "error": str(ex),
+                })
+                continue
             for r in pending:
                 rows.append({
                     "seq": len(rows) + 1,  # 汇总模式下跨群连续编号
@@ -6239,6 +7786,7 @@ class QQGroupManager(Star):
             "groups": self._group_entries(),
             "selected": [e["group_openid"] for e in sel],
             "requests": rows,
+            "errors": errors,
         })
 
     async def web_logs(self):
@@ -6389,7 +7937,6 @@ class QQGroupManager(Star):
     def _coerce_config_value(item: dict, raw):
         """按 schema 类型转换配置值，返回 (value, error)。"""
         t = str(item.get("type") or "string")
-        desc = str(item.get("description") or item.get("hint") or "该项")
         if t == "bool":
             if isinstance(raw, str):
                 return raw.strip().lower() in ("1", "true", "yes", "on", "y", "是", "开"), None
@@ -6430,6 +7977,11 @@ class QQGroupManager(Star):
             value = self._read_config_value(
                 ("templates", key), default=ischema.get("default", ""), legacy_keys=(key,)
             )
+            if key in moderation.DEFAULT_TEMPLATES:
+                # 审核话术的实际生效值可能是面板设的全局话术，以它为准回显
+                override = ((self.mod.templates or {}).get("global") or {}).get(key)
+                if override:
+                    value = override
             templates.append({
                 "key": key,
                 "description": str(ischema.get("description") or key),
@@ -6483,7 +8035,12 @@ class QQGroupManager(Star):
             self._tpl_formats[key] = meta
             if "value" in item:
                 try:
-                    self._write_config_value("templates", key, str(item.get("value") or ""))
+                    value = str(item.get("value") or "")
+                    self._write_config_value("templates", key, value)
+                    if key in moderation.DEFAULT_TEMPLATES:
+                        # 审核话术由 moderation 存储渲染（_mod_tpl），配置只是它的一个入口。
+                        # 这里同步写一份到全局话术，否则「面板保存成功但群里没变」。
+                        self.mod.set_templates("global", {key: value})
                     content_changed = True
                 except Exception as e:
                     errors.append(f"{key} 内容保存失败: {e}")

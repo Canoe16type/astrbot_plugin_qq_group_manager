@@ -59,7 +59,7 @@ def _install_gateway_sniffer(logger) -> None:
                 t = str(msg.get("t") or "")
                 if t and t not in ("READY", "RESUMED"):
                     low = t.lower()
-                    if "member" in low or "robot" in low:
+                    if "member" in low or "robot" in low or "join" in low:
                         logger.info(f"[成员事件][网关] 收到事件 {t}")
                     else:
                         logger.debug(f"[成员事件][网关] 收到事件 {t}")
@@ -155,6 +155,18 @@ def install_member_event_support(plugin, context) -> int:
         client.on_group_add_robot = on_group_add_robot
         logger.info(f"[入群事件] 实例 {pid}: 已注册 GROUP_ADD_ROBOT handler")
 
+        # 0.5) 退群事件 GROUP_DEL_ROBOT：同样是 botpy 自带 parser、
+        #      同一个 intent 位（GROUP_AND_C2C_EVENT, 1<<25），挂 handler 即可。
+        #      用途是「机器人被移出群 → 自动回收该群数据」，避免面板里堆孤儿群。
+        async def on_group_del_robot(data, _pid=pid):
+            try:
+                await plugin._on_group_del_robot(data, _pid)
+            except Exception:
+                logger.exception("[退群事件] 处理异常")
+
+        client.on_group_del_robot = on_group_del_robot
+        logger.info(f"[退群事件] 实例 {pid}: 已注册 GROUP_DEL_ROBOT handler")
+
         # 1) parser：GROUP_MEMBER_REMOVE 事件体 -> 派发给 client.on_group_member_remove
         def parse_group_member_remove(self, payload):
             d = payload.get("d", {}) if isinstance(payload, dict) else {}
@@ -190,6 +202,27 @@ def install_member_event_support(plugin, context) -> int:
 
         state.parsers["group_member_add"] = types.MethodType(parse_group_member_add, state)
 
+        # 1c) 同一位 intent 下的 GROUP_JOIN_REQUEST（用户申请加群）：
+        #     这是 1.4.0 起入群审批通知的**主通道**（事件即时到达，比轮询快），
+        #     轮询退化为兜底（见 main._poll_loop 的 join_event_mode）。
+        #     官方前置条件：机器人必须是群管理员，否则平台不会推这个事件。
+        def parse_group_join_request(self, payload):
+            d = payload.get("d", {}) if isinstance(payload, dict) else {}
+            if isinstance(d, dict):
+                d = dict(d)
+                d.setdefault("_event_id", payload.get("id", "") if isinstance(payload, dict) else "")
+            logger.info(
+                f"[成员事件] 收到 GROUP_JOIN_REQUEST（实例 {pid}）"
+                f"group={str(d.get('group_openid') or '')[-6:]} "
+                f"member={str(d.get('member_openid') or '')[-6:]} "
+                f"source={d.get('apply_source') or '?'}"
+            )
+            self._dispatch("group_join_request", d)
+
+        state.parsers["group_join_request"] = types.MethodType(
+            parse_group_join_request, state
+        )
+
         # 2) client handler：转发给插件处理（闭包带上实例 ID，便于按群路由）
         async def on_group_member_remove(data, _pid=pid):
             try:
@@ -207,6 +240,15 @@ def install_member_event_support(plugin, context) -> int:
                 logger.exception("[成员事件] 处理入群事件异常")
 
         client.on_group_member_add = on_group_member_add
+
+        # 2c) 入群申请 handler
+        async def on_group_join_request(data, _pid=pid):
+            try:
+                await plugin._on_group_join_request(data, _pid)
+            except Exception:
+                logger.exception("[入群申请] 处理申请事件异常")
+
+        client.on_group_join_request = on_group_join_request
 
         # 3) 打开 GROUP_MEMBER_EVENT 位
         #    注意：identify 发的是「每个 websocket 自己的 session["intent"]」，

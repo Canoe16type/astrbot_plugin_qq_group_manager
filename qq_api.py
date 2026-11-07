@@ -213,6 +213,26 @@ class QQApi:
         except QQApiError as e:
             return None, e
 
+    async def get_group_bot_state(
+        self, group_openid: str
+    ) -> tuple[dict | None, "QQApiError | None"]:
+        """查机器人在指定群里的状态，返回 (数据, 错误)。
+
+        文档: GET /v2/groups/{group_openid}/bot_state（30 QPM）
+        成功时返回 member_openid / joined_at / allow_proactive_msg /
+        recv_msg_setting / member_role。机器人已不在群时接口报错（4xx），
+        这也是本插件判断「被踢了没有」的兜底手段。
+
+        注意：该接口文档标注「仅白名单机器人可用」，普通机器人会拿到
+        code=11253（应用无接口访问权限）——这种情况属于「查不了」，
+        不能当成「不在群」，上层按 unknown 处理。
+        """
+        try:
+            data = await self._request("GET", f"/v2/groups/{group_openid}/bot_state")
+            return (data if isinstance(data, dict) else None), None
+        except QQApiError as e:
+            return None, e
+
     async def get_bot_info(self) -> dict | None:
         """获取机器人自身详情（username/avatar），普通接口，失败返回 None。
 
@@ -279,12 +299,14 @@ class QQApi:
     # ---------- 主动发群消息 ----------
     async def send_group_message(self, group_openid: str, content: str,
                                  event_id: str = "", msg_id: str = "",
-                                 markdown: bool = False) -> dict:
-        """向群内发送文本 / Markdown 消息。
+                                 markdown: bool = False,
+                                 keyboard: dict | None = None) -> dict:
+        """向群内发送文本 / Markdown 消息，可附带内联键盘（按钮）。
 
         传 event_id / msg_id 时走**被动消息**（官方推荐）：
-        官方明确支持用 GROUP_ADD_ROBOT 等事件的 id 作为 event_id 做被动回复，
-        5 分钟内有效、同一个事件最多回 5 条，且不吃主动消息频控。
+        官方明确支持用 GROUP_ADD_ROBOT、INTERACTION_CREATE、GROUP_MSG_RECEIVE
+        等事件的 id 作为 event_id 做被动回复，5 分钟内有效、同一个事件最多回
+        5 条，且不吃主动消息频控。
         不传则是主动消息：受主动消息频控（未认证 30 条/分钟、单群 20 条/分钟、
         每群每天 1000 条），并且用户可在客户端关闭「允许主动发送」。
 
@@ -292,6 +314,12 @@ class QQApi:
             markdown: True 时按 msg_type=2 发自定义 Markdown（``# 标题``、
                 ``**加粗**``、``[🔗文字](url)`` 等），2026/04/23 起单聊/群聊
                 都无需单独申请 Markdown 模板。默认 False＝纯文本 msg_type=0。
+            keyboard: 内联键盘，形如 ``{"content": {"rows": [...]}}``，
+                由 ``button_kit.make_keyboard`` / ``normalize_keyboard`` 组装。
+                注意官方限制：传了 markdown 时 content 必须为空，
+                键盘的行列数超限会返回 40034029（见 button_kit 的行列封顶）。
+
+        文档: POST /v2/groups/{group_openid}/messages（100 QPS）
         """
         self._seq = (self._seq + 1) % 100000
         msg_seq = self._seq or 1
@@ -303,6 +331,8 @@ class QQApi:
             body["markdown"] = {"content": content}
         else:
             body["content"] = content
+        if keyboard:
+            body["keyboard"] = keyboard
         if event_id:
             body["event_id"] = event_id
         elif msg_id:
@@ -312,6 +342,12 @@ class QQApi:
             f"/v2/groups/{group_openid}/messages",
             body=body,
         )
+
+    # 说明：互动事件（按钮点击）的回应由 AstrBot 的 qqofficial 适配器统一负责
+    # （qqofficial_platform_adapter._handle_interaction_create 里已经调用
+    # PUT /interactions/{id} 回 code=0，且「同一 interaction_id 只能回应一次」）。
+    # 插件如果再自己 PUT 一次会直接报错，所以这里**不重复回应**；
+    # 需要给用户的结果反馈统一改用被动消息（event_id = 互动事件 id）。
 
     # ---------- 撤回群消息 ----------
     async def recall_group_message(self, group_openid: str, message_id: str) -> dict:

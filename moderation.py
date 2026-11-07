@@ -812,6 +812,45 @@ class ModerationStore:
                 return True
         return False
 
+    def purge_group(self, group: str) -> dict:
+        """整群回收：群规、审核设置、判定记录、群名/备注、提醒名单里的该群条目。
+
+        机器人被移出群（GROUP_DEL_ROBOT）或该群已确认不存在时调用，
+        避免 openid 越攒越多。返回各表删掉的条数，供日志/回执展示。
+        """
+        removed = {
+            "rules": 1 if self.rules.pop(group, None) is not None else 0,
+            "settings": 1 if self.settings.pop(group, None) is not None else 0,
+            "group_meta": 1 if self.group_meta.pop(group, None) is not None else 0,
+            "admins": 1 if self.admins.pop(group, None) is not None else 0,
+        }
+        if removed["rules"]:
+            self._save(self._rules_path, self.rules)
+        if removed["settings"]:
+            self._save(self._settings_path, self.settings)
+        if removed["group_meta"]:
+            self._save_meta()
+        if removed["admins"]:
+            self._save_admins()
+
+        before = len(self.verdicts)
+        self.verdicts[:] = [v for v in self.verdicts if v.get("group") != group]
+        removed["verdicts"] = before - len(self.verdicts)
+        if removed["verdicts"]:
+            self._save(self._verdict_path, self.verdicts)
+
+        # 该群的模板覆盖（全局模板不动）
+        groups = dict(self.templates.get("groups") or {})
+        if groups.pop(group, None) is not None:
+            self.templates["groups"] = groups
+            self._save(self._tpl_path, self.templates)
+            removed["templates"] = 1
+        else:
+            removed["templates"] = 0
+
+        self._kw_cache.clear()   # 关键词判定缓存里可能还留着该群的话术结果
+        return removed
+
     def clear_verdicts(self, group: str = "") -> int:
         """清空判定记录；传 group 则只清该群。返回删除条数。"""
         if group:

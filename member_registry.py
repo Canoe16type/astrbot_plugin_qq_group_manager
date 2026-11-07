@@ -31,7 +31,7 @@ QQ 官方机器人 v2 的隐私策略决定了三件事：
 import json
 import os
 import time
-from typing import Any, Iterable, Optional
+from typing import Iterable, Optional
 
 DEFAULT_NAME = ""  # 没有昵称时用短标识，不塞"未知成员"这种占位词
 
@@ -392,6 +392,18 @@ class MemberRegistry:
         if gone:
             self.save()
         return len(gone)
+
+    def purge_group(self, group_openid: str) -> int:
+        """整群档案回收：把某个群的成员记录整块删掉，返回删掉的条数。
+
+        机器人被移出群（GROUP_DEL_ROBOT）时调用——群都不在了，档案、
+        人工备注、退群时间都没意义了，留着只会在面板里堆成孤儿群。
+        """
+        rows = (self.groups or {}).pop(str(group_openid or ""), None)
+        count = len(rows or {})
+        if count:
+            self.save()
+        return count
 
     def upsert_many(self, group_openid: str, rows: Iterable[dict]) -> tuple[int, int]:
         """批量导入（面板 / 将来群成员列表接口共用）。
