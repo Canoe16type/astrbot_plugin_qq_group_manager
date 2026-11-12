@@ -166,6 +166,27 @@ def _write_json_atomic(path: str, payload, *, indent: int = 1) -> None:
     os.replace(tmp, path)
 
 
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
+
+
+def _looks_like_image_url(u: str) -> bool:
+    """按扩展名判断是不是图片地址（去 query，官方 URL 后面常带签名参数）。"""
+    path = str(u or "").split("?", 1)[0].lower()
+    return path.endswith(_IMAGE_EXTS)
+
+
+def _norm_media_url(u: str) -> str:
+    """官方 attachment 的 url 有时是 // 开头或裸域名，补成 https。"""
+    u = str(u or "").strip()
+    if not u:
+        return ""
+    if u.startswith("http://") or u.startswith("https://"):
+        return u
+    if u.startswith("//"):
+        return "https:" + u
+    return "https://" + u
+
+
 def _patch_botpy_quote_fields() -> None:
     """Monkey-patch botpy 消息类，补齐 QQ 官方群消息事件里的引用字段。
 
@@ -4733,15 +4754,41 @@ class QQGroupManager(Star):
 
     # ---------------- 基础工具 ----------------
     def _extract_images(self, event: AstrMessageEvent) -> list[str]:
-        """抽取消息里的图片地址（用于多模态审核）。"""
+        """抽取消息里的图片地址（用于多模态审核）。
+
+        三个来源依次兜底，任一条取到就不至于让「图片维度」静默失效：
+        1. AstrBot 已解析的 Image 组件（url / file 都可能是 http 地址）；
+        2. 原始 payload 里的 attachments —— 适配器版本不同、组件没生成时的兜底；
+        3. 官方群消息把「文字 + 图片」拆成两条投递时，由调用方用
+           `_nearby_images()` 从相邻缓存补齐（这里只负责单条消息）。
+        """
         urls: list[str] = []
+
+        def add(u: str) -> None:
+            u = _norm_media_url(u)
+            if u.startswith("http") and u not in urls:
+                urls.append(u)
+
         try:
             for c in (getattr(event.message_obj, "message", None) or []):
-                if type(c).__name__ != "Image":
+                if "image" not in type(c).__name__.lower():
                     continue
-                u = str(getattr(c, "url", "") or getattr(c, "file", "") or "")
-                if u.startswith("http"):
-                    urls.append(u)
+                for attr in ("url", "file", "path"):
+                    add(getattr(c, attr, ""))
+        except Exception:
+            pass
+
+        try:  # 原始附件兜底（图片可能只在 attachments 里，组件里没有）
+            raw = getattr(event.message_obj, "raw_message", None)
+            for att in (getattr(raw, "attachments", None) or []):
+                if isinstance(att, dict):
+                    ct = str(att.get("content_type") or "").lower()
+                    u = att.get("url") or ""
+                else:
+                    ct = str(getattr(att, "content_type", "") or "").lower()
+                    u = getattr(att, "url", "") or ""
+                if ct.startswith("image") or _looks_like_image_url(u):
+                    add(u)
         except Exception:
             pass
         return urls[:4]
@@ -4915,6 +4962,74 @@ class QQGroupManager(Star):
         except Exception:
             return []
 
+    def _nearby_images(self, group: str, sender: str, anchor_ts: float,
+                       window: float = 3.0, limit: int = 4) -> list[str]:
+        """从相邻缓存里补图片。
+
+        官方群消息里「文字 + 图片」经常拆成两条投递：文本那条有正文、图片那条正文为空。
+        举报按正文匹配到的是文本那条，图片得从同一发送者、前后几秒的缓存里捞回来——
+        否则图片维度会被静默跳过（判定日志里只剩「模式=纯文本」）。
+        """
+        urls: list[str] = []
+        if not anchor_ts:
+            return urls
+        for r in reversed(self._recent_group_msgs.get(group) or []):
+            if sender and str(r.get("sender") or "") != str(sender):
+                continue
+            if abs(float(r.get("ts") or 0) - float(anchor_ts)) > window:
+                continue
+            for u in (r.get("images") or []):
+                if u not in urls:
+                    urls.append(u)
+            if len(urls) >= limit:
+                break
+        return urls[:limit]
+
+    def _latest_image_msg(self, group: str, max_age: float = 120.0) -> Optional[dict]:
+        """最近一条带图片的缓存消息。
+
+        引用的是**纯图片消息**时，引用摘要里没有任何正文，按正文匹配必定失败；
+        这种情况按「最近的图片消息」兜底，总比直接把图片维度丢掉好。
+        """
+        now = time.time()
+        for r in reversed(self._recent_group_msgs.get(group) or []):
+            if now - float(r.get("ts") or 0) > max_age:
+                continue
+            if r.get("images"):
+                return r
+        return None
+
+    def _quote_attachments_from_raw(self, raw) -> list[str]:
+        """从引用事件原始 payload 的 msg_elements[0].attachments 里挖被引用图片。
+
+        AstrBot 会把 quoted attachments 塞进 Reply.chain，但部分版本/部分客户端
+        的引用事件只给文本摘要，这里直接再读一遍原始字段做兜底。
+        字段可能是 dict 也可能是对象，两种都兼容。
+        """
+        out: list[str] = []
+        try:
+            elems = getattr(raw, "msg_elements", None) or []
+            if not elems:
+                return out
+            e0 = elems[0]
+            atts = e0.get("attachments") if isinstance(e0, dict) else getattr(e0, "attachments", None)
+            for att in (atts or []):
+                if isinstance(att, dict):
+                    ct = str(att.get("content_type") or "").lower()
+                    u = att.get("url") or ""
+                else:
+                    ct = str(getattr(att, "content_type", "") or "").lower()
+                    u = getattr(att, "url", "") or ""
+                if not u:
+                    continue
+                if ct.startswith("image") or _looks_like_image_url(u):
+                    u = _norm_media_url(u)
+                    if u not in out:
+                        out.append(u)
+        except Exception:
+            pass
+        return out[:4]
+
     def _mod_resolve_reported(self, event: AstrMessageEvent) -> dict:
         """解析「被举报的消息」。
 
@@ -4967,6 +5082,10 @@ class QQGroupManager(Star):
                 if mcontent and not quoted_content:
                     quoted_content = str(mcontent)
                     out["quoted"] = True
+                # 引用图片：适配器没转成 Image 组件时，直接读原始 attachments
+                for u in self._quote_attachments_from_raw(raw):
+                    if u not in quoted_images:
+                        quoted_images.append(u)
         except Exception:
             pass
 
@@ -4978,6 +5097,14 @@ class QQGroupManager(Star):
                 if str(r.get("id") or "") == message_id:
                     rec = r
                     break
+        if rec is None and not quoted_content.strip():
+            # 引用的是纯图片消息：摘要里没有任何正文可匹配，按最近的图片消息兜底
+            rec = self._latest_image_msg(g)
+            if rec is not None:
+                self.logger.info(
+                    "[审核] 引用的是纯图片消息，按最近缓存图片兜底："
+                    f"id={rec.get('id')} ts={rec.get('ts')}"
+                )
         if rec is None:
             # 兜底：被举报的是合并转发时，摘要里的 [消息内容] 行至少能拿去审核，
             # 别把「[消息类型] 引用消息」这类噪声丢给模型。
@@ -4994,13 +5121,22 @@ class QQGroupManager(Star):
             message_id = real_id
         # 命中缓存时优先用缓存里的正文：合并转发的缓存正文是完整展开版，
         # 比引用摘要（夹着 [消息类型] 等元信息）更适合做审核判定。
+        images = list(rec.get("images") or []) or list(quoted_images)
+        if not images:
+            # 「文字 + 图片」被拆成两条投递时，图片在那条正文为空的相邻消息里，
+            # 按同发送者 ±3s 补齐；补不上就只能走纯文本，别假装有图。
+            images = self._nearby_images(g, str(rec.get("sender") or ""), float(rec.get("ts") or 0))
+            if images:
+                self.logger.info(
+                    f"[审核] 被举报消息本身无图，按相邻缓存补齐 {len(images)} 张（同发送者 ±3s）"
+                )
         out.update({
             "resolved": True,
             "id": message_id or real_id,
             "text": str(rec.get("text") or "") or quoted_content,
             "sender": str(rec.get("sender") or ""),
             "sender_name": str(rec.get("sender_name") or ""),
-            "images": list(rec.get("images") or []) or quoted_images,
+            "images": images[:4],
             "ts": float(rec.get("ts") or time.time()),
         })
         return out
@@ -5813,14 +5949,17 @@ class QQGroupManager(Star):
             if not st.get("auto_scan"):
                 return
             text = self._extract_text(event)
-            if not text:
+            images = self._extract_images(event)
+            # 纯图片消息也要能进巡检：官方群消息常把「文字 + 图片」拆成两条，
+            # 只按 text 判会把图片那条整条丢掉（图片维度等于没开）。
+            if (not text and not images) or (not text and not st.get("enable_vision", True)):
                 return
             rep = {
                 "id": str(getattr(event.message_obj, "message_id", "") or ""),
                 "text": text,
                 "sender": event.get_sender_id() or "",
                 "sender_name": event.get_sender_name() or "",
-                "images": self._extract_images(event),
+                "images": images,
                 "ts": time.time(),
             }
             # 变体疑似信号：与「是否违规」的判定并行、互不影响（variant_check 默认关，关着就不扫）
@@ -5920,7 +6059,11 @@ class QQGroupManager(Star):
             self._mod_pending.add(mid)
         note = " ".join(parts[1:])[:200].strip() if len(parts) > 1 else ""
         try:
-            self.logger.info(f"[审核] 收到举报: group={g} reporter={reporter} text={rep.get('text','')[:60]!r}")
+            self.logger.info(
+                f"[审核] 收到举报: group={g} reporter={reporter} "
+                f"text={rep.get('text', '')[:60]!r} images={len(rep.get('images') or [])} "
+                f"resolved={bool(rep.get('resolved'))}"
+            )
             # 变体检测（疑似信号，与「是否违规」的判定并行、互不影响）：
             # 命中只做 撤回 + 记录 + 进待办，绝不自动禁言。
             variant = self._mod_variant_scan(g, rep, settings)
