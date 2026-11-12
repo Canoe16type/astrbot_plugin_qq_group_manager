@@ -235,17 +235,21 @@ _patch_botpy_quote_fields()
 DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\s*$", re.I)
 
 # 管理指令集合（需要管理员权限）
-ADMIN_COMMANDS = ("/禁言", "/解禁", "/查禁言", "/禁言历史", "/审批", "/通过", "/拒绝", "/撤回", "/审核", "/群名", "/管理登记", "/成员", "/汇报", "/体检")
+# 管理员指令：新的「大类」+ 旧的独立写法都列在这里（旧写法会先被 _normalize_aliases 折进大类）
+ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/管理登记", "/成员",
+                  "/解禁", "/查禁言", "/禁言历史", "/通过", "/拒绝", "/群名", "/汇报", "/体检", "/自检")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
 # 说明：这些名字现在挂在指令组「群管」下作为子指令（面板里是 1 条组 + 子指令），
 # 能搜索、能单独禁用、能改别名/改权限；真正的权限判定（AstrBot 管理员 /
 # QQ 群角色 / 自定义 OpenID）仍由插件内 _is_admin 负责，比 AstrBot 的
 # "仅管理员"更宽松。
+# 1.5.0 起对外只推「大类」：禁言 / 审批 / 状态 / 审核 / 群规 / 撤回 / 举报 / 成员 / 管理登记。
+# 旧的独立指令（解禁、查禁言、禁言历史、通过、拒绝、汇报、体检、自检、群名）
+# 仍作为别名挂在对应大类下，老写法继续可用。
 REGISTERED_COMMANDS = (
-    "禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝",
-    "撤回", "审核", "群名", "管理登记", "群管", "举报", "群规", "成员",
-    "汇报", "体检",
+    "禁言", "审批", "状态", "撤回", "审核", "群规",
+    "管理登记", "群管", "举报", "成员", "帮助",
 )
 
 # 禁言历史：每群最多保留的条数
@@ -632,7 +636,12 @@ class QQGroupManager(Star):
         )
         self._variant_words: Optional[list[tuple[str, tuple]]] = None  # 词条缓存（签名比对在建表侧做）
         self._mod_pending: set[str] = set()  # 正在审核的消息 ID，防重复受理
-        self._mod_few_shot: str = "".join(
+        # 模型调用闸门：同群并发 1，排队数超过 llm_queue_limit 的消息直接跳过模型层，
+        # 避免刷屏群把 provider 打满、把每日额度一瞬间烧完。
+        self._mod_llm_sem: dict[str, asyncio.Semaphore] = {}
+        self._mod_llm_pending: dict[str, int] = {}
+        self._mod_last_llm: dict = {}  # 最近一次模型调用摘要（/群管 自检 用）
+        self._mod_few_shot_base: str = "".join(
             (f"- {x}" + chr(10)) for x in [
                 "「加我vx：abc123 进群领福利」→ violation=true, basis=keyword, category=ad, severity=high",
                 "「你这个傻X」→ violation=true, basis=semantic, category=abuse, severity=medium",
@@ -663,8 +672,9 @@ class QQGroupManager(Star):
         self._load_recall_history()
         self._load_report_state()
         self._register_web_apis()
+        self._rebuild_mod_few_shot()
         self.logger.info(
-            f"QQ 群管插件已加载 (log_level={self._read_config_value(('log', 'log_level'), default='DEBUG', legacy_keys=('log_level',))}, "
+            f"QQ官机群管 已加载 (log_level={self._read_config_value(('log', 'log_level'), default='DEBUG', legacy_keys=('log_level',))}, "
             f"poll={self._read_config_value(('approval', 'poll_interval'), default=30, legacy_keys=('poll_interval',))}s)"
         )
 
@@ -1056,6 +1066,80 @@ class QQGroupManager(Star):
 
         self.logger.info(f"[清理] 群 {group} 数据已清理（{reason}）：{_purge_summary_text(out)}")
         return out
+
+    async def _cmd_status(self, event: AstrMessageEvent, parts: list[str]) -> None:
+        """/群管 状态 [日报|群|自检|群名]：所有「看一眼现状」的指令收在这一个入口。
+
+        - 日报（默认，原 /群管 汇报）：待处理申请 + 当前禁言人数
+        - 群（原 /群管 体检 [清理]）：机器人还在不在已记录的群里
+        - 自检（原 /群管 自检）：审核链路配置与今日用量
+        - 群名（原 /群管 群名）：刷新本群群名（面板群列表用）
+        """
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        args = parts[2:]
+        if sub in ("", "日报", "汇报", "daily", "摘要", "summary"):
+            await self._cmd_report(event)
+        elif sub in ("群", "体检", "presence", "在群"):
+            await self._cmd_presence(event, ["/体检"] + args)
+        elif sub in ("自检", "诊断", "selfcheck", "diag"):
+            await self._cmd_selfcheck(event)
+        elif sub in ("群名", "名称", "name", "刷新群名"):
+            await self._cmd_group_name(event)
+        else:
+            await self._reply(
+                event,
+                "用法：/群管 状态 [日报 | 群 [清理] | 自检 | 群名]\n"
+                "· 日报＝待处理申请 + 禁言人数\n"
+                "· 群＝机器人还在不在已记录的群里\n"
+                "· 自检＝审核链路配置与今日用量\n"
+                "· 群名＝刷新本群群名",
+            )
+
+    async def _cmd_selfcheck(self, event: AstrMessageEvent) -> None:
+        """/群管 自检：一眼看清审核链路「配没配好、调没调上、花了多少」。
+
+        刻意不做主动探活——探活等于真发一次请求，既花钱又要等；
+        要看真调用的细节，把日志级别调到 DEBUG 看 [模型] 行即可。
+        """
+        g = event.get_group_id()
+        st = self._mod_settings(g)
+        try:
+            pid = str(await self._mod_provider_id(event, group=g) or "")
+        except Exception as e:                                  # provider 解析失败本身就是要报的问题
+            pid = f"解析失败（{e}）"
+        try:
+            stats = self.mod.stats(g) or {}
+        except Exception:
+            stats = {}
+        last = dict(self._mod_last_llm or {})
+        budget = int(st.get("daily_budget") or 0)
+        used = int(stats.get("today_llm_calls", 0) or 0)
+        queue = int(st.get("llm_queue_limit") or 0)
+        timeout = int(st.get("llm_timeout") or 0)
+        if last:
+            last_line = (f"最近一次模型调用：{last.get('scene') or '-'} "
+                         f"{'成功' if last.get('ok') else '失败'} {last.get('ms', '?')}ms"
+                         + (f"（{last.get('error')}）" if last.get("error") else ""))
+        else:
+            last_line = "最近一次模型调用：本进程内还没有（近期没走到模型层）"
+        lines = [
+            "【群管自检】",
+            f"适配器：{event.get_platform_id() or '-'}",
+            f"审核开关：{'开' if st.get('enabled') else '关'}"
+            f"｜执行模式：{'试运行（只判定不执行）' if st.get('dry_run') else '真实执行'}",
+            f"分层：关键词 {'开' if st.get('enable_keyword') else '关'}"
+            f"／模型 {'开' if st.get('enable_model') else '关'}"
+            f"／图片 {'开' if st.get('enable_vision') else '关'}",
+            f"审核模型：{pid or '未配置（模型层会直接跳过，只跑关键词）'}",
+            f"今日模型调用：{used}" + (f" / 预算 {budget}" if budget > 0 else "（未设上限）"),
+            f"累计判定 {stats.get('total', 0)} 条"
+            f"｜本次统计以来缓存命中率 {round(float(stats.get('cache_rate') or 0) * 100)}%",
+            f"并发闸门：排队 {self._mod_llm_pending.get(g, 0)}/{queue or '不限'}"
+            f"｜单次超时 {timeout or '不限'}s",
+            last_line,
+            "提示：不做主动探活（会真花钱）；想看调用细节，把日志级别调到 DEBUG 看 [模型] 行。",
+        ]
+        await self._reply(event, "\n".join(lines))
 
     async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str]) -> None:
         """/群管 体检：逐个确认机器人还在不在已记录的群里。
@@ -1849,6 +1933,45 @@ class QQGroupManager(Star):
         except Exception:
             return ""
 
+    # 旧独立指令 → 新大类 + 子命令。保留映射表，老写法永远不用改。
+    _LEGACY_ALIASES = {
+        "/解禁": ("/禁言", "解除"),
+        "/查禁言": ("/禁言", "名单"),
+        "/禁言历史": ("/禁言", "历史"),
+        "/通过": ("/审批", "通过"),
+        "/拒绝": ("/审批", "拒绝"),
+        "/汇报": ("/状态", "日报"),
+        "/体检": ("/状态", "群"),
+        "/自检": ("/状态", "自检"),
+        "/群名": ("/状态", "群名"),
+    }
+    _LEGACY_NAMES = tuple(k.lstrip("/") for k in _LEGACY_ALIASES)
+
+    def _cmd_alias_of(self, event: AstrMessageEvent, default: str) -> str:
+        """指令组别名命中后，还原用户实际敲的是哪个旧名字。
+
+        AstrBot 的 alias 只会把消息路由到同一个 handler，不会告诉我们是哪个别名；
+        所以回到消息原文的前两个 token 里找。找不到就用 default。
+        """
+        text = self._extract_text(event) or ""
+        for tok in text.split()[:2]:
+            name = tok.lstrip("/")
+            if name in self._LEGACY_NAMES:
+                return "/" + name
+        return default
+
+    def _normalize_aliases(self, cmd: str, parts: list[str]) -> tuple[str, list[str]]:
+        """把旧独立指令折成「大类 + 子命令」：/解禁 @x → /禁言 解除 @x。
+
+        这样只有一套处理逻辑，老写法、新写法、面板里改过别名后进来自定义名字，
+        最终都会收敛到同一个入口。
+        """
+        hit = self._LEGACY_ALIASES.get(cmd)
+        if not hit:
+            return cmd, parts
+        new_cmd, sub = hit
+        return new_cmd, [new_cmd, sub] + list(parts[1:])
+
     async def _run_command(
         self, event: AstrMessageEvent, forced_cmd: str | None = None, skip: int = 0
     ) -> None:
@@ -1894,7 +2017,10 @@ class QQGroupManager(Star):
             if not first.startswith("/"):
                 if not self._is_mentioned_bot(event):
                     return
-                if first not in ("禁言", "解禁", "查禁言", "禁言历史", "审批", "通过", "拒绝", "撤回", "群管", "举报", "群规", "审核", "群名", "管理登记", "汇报", "体检"):
+                if first not in ("禁言", "审批", "状态", "撤回", "群管", "举报", "群规", "审核",
+                                 "管理登记", "成员", "帮助",
+                                 "解禁", "查禁言", "禁言历史", "通过", "拒绝",
+                                 "汇报", "体检", "自检", "群名"):
                     return
             await self._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:
@@ -1903,61 +2029,61 @@ class QQGroupManager(Star):
 
             self.logger.debug(traceback.format_exc())
 
+    # 按钮点击必须走独立的 button_action handler：AstrBot 唤醒阶段对按钮事件只放行挂了
+    # ButtonActionFilter 的 handler，普通 event_message_type 的 handler 会被直接跳过。
+    # （踩过的坑：写在 on_group_message 里时，点击只改了客户端按钮状态，服务端一次没执行。）
     if _BUTTON_ACTION_SUPPORTED:
 
         @_BUTTON_ACTION_DECORATOR()
         async def on_button_action(self, event: AstrMessageEvent):
-            """消息按钮点击入口（入群审批的「通过 / 拒绝」）。
-
-            必须是**独立 handler**：AstrBot 的唤醒检查阶段对按钮事件只放行挂了
-            ``ButtonActionFilter`` 的 handler，普通 ``event_message_type`` 的
-            handler 会被直接 continue 掉。
-
-            开发期首版把认领逻辑写在 ``on_group_message`` 里，结果点击只触发了
-            客户端本地的 visited_label（按钮变「已通过」）+ 适配器的
-            ``on_interaction_result(0)`` 应答，服务端一次都没执行：申请没被通过、
-            欢迎语没发、回执也没有 —— 看上去点了，其实什么都没发生。
-            """
-            try:
-                if not await self._handle_button_interaction(event):
-                    return
-                try:
-                    event.stop_event()
-                except Exception:  # noqa: BLE001 - 老版本没有 stop_event 也无妨
-                    pass
-            except Exception as e:  # noqa: BLE001 - 回调路径绝不把异常抛给平台
-                self.logger.error(f"处理按钮点击异常: {e}")
-                import traceback
-
-                self.logger.debug(traceback.format_exc())
+            """按钮点击：入群审批的「通过 / 拒绝」"""
+            await self._consume_button_action(event)
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
     async def on_group_message(self, event: AstrMessageEvent):
-        """普通群消息：仅做新群欢迎与轮询兜底，不处理指令。"""
+        """群消息：成员/消息缓存、巡检、新群欢迎（指令走 @filter.command）"""
         try:
-            # 按钮点击**不应该**走到这里（唤醒阶段只放行按钮专用 handler），
-            # 保留这次尝试只是为了兼容极老版本 AstrBot 或未来行为变化：
-            # 真要有人把按钮事件漏进来，至少不会一路空转到其他插件/大模型。
-            if await self._handle_button_interaction(event):
-                try:
-                    event.stop_event()
-                except Exception:
-                    pass
+            # 极老版本 AstrBot 可能把按钮事件漏进来，兜一次；正常不会走到这里
+            if await self._consume_button_action(event):
                 return
-            g = event.get_group_id()
-            if g:
-                sid = event.get_sender_id()
-                sname = event.get_sender_name()
-                if sid and sname:
-                    self._nick_cache.setdefault(g, {})[sid] = sname
-                self._record_member_seen(event)
-            self._ensure_poll_task()
-            self._ensure_member_event_injected()  # 兜底：平台实例就绪后重试注入
-            self._record_recent_msg(event)  # 引用撤回：原文匹配需要消息缓存
-            await self._maybe_auto_scan(event)  # 审核：仅当「本群」开了巡检开关才会执行
-            await self._maybe_welcome_new_group(event)
+            await self._track_group_activity(event)
         except Exception as e:
             self.logger.error(f"处理群消息异常: {e}")
+            import traceback
+
+            self.logger.debug(traceback.format_exc())
+
+    async def _consume_button_action(self, event: AstrMessageEvent) -> bool:
+        """认领按钮点击并消费事件；返回是否真的处理了。回调路径绝不把异常抛给平台。"""
+        try:
+            if not await self._handle_button_interaction(event):
+                return False
+            try:
+                event.stop_event()
+            except Exception:  # noqa: BLE001 - 老版本没有 stop_event 也无妨
+                pass
+            return True
+        except Exception as e:  # noqa: BLE001
+            self.logger.error(f"处理按钮点击异常: {e}")
+            import traceback
+
+            self.logger.debug(traceback.format_exc())
+            return False
+
+    async def _track_group_activity(self, event: AstrMessageEvent) -> None:
+        """群消息的记账动作：昵称缓存 → 成员档案 → 轮询/注入兜底 → 消息缓存 → 巡检 → 新群欢迎。"""
+        g = event.get_group_id()
+        if g:
+            sid = event.get_sender_id()
+            sname = event.get_sender_name()
+            if sid and sname:
+                self._nick_cache.setdefault(g, {})[sid] = sname
+            self._record_member_seen(event)
+        self._ensure_poll_task()
+        self._ensure_member_event_injected()  # 兜底：平台实例就绪后重试注入
+        self._record_recent_msg(event)        # 引用撤回：原文匹配需要消息缓存
+        await self._maybe_auto_scan(event)    # 审核：仅当「本群」开了巡检开关才会执行
+        await self._maybe_welcome_new_group(event)
 
     # ------------------------------------------------------------------
     # 群成员事件（退群/被移出通知，运行时注入实现，见 member_event.py）
@@ -2430,65 +2556,30 @@ class QQGroupManager(Star):
         """查看本插件完整帮助（比自动指令树更详细）"""
         await self._run_command(event, forced_cmd="/群管", skip=1)
 
-    @qgm_group.command("禁言")
+    @qgm_group.command("禁言", alias={"解禁", "查禁言", "禁言历史"})
     async def g_mute(self, event: AstrMessageEvent):
-        """禁言 @用户 时长 [理由]"""
-        await self._run_command(event, forced_cmd="/禁言", skip=1)
-
-    @qgm_group.command("解禁")
-    async def g_unmute(self, event: AstrMessageEvent):
-        """解除 @用户的禁言"""
-        await self._run_command(event, forced_cmd="/解禁", skip=1)
-
-    @qgm_group.command("查禁言")
-    async def g_list_mutes(self, event: AstrMessageEvent):
-        """查看本群当前禁言名单"""
-        await self._run_command(event, forced_cmd="/查禁言", skip=1)
-
-    @qgm_group.command("禁言历史")
-    async def g_mute_history(self, event: AstrMessageEvent):
-        """查看禁言记录（@用户 / 条数 / 汇总）"""
-        await self._run_command(event, forced_cmd="/禁言历史", skip=1)
+        """禁言 @用户 时长 [理由]｜禁言 解除 @用户｜禁言 名单｜禁言 历史"""
+        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/禁言"), skip=1)
 
     @qgm_group.command("撤回")
     async def g_recall(self, event: AstrMessageEvent):
         """撤回消息（先引用目标消息再发）"""
         await self._run_command(event, forced_cmd="/撤回", skip=1)
 
-    @qgm_group.command("审批")
+    @qgm_group.command("审批", alias={"通过", "拒绝"})
     async def g_list_requests(self, event: AstrMessageEvent):
-        """查看待处理的入群申请"""
-        await self._run_command(event, forced_cmd="/审批", skip=1)
+        """待处理入群申请｜审批 通过 N｜审批 拒绝 N [理由]"""
+        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/审批"), skip=1)
 
-    @qgm_group.command("汇报")
-    async def g_report_daily(self, event: AstrMessageEvent):
-        """立刻查看群管日报（待处理申请 + 禁言人数）"""
-        await self._run_command(event, forced_cmd="/汇报", skip=1)
-
-    @qgm_group.command("体检")
-    async def g_presence_check(self, event: AstrMessageEvent):
-        """确认机器人还在不在已记录的群里（可选清理离群数据）"""
-        await self._run_command(event, forced_cmd="/体检", skip=1)
-
-    @qgm_group.command("通过")
-    async def g_approve(self, event: AstrMessageEvent):
-        """通过入群申请（序号）"""
-        await self._run_command(event, forced_cmd="/通过", skip=1)
-
-    @qgm_group.command("拒绝")
-    async def g_reject(self, event: AstrMessageEvent):
-        """拒绝入群申请（序号 + 理由）"""
-        await self._run_command(event, forced_cmd="/拒绝", skip=1)
+    @qgm_group.command("状态", alias={"汇报", "体检", "自检", "群名"})
+    async def g_status(self, event: AstrMessageEvent):
+        """日报（默认）｜状态 群｜状态 自检｜状态 群名"""
+        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/状态"), skip=1)
 
     @qgm_group.command("审核")
     async def g_mod(self, event: AstrMessageEvent):
         """群规审核（状态 / 试运行 / 巡检 / 测试）"""
         await self._run_command(event, forced_cmd="/审核", skip=1)
-
-    @qgm_group.command("群名")
-    async def g_group_name(self, event: AstrMessageEvent):
-        """刷新本群群名"""
-        await self._run_command(event, forced_cmd="/群名", skip=1)
 
     @qgm_group.command("管理登记")
     async def g_admin_register(self, event: AstrMessageEvent):
@@ -2939,6 +3030,8 @@ class QQGroupManager(Star):
                 # 兼容不带 / 的写法（"禁言" 与 "/禁言" 等价）
                 cmd = "/" + cmd
 
+        cmd, parts = self._normalize_aliases(cmd, parts)
+
         if cmd == "/群管":
             await self._reply(event, self._render("msg_help", bot_name=event.get_platform_id()))
             return
@@ -2980,27 +3073,28 @@ class QQGroupManager(Star):
         if cmd == "/审核":
             await self._cmd_mod(event, parts)
             return
-        if cmd == "/群名":
-            await self._cmd_group_name(event)
-            return
         if cmd == "/禁言":
-            await self._cmd_mute(event, parts)
-        elif cmd == "/禁言历史":
-            await self._cmd_list_mute_history(event, parts)
-        elif cmd == "/解禁":
-            await self._cmd_unmute(event, parts)
+            sub = parts[1].lower() if len(parts) > 1 else ""
+            if sub in ("解除", "解禁", "unmute"):
+                await self._cmd_unmute(event, ["/解禁"] + parts[2:])
+            elif sub in ("名单", "列表", "list", "查"):
+                await self._cmd_list_mutes(event)
+            elif sub in ("历史", "history", "记录", "流水"):
+                await self._cmd_list_mute_history(event, ["/禁言历史"] + parts[2:])
+            else:
+                await self._cmd_mute(event, parts)
+        elif cmd == "/审批":
+            sub = parts[1].lower() if len(parts) > 1 else ""
+            if sub in ("通过", "同意", "approve", "过"):
+                await self._cmd_review(event, "/通过", ["/通过"] + parts[2:])
+            elif sub in ("拒绝", "驳回", "reject", "拒"):
+                await self._cmd_review(event, "/拒绝", ["/拒绝"] + parts[2:])
+            else:
+                await self._cmd_list_requests(event, parts)
+        elif cmd == "/状态":
+            await self._cmd_status(event, parts)
         elif cmd == "/撤回":
             await self._cmd_recall(event, parts)
-        elif cmd == "/查禁言":
-            await self._cmd_list_mutes(event)
-        elif cmd == "/审批":
-            await self._cmd_list_requests(event, parts)
-        elif cmd == "/汇报":
-            await self._cmd_report(event)
-        elif cmd == "/体检":
-            await self._cmd_presence(event, parts)
-        elif cmd in ("/通过", "/拒绝"):
-            await self._cmd_review(event, cmd, parts)
         elif cmd == "/管理登记":
             await self._cmd_admin_register(event, parts)
         elif cmd == "/成员":
@@ -4655,6 +4749,26 @@ class QQGroupManager(Star):
     def _mod_settings(self, group: str) -> dict:
         return self.mod.get_settings(group)
 
+    # 判定记录里留存的原文上限（字）。旧版只留 200 字，复核时看不到全貌。
+    _VERDICT_TEXT_CAP = 1000
+
+    def _verdict_text(self, rep: dict) -> dict:
+        """判定记录要留的「原始内容」：够人工二次确认，又不至于把 verdicts.json 撑爆。
+
+        - text：原文前 1000 字
+        - text_len / text_truncated：原文总长与是否被截断（复核时能看出有没有剪）
+        - images：图片条数。官方图片 URL 是临时签名链接，几小时必失效，
+          存进记录里也点不开，所以只记数量，不存 URL。
+        """
+        raw = str(rep.get("text") or "")
+        cap = int(self._VERDICT_TEXT_CAP)
+        return {
+            "text": raw[:cap],
+            "text_len": len(raw),
+            "text_truncated": len(raw) > cap,
+            "images": len(rep.get("images") or []),
+        }
+
     # moderation 话术模板里的内置模块占位符：{at} / {avatar} / {avatar:N}
     _MOD_MODULE_RE = re.compile(r"\{at\}|\{avatar(?::\d+)?\}")
 
@@ -5230,10 +5344,35 @@ class QQGroupManager(Star):
         kind = "正则规则" if hit.get("is_regex") else f"{len(str(hit.get('pattern') or ''))} 字词"
         return f"命中关键词规则：{kind}" + (f"（{src}）" if src else "")
 
-    def _mod_review_fast(self, group: str, rep: dict, respect_switches: bool = True) -> Optional[dict]:
+    def _rebuild_mod_few_shot(self) -> None:
+        """提示词示例 = 内置几条 + 人工标注样本（持久化，重启不丢）。
+
+        以前误判样本只追加到内存，进程一重启就没了，等于“教训白记”。
+        现在从判定记录里回收 feedback 标注：误判 → violation=false，
+        判对 → violation=true；各取最多 20 条、每条 80 字，防止提示词无限膨胀。
+        """
+        lines = [self._mod_few_shot_base]
+        try:
+            samples = self.mod.feedback_samples(limit=20)
+        except Exception as e:                                  # 老数据/损坏文件都不能挡住启动
+            self.logger.debug(f"[审核] 人工样本读取失败，仅用内置示例: {e}")
+            samples = {}
+        for item in samples.get("false_positive") or []:
+            lines.append(f"- 「{item['text']}」→ violation=false（人工确认的误判，勿再判违规）" + chr(10))
+        for item in samples.get("true_positive") or []:
+            cat = item.get("category") or "other"
+            sev = item.get("severity") or "medium"
+            lines.append(f"- 「{item['text']}」→ violation=true, basis=semantic, "
+                         f"category={cat}, severity={sev}（人工确认的违规，尺度参照此条）" + chr(10))
+        self._mod_few_shot = "".join(lines)
+
+    def _mod_review_fast(self, group: str, rep: dict, respect_switches: bool = True,
+                         scene: str = "举报") -> Optional[dict]:
         """L0 关键词 + L1 缓存：零成本，命中直接出结果。
 
         respect_switches=False 时忽略「关键词层」开关（供 /审核 测试、页面试跑等诊断入口用）。
+        命中时会写一条 INFO，说明「这次为什么没调模型」——否则日志里只剩「收到举报」，
+        管理员无从判断是走了关键词层还是模型压根没被调用。
         """
         text = rep.get("text") or ""
         settings = self._mod_settings(group)
@@ -5243,6 +5382,10 @@ class QQGroupManager(Star):
         if hit:
             cat = hit["category"]
             src = str(hit.get("source") or "")
+            self.logger.info(
+                f"[{scene}][零成本层] 关键词命中（类型={self.mod.get_cat_names(group).get(cat, cat)}"
+                f"{'，来源=' + src if src else ''}），未调用模型"
+            )
             return {
                 "violation": True,
                 "basis": moderation.DIM_KEYWORD,
@@ -5257,27 +5400,53 @@ class QQGroupManager(Star):
         cached = self.mod.cache_get(text)
         if cached and cached.get("violation"):
             cached["from_cache"] = True
+            self.logger.info(f"[{scene}][零成本层] 判定缓存命中，未调用模型")
             return cached
         return None
 
     async def _mod_review_llm(self, event: Optional[AstrMessageEvent], group: str, rep: dict,
                               context_lines: list[str], reporter_note: str = "",
-                              pid_override: str = "", respect_switches: bool = True) -> Optional[dict]:
-        """L2 语义 / L3 多模态：调模型拿 JSON 判定。返回 None 表示失败或该层已关闭。"""
+                              pid_override: str = "", respect_switches: bool = True,
+                              scene: str = "举报") -> Optional[dict]:
+        """L2 语义 / L3 多模态：调模型拿 JSON 判定。返回 None 表示失败或该层已关闭。
+
+        日志口径（管理员最常问的「到底调没调模型、调的哪个、模型说了啥」）：
+        - INFO：调用前的 provider / 模式 / 提示词规模，调用后的耗时、token、返回长度、
+                解析出的判定结论；每一处「没调模型」的提前返回都写明原因。
+        - DEBUG：提示词预览与模型原始返回（可能含群聊原文，默认级别下不落盘）。
+        """
         settings = self._mod_settings(group)
         if respect_switches and not settings.get("enable_model", True):
+            self.logger.debug(f"[{scene}][模型] 模型层已关闭，不调用模型")
             return None  # 模型层已关闭：不发任何请求（省钱、降噪）
         # 次数熔断：当天模型判定次数达到上限后不再调模型（自动降级为仅关键词层）
         daily_limit = int(settings.get("daily_budget") or 0)
-        if daily_limit > 0 and self.mod.stats(group).get("today_llm_calls", 0) >= daily_limit:
-            self.logger.warning(f"[审核] 群 {group} 已达当日模型判定次数上限 {daily_limit}，跳过模型判定")
-            return None
+        if daily_limit > 0:
+            used_today = int(self.mod.stats(group).get("today_llm_calls", 0) or 0)
+            if used_today >= daily_limit:
+                self.logger.warning(
+                    f"[{scene}][模型] 群 {group} 已达当日模型判定次数上限 "
+                    f"（今日 {used_today}/{daily_limit} 次），跳过模型判定"
+                )
+                return None
 
         images = list(rep.get("images") or [])
         if respect_switches and not settings.get("enable_vision", True):
             images = []  # 图片层关闭：图片不进提示词，只判文字
         if not images and not (rep.get("text") or "").strip():
+            self.logger.debug(f"[{scene}][模型] 无可判定内容（文本为空且图片层关闭），跳过模型调用")
             return None  # 没有任何可判定内容（例如关闭图片层后只剩图片）
+
+        # 并发闸门：同群已在排队/执行中的模型调用达到上限时，本条消息不再排队，
+        # 直接退回「零成本层」的结果（关键词没命中就按未违规处理），宁可漏判也不拖垮队列。
+        queue_limit = int(settings.get("llm_queue_limit") or 0)
+        pending_now = self._mod_llm_pending.get(group, 0)
+        if queue_limit > 0 and pending_now >= queue_limit:
+            self.logger.info(
+                f"[{scene}][模型] 同群模型调用排队已满（{pending_now}/{queue_limit}），"
+                f"本条跳过模型层，仅按零成本层结果处理"
+            )
+            return None
         sysp = moderation.build_system_prompt(
             dim_names=self.mod.get_dim_names(group),
             cat_names=self.mod.get_cat_names(group),
@@ -5293,18 +5462,82 @@ class QQGroupManager(Star):
             has_image=bool(images),
         )
 
-        async def _call(pid: str, with_images: list[str]):
-            return await self.context.llm_generate(
-                chat_provider_id=pid,
-                system_prompt=sysp,
-                prompt=up,
-                image_urls=with_images or None,
-                temperature=0.0,
-                max_tokens=320,
+        def _usage_text(resp_obj) -> str:
+            usage = getattr(resp_obj, "usage", None)
+            if usage is None:
+                return ""
+            try:
+                return (f" tokens入={usage.input_other}(缓存 {usage.input_cached})"
+                        f" tokens出={usage.output}")
+            except Exception:
+                return ""
+
+        async def _call(pid_used: str, with_images: list[str]):
+            mode = f"多模态({len(with_images)} 张图)" if with_images else "纯文本"
+            self.logger.info(
+                f"[{scene}][模型] 调用模型 provider={pid_used} 模式={mode} "
+                f"提示词 {len(sysp) + len(up)} 字（system {len(sysp)} / user {len(up)}）"
             )
+            self.logger.debug(
+                f"[{scene}][模型] 提示词预览 system={sysp[:200]!r} … user={up[:400]!r}"
+            )
+            t0 = time.perf_counter()
+            sem = self._mod_llm_sem.get(group)
+            if sem is None:
+                sem = self._mod_llm_sem[group] = asyncio.Semaphore(1)
+            # 先占位再取锁：pending 计的是「排队 + 执行中」，入口处的阈值判定才准
+            self._mod_llm_pending[group] = self._mod_llm_pending.get(group, 0) + 1
+            timeout_s = float(settings.get("llm_timeout") or 0)
+            try:
+                async with sem:
+                    pending = self.context.llm_generate(
+                        chat_provider_id=pid_used,
+                        system_prompt=sysp,
+                        prompt=up,
+                        image_urls=with_images or None,
+                        temperature=0.0,
+                        max_tokens=320,
+                    )
+                    # 超时必须自己兜：provider 卡住会一直占着同群的锁，后面的消息全排不上
+                    r = await (asyncio.wait_for(pending, timeout_s) if timeout_s > 0 else pending)
+            except asyncio.TimeoutError:
+                ms = (time.perf_counter() - t0) * 1000
+                self.logger.warning(
+                    f"[{scene}][模型] 调用超时 provider={pid_used} 模式={mode} "
+                    f"耗时 {ms:.0f}ms（阈值 {timeout_s:.0f}s），本条按判定失败处理"
+                )
+                self._mod_last_llm = {"ts": int(time.time()), "ok": False, "ms": round(ms),
+                                      "scene": scene, "provider": pid_used, "error": "timeout"}
+                raise
+            except Exception as e:
+                ms = (time.perf_counter() - t0) * 1000
+                self.logger.warning(
+                    f"[{scene}][模型] 调用异常 provider={pid_used} 模式={mode} "
+                    f"耗时 {ms:.0f}ms: {e}"
+                )
+                self._mod_last_llm = {"ts": int(time.time()), "ok": False, "ms": round(ms),
+                                      "scene": scene, "provider": pid_used,
+                                      "error": str(e)[:120]}
+                raise
+            finally:
+                self._mod_llm_pending[group] = max(0, self._mod_llm_pending.get(group, 1) - 1)
+            text = getattr(r, "completion_text", "") or ""
+            self.logger.info(
+                f"[{scene}][模型] 调用完成 provider={pid_used} 耗时 "
+                f"{(time.perf_counter() - t0) * 1000:.0f}ms{_usage_text(r)} 返回 {len(text)} 字"
+            )
+            self.logger.debug(f"[{scene}][模型] 原始返回: {text[:800]!r}")
+            self._mod_last_llm = {"ts": int(time.time()), "ok": True,
+                                  "ms": round((time.perf_counter() - t0) * 1000),
+                                  "scene": scene, "provider": pid_used}
+            return r
 
         pid = pid_override or await self._mod_provider_id(event, vision=bool(images), group=group)
         if not pid:
+            self.logger.warning(
+                f"[{scene}][模型] 找不到可用的对话模型"
+                f"（未指定「审核模型」且取不到默认 Provider），跳过模型调用"
+            )
             return None
         resp = None
         used_images: list[str] = []
@@ -5316,18 +5549,18 @@ class QQGroupManager(Star):
                 resp = await _call(vpid or pid, images)
                 used_images = images
             except Exception as e:
-                self.logger.warning(f"[审核] 多模态判定失败，降级为纯文本: {e}")
+                self.logger.warning(f"[{scene}][模型] 多模态判定失败，降级为纯文本: {e}")
         if resp is None:
             try:
                 resp = await _call(pid, [])
             except Exception as e:
-                self.logger.error(f"[审核] 模型调用失败: {e}")
+                self.logger.error(f"[{scene}][模型] 模型调用失败: {e}")
                 return None
 
         raw = getattr(resp, "completion_text", "") or ""
         verdict = moderation.parse_json_loose(raw)
         if not verdict:
-            self.logger.warning(f"[审核] 模型未返回合法 JSON: {raw[:200]!r}")
+            self.logger.warning(f"[{scene}][模型] 模型未返回合法 JSON（{len(raw)} 字）: {raw[:200]!r}")
             return None
 
         # 归一化 + 回填模型信息（时长由代码决定，模型无权指定）
@@ -5344,6 +5577,16 @@ class QQGroupManager(Star):
             verdict["confidence"] = 0.0
         verdict["model"] = pid
         verdict["from_cache"] = False
+        try:
+            dim_name = self.mod.get_dim_names(group).get(basis, basis)
+            cat_name = self.mod.get_cat_names(group).get(str(verdict.get("category") or ""), verdict.get("category") or "-")
+            self.logger.info(
+                f"[{scene}][模型] 判定结论 违规={verdict['violation']} 依据={dim_name} 类型={cat_name} "
+                f"严重度={verdict.get('severity') or '-'} 置信度={verdict['confidence']:.2f} "
+                f"理由={str(verdict.get('reason') or '')[:60]!r}"
+            )
+        except Exception as e:                                     # 仅日志，绝不因取名失败影响判定
+            self.logger.debug(f"[{scene}][模型] 判定结论日志输出失败: {e}")
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
@@ -5528,7 +5771,7 @@ class QQGroupManager(Star):
             "reporter": "auto_scan",
             "target": rep.get("sender") or "",
             "target_name": rep.get("sender_name") or "",
-            "text": (rep.get("text") or "")[:200],
+            **self._verdict_text(rep),
             "violation": False,
             "basis": result["basis"],
             "category": result["category"],
@@ -5587,10 +5830,10 @@ class QQGroupManager(Star):
                     f"[审核][变体] 巡检疑似命中：method={variant['method']} "
                     f"strength={variant['strength']} hits={variant['count']} group={g}"
                 )
-            verdict = self._mod_review_fast(g, rep)
+            verdict = self._mod_review_fast(g, rep, scene="巡检")
             if verdict is None and st.get("auto_scan_llm"):
                 verdict = await self._mod_review_llm(
-                    event, g, rep, self._mod_context_lines(g, rep, st), "（自动巡检）"
+                    event, g, rep, self._mod_context_lines(g, rep, st), "（自动巡检）", scene="巡检"
                 )
             if not verdict or not verdict.get("violation"):
                 # 没判定违规但疑似变体：单独走「只撤回+记录」分支（不发言、不禁言）
@@ -5693,7 +5936,7 @@ class QQGroupManager(Star):
                 await self._reply(event, self._mod_tpl(g, "mod_layer_off"))
                 self.mod.add_verdict({
                     "group": g, "msg_id": mid, "reporter": reporter, "target": rep.get("sender"),
-                    "text": (rep.get("text") or "")[:200], "violation": False,
+                    **self._verdict_text(rep), "violation": False,
                     "basis": moderation.DIM_KEYWORD, "category": "", "severity": "",
                     "confidence": 0, "error": "model_layer_off",
                     "skipped_reason": "模型层已关闭，仅跑关键词层（未命中）",
@@ -5721,7 +5964,7 @@ class QQGroupManager(Star):
                 "reporter": reporter,
                 "target": rep.get("sender"),
                 "target_name": rep.get("sender_name"),
-                "text": (rep.get("text") or "")[:200],
+                **self._verdict_text(rep),
                 "violation": result["violation"],
                 "basis": result["basis"],
                 "category": result["category"],
@@ -5999,8 +6242,8 @@ class QQGroupManager(Star):
                 await self._reply(event, "用法：/群管 审核 测试 <消息内容>")
                 return
             rep = {"text": text, "sender": "test", "sender_name": "测试用户", "images": [], "ts": time.time(), "id": ""}
-            v = self._mod_review_fast(g, rep, respect_switches=False) or await self._mod_review_llm(
-                event, g, rep, [], "（测试）", respect_switches=False)
+            v = self._mod_review_fast(g, rep, respect_switches=False, scene="审核测试") or await self._mod_review_llm(
+                event, g, rep, [], "（测试）", respect_switches=False, scene="审核测试")
             if not v:
                 await self._reply(event, "测试失败：模型未返回结果。")
                 return
@@ -6338,6 +6581,22 @@ class QQGroupManager(Star):
             self.mod.set_templates(scope, clean)
         return json_response({"saved": True})
 
+    async def web_mod_verdicts_export(self):
+        """GET /mod/verdicts/export?group=&days=&limit= — 导出判定记录。
+
+        服务端只做筛选与截断，CSV 交给面板前端拼（不依赖 AstrBot 版本的响应体能力）。
+        """
+        g = str(request.query.get("group", "") or "")
+        days = request.query.get("days", 0, type=int) or 0
+        limit = min(5000, max(1, request.query.get("limit", 1000, type=int)))
+        since = int(time.time()) - days * 86400 if days > 0 else 0
+        items = [
+            v for v in (self.mod.verdicts or [])
+            if (not g or v.get("group") == g) and (not since or int(v.get("created_at") or 0) >= since)
+        ]
+        items = items[-limit:]
+        return json_response({"items": items, "total": len(items)})
+
     async def web_mod_verdicts(self):
         g = request.query.get("group", "")
         limit = request.query.get("limit", 100, type=int)
@@ -6357,10 +6616,11 @@ class QQGroupManager(Star):
         target["feedback"] = label
         target["feedback_note"] = note
         self.mod._save(self.mod._verdict_path, self.mod.verdicts)
-        # 误判样本回灌到 few-shot（只做提示，不自动改判定规则）
-        if label == "false_positive" and target.get("text"):
-            self._mod_few_shot += f"- 「{str(target['text'])[:80]}」→ violation=false（人工标注的误判样本，勿再判违规）" + chr(10) + ""
-        return json_response({"saved": True})
+        # 人工标注回灌到提示词示例（只做提示，不自动改判定规则）。
+        # 以前是往内存里 += 一行，重启就丢；现在从判定记录重建，持久化生效。
+        self._rebuild_mod_few_shot()
+        return json_response({"saved": True, "label": label,
+                              "samples": len(self.mod.feedback_samples(limit=20).get(label) or [])})
 
     # ------------------------------------------------------------------
     # 成员档案 Web API
@@ -6645,7 +6905,7 @@ class QQGroupManager(Star):
         if not g or not text:
             return json_response({"error": "missing group or text"})
         rep = {"text": text, "sender": "test", "sender_name": "测试用户", "images": [], "ts": time.time(), "id": ""}
-        v = self._mod_review_fast(g, rep, respect_switches=False)
+        v = self._mod_review_fast(g, rep, respect_switches=False, scene="页面试跑")
         used_llm = False
         pinfo: dict = {"id": "", "display": "", "source": "none"}
         if not v:
@@ -6656,7 +6916,7 @@ class QQGroupManager(Star):
                 return json_response({"error": "没有可用的对话模型：请先在 AstrBot 里配置 Provider，或在「审核模型」里手动指定"})
             v = await self._mod_review_llm(None, g, rep, [], "（页面试跑）",
                                            pid_override=str(pinfo.get("id") or ""),
-                                           respect_switches=False)
+                                           respect_switches=False, scene="页面试跑")
             used_llm = True
         if not v:
             return json_response({"error": "判定失败：模型未返回结果"})
@@ -7285,6 +7545,7 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/settings/save", self.web_mod_settings_save, ["POST"], "审核-保存举报设置")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/templates/save", self.web_mod_templates_save, ["POST"], "审核-保存话术模板")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts", self.web_mod_verdicts, ["GET"], "审核-判定记录")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/export", self.web_mod_verdicts_export, ["GET"], "审核-导出判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/delete", self.web_mod_verdicts_delete, ["POST"], "审核-删除单条判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/clear", self.web_mod_verdicts_clear, ["POST"], "审核-清空判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/feedback", self.web_mod_feedback, ["POST"], "审核-误判标记")

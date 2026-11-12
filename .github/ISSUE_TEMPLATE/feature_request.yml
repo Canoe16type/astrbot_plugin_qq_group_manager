@@ -8,6 +8,10 @@ body:
       value: |
         提之前先看一眼 README，有些"新功能"其实是配置项。
         讲清**场景**比直接给方案有用：先说"我在什么情况下做不到什么"。
+
+        **1.5.0 起指令已按「大类 + 子命令」合并**（禁言 / 审批 / 状态 / 审核 / 群规）。
+        如果你要提的是"再加一条指令"，先看看能不能挂到现有大类下作为子命令；
+        旧指令（`/群管 解禁`、`/群管 通过`、`/群管 汇报` 等）会在 **1.6.0 移除**，新建议请按新结构命名。
   - type: textarea
     id: problem
     attributes:
@@ -25,15 +29,31 @@ body:
     validations:
       required: false
   - type: dropdown
+    id: kind
+    attributes:
+      label: 这个建议属于
+      options:
+        - 新增能力（现在完全没有）
+        - 改进现有指令 / 子命令（含归并到某个大类）
+        - 改进面板交互
+        - 改进判定质量 / 规则写法
+        - 可观测性与排查（日志、自检、记录导出）
+        - 其他
+    validations:
+      required: true
+  - type: dropdown
     id: area
     attributes:
       label: 相关模块
       multiple: true
       options:
-        - 禁言 / 解禁
+        - 禁言（禁言 / 解除 / 名单 / 历史）
         - 消息撤回
-        - 入群审批 / 欢迎
-        - 群规审核（/举报）
+        - 入群审批 / 自动审批策略 / 欢迎
+        - 群规审核（/群管 举报、巡检、模型判定）
+        - 判定记录 / 详情 / 导出 CSV
+        - 模型调用（并发闸门 / 超时 / 每日预算）
+        - 状态与自检（/群管 状态）
         - 词典 / 词库
         - 变体检测 / 待办队列
         - 管理面板（WebUI）
@@ -49,6 +69,10 @@ body:
         - label: 我理解本插件只支持 qq_official 平台，不是拿来适配其他平台的
           required: true
         - label: 我理解平台限制（撤回 2 分钟时限、退群通知不可用等）不算 bug
+          required: true
+        - label: 我理解新功能默认按「大类 + 子命令」组织，不再新增平级独立指令
+          required: true
+        - label: 我理解旧指令别名会在 1.6.0 移除，不建议围绕旧写法做增强
           required: true
     validations:
       required: true

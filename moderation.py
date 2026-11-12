@@ -694,7 +694,11 @@ class ModerationStore:
     "recall_max_age_seconds": 110,
         "report_limit_per_hour": 5,   # 每人每小时举报次数上限
         "reply_when_clean": True,     # 不违规时是否也在群里回一句
-        "daily_budget": 0.0,          # 每日费用熔断（0=不限）
+        # 每日模型调用次数熔断（0=不限）。默认 500：刷屏群开着「巡检调模型」时，
+        # 一天打满 500 次基本等于失控，先熔断再排查，比月底看账单好。
+        "daily_budget": 500,
+        "llm_queue_limit": 3,         # 同群模型调用排队上限（超出直接跳过模型层，只走关键词层）
+        "llm_timeout": 45,            # 单次模型调用超时（秒）；超时按失败处理，不无限占着队列
         "whitelist": [],              # 豁免成员 openid（管理员自动豁免）
         "keywords": {},               # 群自定义关键词 {category: [pattern]}
         # ---- 变体检测（谐音/形近/插符号绕过）----
@@ -785,6 +789,33 @@ class ModerationStore:
             del self.verdicts[: len(self.verdicts) - int(max_records)]
         self._save(self._verdict_path, self.verdicts)
         return rec
+
+    def feedback_samples(self, limit: int = 40) -> dict:
+        """人工标注过的样本，按「误判 / 判对」分组，供提示词 few-shot 使用。
+
+        只取带原文的记录；同一条原文只保留最新一次标注。返回
+        {"false_positive": [...], "true_positive": [...]}，各不超过 limit 条。
+        """
+        out = {"false_positive": [], "true_positive": []}
+        seen: set[str] = set()
+        for v in reversed(self.verdicts or []):
+            label = str(v.get("feedback") or "")
+            if label not in out:
+                continue
+            text = str(v.get("text") or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out[label].append({
+                "text": text[:80],
+                "category": str(v.get("category") or ""),
+                "basis": str(v.get("basis") or ""),
+                "severity": str(v.get("severity") or ""),
+            })
+            if len(out[label]) >= int(limit):
+                if all(len(x) >= int(limit) for x in out.values()):
+                    break
+        return out
 
     def delete_verdict(self, vid: int) -> bool:
         """删除单条判定记录（仅删本地留痕，不影响已生效的禁言/撤回）。"""

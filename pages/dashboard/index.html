@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>QQ 群管理 · 控制台</title>
+<title>QQ官机群管 · 控制台</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -50,7 +50,7 @@
   <aside class="rail">
     <div class="brand">
       <div class="mark"><svg class="ico" style="width:22px;height:22px" viewBox="0 0 44 44"><use href="#i-logo"/></svg></div>
-      <div class="btxt"><b>群管控制台</b><span>QQ Group Manager</span></div>
+      <div class="btxt"><b>QQ官机群管</b><span>QQ Official Bot Group Manager</span></div>
     </div>
     <nav class="nav tabs" id="mainTabs">
       <button class="tab active" data-tab="status"><svg class="ico"><use href="#i-overview"/></svg><span class="lbl">概览</span></button>
@@ -398,6 +398,8 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field"><span>撤回尝试时限（秒，官方硬限 120；0=不限，总是尝试）</span><input type="number" id="s-recall_max_age_seconds" min="0" /></label>
  <label class="field"><span>每人每小时举报上限（0=不限）</span><input type="number" id="s-report_limit_per_hour" min="0" /></label>
  <label class="field"><span>每日模型调用上限（次，0=不限）</span><input type="number" id="s-daily_budget" step="1" min="0" /></label>
+ <label class="field"><span>同群模型排队上限（条，0=不限）</span><input type="number" id="s-llm_queue_limit" step="1" min="0" title="同一群同时排队等待模型判定的消息数，超过的部分跳过模型层、只按关键词层处理" /></label>
+ <label class="field"><span>单次模型超时（秒，0=不限）</span><input type="number" id="s-llm_timeout" step="1" min="0" title="provider 卡住超过该时长按失败处理，避免占住同群队列" /></label>
  </div>
  <div class="beta-box">
   <div class="beta-head">
@@ -662,6 +664,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <div class="stat-row" id="stat-row"></div>
  <div class="log-controls" style="margin:10px 0 4px">
  <button class="btn ghost small" id="btnVerdictRefresh">↻ 刷新记录</button>
+ <button class="btn ghost small" id="btnVerdictExport">⭳ 导出 CSV</button>
  <button class="btn danger small" id="btnVerdictClearOne"> 清空本群记录</button>
  <button class="btn danger small" id="btnVerdictClearAll"> 清空全部群记录</button>
  <span class="hint" id="verdictClearMsg">删除只清本地留痕（省空间），不会撤销已执行的禁言</span>
@@ -702,7 +705,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <div class="table-wrap">
  <table class="tbl">
  <thead>
- <tr><th>时间</th><th>对象</th><th>维度</th><th>类型</th><th>置信度</th><th>动作</th><th>缓存</th><th>操作</th></tr>
+ <tr><th>时间</th><th>对象</th><th>原文</th><th>维度</th><th>类型</th><th>置信度</th><th>动作</th><th>缓存</th><th>操作</th></tr>
  </thead>
  <tbody id="verdict-rows"></tbody>
  </table>

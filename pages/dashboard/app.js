@@ -1,5 +1,5 @@
 
-// QQ 群管理 WebUI 前端
+// QQ官机群管 WebUI 前端
 /* ---------------- 宿主 bridge（惰性解析，兼容晚注入） ----------------
    宿主页（AstrBot）会把 bridge 挂到 window.AstrBotPluginPage，注入时机可能晚于本模块执行。
    以前这里直接写 `const bridge = window.AstrBotPluginPage`，等于把加载那一刻的 undefined
@@ -1275,6 +1275,7 @@ function collectRules() {
 const S_KEYS = ["enabled", "dry_run", "auto_scan", "auto_scan_llm", "enable_keyword", "enable_model",
   "enable_vision", "keep_context", "reply_when_clean",
   "context_size", "confidence_threshold", "max_mute_seconds", "report_limit_per_hour", "daily_budget",
+  "llm_queue_limit", "llm_timeout",
   "recall_max_age_seconds",
   "variant_check", "variant_recall", "variant_confusable", "variant_abbr", "variant_fuzzy", "variant_min_chars",
   "variant_strike_enabled", "variant_strike_window_days", "variant_strike_threshold",
@@ -1321,6 +1322,8 @@ function collectSettings() {
   out.max_mute_seconds = parseInt(out.max_mute_seconds || 0, 10);
   out.recall_max_age_seconds = parseInt(out.recall_max_age_seconds || 0, 10);
   out.report_limit_per_hour = parseInt(out.report_limit_per_hour || 0, 10);
+  out.llm_queue_limit = Math.max(0, Math.min(parseInt(out.llm_queue_limit || 3, 10), 20));
+  out.llm_timeout = Math.max(0, Math.min(parseInt(out.llm_timeout || 45, 10), 300));
   out.variant_min_chars = Math.max(2, Math.min(parseInt(out.variant_min_chars || 3, 10), 12));
   out.variant_strike_window_days = Math.max(1, Math.min(parseInt(out.variant_strike_window_days || 7, 10), 90));
   out.variant_strike_threshold = Math.max(1, Math.min(parseInt(out.variant_strike_threshold || 3, 10), 50));
@@ -1420,6 +1423,8 @@ async function loadRecords() {
     tr.innerHTML =
       `<td>${ts2str(v.created_at)}</td>` +
       `<td>${esc((v.target_name || v.target || "-").slice(0, 12))}</td>` +
+      `<td class="vtext" data-vd="${v.id}" title="${esc(v.text || "")}">${esc((v.text || "—").slice(0, 24))}${(v.text || "").length > 24 ? "…" : ""}` +
+      (v.images ? ` <span class="hint">🖼${v.images}</span>` : "") + `</td>` +
       `<td>${esc(dim[v.basis] || v.basis || "-")}</td>` +
       `<td><span class="tag ${v.violation ? "hit" : "clean"}">${v.violation ? esc(cats[v.category] || v.category || "违规") : "未违规"}</span>` +
       (v.variant_hit ? ` <span class="tag" title="疑似变体写法（${esc((v.variant || {}).method || "")}）${v.variant_recalled ? "，已按变体撤回" : ""}">变体</span>` : "") + `</td>` +
@@ -1427,12 +1432,15 @@ async function loadRecords() {
       `<td>${v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : esc(v.skipped_reason || (v.violation ? "未执行" : "-"))}</td>` +
       `<td>${v.from_cache ? "是" : "否"}</td>` +
       `<td style="white-space:nowrap"><button class="btn" data-fb="${v.id}">误判</button> ` +
+      `<button class="btn" data-ok="${v.id}" title="判定正确，加入提示词正例">正确</button> ` +
       `<button class="btn danger" data-dv="${v.id}" title="删除这条本地记录">✕</button></td>`;
-    tr.querySelector("[data-fb]").onclick = () => markFeedback(v.id);
+    tr.querySelector("[data-fb]").onclick = () => markFeedback(v.id, "false_positive");
+    tr.querySelector("[data-ok]").onclick = () => markFeedback(v.id, "true_positive");
+    tr.querySelector("[data-vd]").onclick = () => showVerdictDetail(v);
     tr.querySelector("[data-dv]").onclick = () => delVerdict(v.id);
     rows.appendChild(tr);
   });
-  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="8" style="color:var(--sub)">暂无记录</td></tr>';
+  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="9" style="color:var(--sub)">暂无记录</td></tr>';
 }
 
 /* ---------------- 待办（半自动：机器筛、人确认） ---------------- */
@@ -1541,14 +1549,110 @@ async function handleTodo(id, action, seconds) {
   }
 }
 
-async function markFeedback(id) {
+async function markFeedback(id, label = "false_positive") {
   try {
-    await bridge.apiPost("mod/feedback", { id, label: "false_positive", note: "Page 标记" });
-    toast("已记录为误判样本，会加入提示词示例");
+    const r = await bridge.apiPost("mod/feedback", { id, label, note: "Page 标记" });
+    const n = r && r.samples != null ? `（当前 ${r.samples} 条同类样本）` : "";
+    showToast(label === "false_positive"
+      ? `已记为误判样本，会进入提示词示例${n}`
+      : `已记为正确样本，会作为正例进入提示词${n}`);
+    loadRecords();
   } catch (e) {
     toast("标记失败：" + e.message, true);
   }
 }
+
+/* 判定详情：原文 + 完整字段，用来人工二次确认（旧记录只有 200 字，会标注） */
+function showVerdictDetail(v) {
+  const old = document.getElementById("vd-modal");
+  if (old) old.remove();
+  const dim = (detail && detail.dim_names) || DIM_LABELS;
+  const cats = (detail && detail.cat_names) || CAT_LABELS;
+  const textLen = v.text_len != null ? v.text_len : (v.text || "").length;
+  const rows = [
+    ["群", v.group || "-"],
+    ["时间", ts2str(v.created_at)],
+    ["对象", v.target_name || v.target || "-"],
+    ["来源", v.reporter === "auto_scan" ? "自动巡检" : (v.reporter || "-")],
+    ["维度", dim[v.basis] || v.basis || "-"],
+    ["类型", v.violation ? (cats[v.category] || v.category || "违规") : "未违规"],
+    ["严重度", v.severity || "-"],
+    ["置信度", v.confidence == null ? "-" : Number(v.confidence).toFixed(2)],
+    ["理由", v.reason || "-"],
+    ["命中规则", v.rule_name || "-"],
+    ["动作", v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : (v.skipped_reason || (v.violation ? "未执行" : "-"))],
+    ["执行模式", v.dry_run ? "试运行" : "真实执行"],
+    ["模型", v.model || "-"],
+    ["人工标注", v.feedback === "false_positive" ? "误判" : (v.feedback === "true_positive" ? "正确" : "-")],
+  ];
+  const wrap = document.createElement("div");
+  wrap.id = "vd-modal";
+  wrap.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px";
+  wrap.innerHTML =
+    `<div style="background:var(--panel,#1b1b1f);color:var(--text,#eee);max-width:760px;width:100%;max-height:82vh;overflow:auto;border-radius:12px;padding:18px;line-height:1.7;box-shadow:0 12px 40px rgba(0,0,0,.4)">` +
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">` +
+    `<b>判定详情 #${v.id}</b><button class="btn small" id="vd-close">关闭</button></div>` +
+    `<div>${rows.map(([k, val]) => `<div><span style="color:var(--sub,#999)">${k}：</span>${esc(val)}</div>`).join("")}</div>` +
+    `<div style="margin-top:12px;color:var(--sub,#999)">原文（${textLen} 字${v.text_truncated ? "，超出上限已截断" : ""}` +
+    `${v.images ? `｜含 ${v.images} 张图片（官方链接有时效，未存档）` : ""}）：</div>` +
+    `<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(127,127,127,.14);padding:10px;border-radius:8px;margin:6px 0;font-size:12px">${esc(v.text || "（这条是旧版记录，当时只留了 200 字以内，且可能为空）")}</pre>` +
+    `<button class="btn small" id="vd-copy">复制原文</button></div>`;
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  document.body.appendChild(wrap);
+  document.getElementById("vd-close").onclick = () => wrap.remove();
+  const cp = document.getElementById("vd-copy");
+  if (cp) cp.onclick = () => {
+    const t = v.text || "";
+    if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => showToast("已复制")).catch(() => {});
+    else toast("浏览器不允许复制，请手动选中", true);
+  };
+}
+
+/* 导出判定记录：服务端筛选，前端拼 CSV（带 BOM，Excel 打开不乱码） */
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+async function exportVerdicts() {
+  try {
+    const res = await bridge.apiGet("mod/verdicts/export", { group: current, limit: 5000 });
+    const items = res.items || [];
+    if (!items.length) return showToast("没有可导出的记录");
+    const dim = (detail && detail.dim_names) || DIM_LABELS;
+    const cats = (detail && detail.cat_names) || CAT_LABELS;
+    const head = ["时间", "群", "消息ID", "来源", "对象", "原文", "原文总长", "是否截断", "图片数",
+      "维度", "类型", "是否违规", "严重度", "置信度", "理由", "命中规则",
+      "动作", "已执行", "试运行", "模型", "缓存命中", "人工标注", "标注备注"];
+    const lines = [head.join(",")];
+    items.forEach((v) => {
+      lines.push([
+        ts2str(v.created_at), v.group, v.msg_id, v.reporter === "auto_scan" ? "自动巡检" : v.reporter,
+        v.target_name || v.target, v.text, v.text_len != null ? v.text_len : (v.text || "").length,
+        v.text_truncated ? "是" : "否", v.images || 0,
+        dim[v.basis] || v.basis, v.violation ? (cats[v.category] || v.category || "违规") : "未违规",
+        v.violation ? "是" : "否", v.severity, v.confidence, v.reason, v.rule_name,
+        v.executed ? "已禁言" + fmtDur(v.ban_seconds) : (v.skipped_reason || (v.violation ? "未执行" : "-")),
+        v.executed ? "是" : "否", v.dry_run ? "是" : "否", v.model, v.from_cache ? "是" : "否",
+        v.feedback === "false_positive" ? "误判" : (v.feedback === "true_positive" ? "正确" : ""),
+        v.feedback_note || "",
+      ].map(csvCell).join(","));
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `qqgm-verdicts-${current ? current.slice(-6) : "all"}-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    showToast(`已导出 ${items.length} 条判定记录`);
+  } catch (e) {
+    toast("导出失败：" + e.message, true);
+  }
+}
+const btnVerdictExport = document.getElementById("btnVerdictExport");
+if (btnVerdictExport) btnVerdictExport.addEventListener("click", exportVerdicts);
 
 async function delVerdict(id) {
   if (!(await showConfirm(`删除判定记录 #${id}？只删本地这条留痕，不影响已生效的禁言。`))) return;
@@ -3112,28 +3216,30 @@ const HELP = {
       def:"用法：长按违规消息 → 回复它 → 发 /群管 举报（可附一句说明）。全体成员可用。核心约定：只有收到 /群管 举报 才进入审核，平时不扫描、不判定、不发言。", doc:null },
     { id:"c_rules", term:"/群管 群规 · 查看与维护本群群规", go:["review","群规审核"],
       def:"列表：/群管 群规 或 /群管 群规 列表。添加：/群管 群规 添加 规则名｜判定说明｜时长。批量：多条之间用 ; 分隔。删除：/群管 群规 删除 序号。清空：/群管 群规 清空。命令行添加的群规类型固定「其他违规」、严重度「中」，要精确设置请到面板配置。写操作需管理员。", doc:null },
-    { id:"c_groupname", term:"/群管 群名 · 刷新本群群名", go:["groups","群列表"],
+    { id:"c_groupname", term:"/群管 状态 群名 ·（旧：群名，1.6.0 移除）刷新本群群名", go:["groups","群列表"],
       def:"调官方群信息接口查询并存入插件数据，面板优先显示它（优先级：手动备注 > 接口群名）。面板打开时不会自动请求。接口为白名单权限，无权限会返回 11253，此时用面板「备注」手动起名。管理员指令。", doc:null },
     { id:"c_mute", term:"/群管 禁言 @用户 时长 [理由]", go:["mute","禁言"],
       def:"时长写法：30秒 / 5分钟 / 2小时 / 1天（秒、分、时、天都支持简写 s/m/h/d），纯数字＝秒，也认「半小时」这类中文数字。必须 @ 目标成员；不能禁言自己；不写时长会提示格式错误；同时 @ 多人只处理第一个。不写理由就用默认禁言理由（默认「违反群规」）。机器人需在该群有群主或管理员权限。管理员指令。", doc:null },
-    { id:"c_unmute", term:"/群管 解禁 @用户", go:["mute","禁言"],
-      def:"解除指定成员的禁言；支持一次 @ 多人，逐个处理并分别回复。管理员指令。", doc:null },
-    { id:"c_listmute", term:"/群管 查禁言 · 当前禁言成员", go:["mute","禁言"],
-      def:"列出本群当前被禁言的成员及到期时间（数据来自插件本地缓存）。管理员指令。", doc:null },
-    { id:"c_history", term:"/群管 禁言历史 [条数|汇总] [@用户|OpenID前缀]", go:["mute","禁言"],
+    { id:"c_unmute", term:"/群管 禁言 解除 @用户 ·（旧：解禁 @用户，1.6.0 移除）", go:["mute","禁言"],
+      def:"解除指定成员的禁言；支持一次 @ 多人，逐个处理并分别回复。等价写法 /群管 禁言 解除 @用户。管理员指令。", doc:null },
+    { id:"c_listmute", term:"/群管 禁言 名单 ·（旧：查禁言，1.6.0 移除）当前禁言成员", go:["mute","禁言"],
+      def:"列出本群当前被禁言的成员及到期时间（数据来自插件本地缓存）。等价写法 /群管 禁言 名单。管理员指令。", doc:null },
+    { id:"c_history", term:"/群管 禁言 历史 [条数|汇总] [@用户|OpenID前缀] ·（旧：禁言历史，1.6.0 移除）", go:["mute","禁言"],
       def:"默认最近 10 条（范围 1~50）；加「汇总」按成员汇总；可指定成员；也能直接填 OpenID 或其前 8 位以上前缀，用来查已退群用户。QQ 接口不提供禁言历史查询，这些记录由插件本地保存。管理员指令。", doc:null },
     { id:"c_recall", term:"/群管 撤回 · 撤回消息", go:["recall","撤回"],
       def:"推荐做法：引用目标消息后发 /群管 撤回（普通人看不到消息 ID）；也可以 /群管 撤回 <消息ID>，ID 在面板「记录 → 撤回历史」里看。官方限制：超过 2 分钟不可撤回（40064004）；机器人是群管理员时可撤回普通成员消息，否则只能撤自己发的（40062003）。管理员指令。", doc:null },
     { id:"c_requests", term:"/群管 审批 · 待处理入群申请", go:["approve","入群审批"],
       def:"列出本群待处理申请（序号、昵称、来源、时间、验证消息）；缓存为空时会自动拉取最新列表。管理员指令。", doc:null },
-    { id:"c_pass", term:"/群管 通过 序号|昵称关键字", go:["approve","入群审批"],
-      def:"例：/群管 通过 2 或 /群管 通过 小明（匹配列表中第一个昵称含「小明」的申请）。批准后自动回复结果；开启「成员入群欢迎」时会向群内发欢迎语。管理员指令。", doc:null },
-    { id:"c_reject", term:"/群管 拒绝 序号|昵称关键字 [理由]", go:["approve","入群审批"],
-      def:"例：/群管 拒绝 3 广告号。理由可省略；填了会透传给官方接口作为拒绝原因。管理员指令。", doc:null },
+    { id:"c_pass", term:"/群管 审批 通过 序号|昵称关键字 ·（旧：通过，1.6.0 移除）", go:["approve","入群审批"],
+      def:"例：/群管 审批 通过 2 或 /群管 审批 通过 小明（匹配列表中第一个昵称含「小明」的申请）；旧的 /群管 通过 2 仍然可用。批准后自动回复结果；开启「成员入群欢迎」时会向群内发欢迎语。管理员指令。", doc:null },
+    { id:"c_reject", term:"/群管 审批 拒绝 序号|昵称关键字 [理由] ·（旧：拒绝，1.6.0 移除）", go:["approve","入群审批"],
+      def:"例：/群管 审批 拒绝 3 广告号；旧的 /群管 拒绝 3 广告号 仍然可用。理由可省略；填了会透传给官方接口作为拒绝原因。管理员指令。", doc:null },
     { id:"c_register", term:"/群管 管理登记 [列表|取消]", go:["review","群规审核"],
       def:"把自己加入本群「变体提醒名单」——变体累计到阈值时只 @ 名单内的人。不带参数＝登记（回执带当前人数）；加「列表/查看」看已登记的人；加「取消/移除」把自己移出。管理员指令。", doc:null },
     { id:"c_audit", term:"/群管 审核 · 状态 / 试跑 / 巡检 / 测试", go:["review","群规审核"],
-      def:"不带参数看本群审核状态（开关、试运行、巡检、群规条数、阈值、上限、累计次数、缓存命中率）；/群管 审核 试跑 开|关 切试运行；/群管 审核 巡检 开|关 切关键词巡检；/群管 审核 测试 <内容> 用当前配置试判一条；/群管 审核 自我介绍 手动重发群管功能介绍。管理员指令。", doc:null }
+      def:"不带参数看本群审核状态（开关、试运行、巡检、群规条数、阈值、上限、累计次数、缓存命中率）；/群管 审核 试跑 开|关 切试运行；/群管 审核 巡检 开|关 切关键词巡检；/群管 审核 测试 <内容> 用当前配置试判一条；/群管 审核 自我介绍 手动重发群管功能介绍。管理员指令。", doc:null },
+    { id:"c_status", term:"/群管 状态 ·（旧：汇报 / 体检 / 自检 / 群名，1.6.0 移除）", go:["review","群规审核"],
+      def:"所有「看一眼现状」的指令收在这一个入口，不带参数＝群管日报（待处理申请 + 禁言人数）。<br/>· <code>/群管 状态 群 [清理]</code>＝原来的体检：机器人还在不在已记录的群里（加「清理」才删离群群数据）<br/>· <code>/群管 状态 自检</code>＝原来的自检：审核链路配置 + 今日用量 + 并发闸门 + 最近一次模型调用<br/>· <code>/群管 状态 群名</code>＝原来的群名：刷新本群群名<br/>旧写法（/群管 汇报、/群管 体检、/群管 自检、/群管 群名）全部继续可用，只是文档只推这一套。管理员指令。", doc:null }
   ],
 
   /* ── Markdown 大全：写法全部按 QQ 官方「Markdown 消息」文档核对 ──

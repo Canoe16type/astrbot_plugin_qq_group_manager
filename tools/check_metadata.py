@@ -56,6 +56,40 @@ def main() -> int:
         head = open(os.path.join(BASE, "CHANGELOG.md"), encoding="utf-8").read()
         check(bool(re.search(rf"^## {re.escape(ver)}(?:$|[\s（(])", head, re.M)), f"CHANGELOG 有 {ver} 条目")
 
+    # README / GUIDE 的「实测 AstrBot x.y.z」最容易一处改了另一处忘，也卡住
+    print("[实测 AstrBot 版本]")
+    tested = {}
+    for rel in ("README.md", os.path.join("docs", "GUIDE.md")):
+        path = os.path.join(BASE, rel)
+        if not os.path.exists(path):
+            continue
+        m = re.search(r"实测\s*(\d+\.\d+\.\d+)", open(path, encoding="utf-8").read())
+        if m:
+            tested[rel] = m.group(1)
+    check(len(set(tested.values())) <= 1,
+          "README 与 GUIDE 的「实测 AstrBot 版本」一致" + (f"（当前 {tested}）" if len(set(tested.values())) > 1 else f"（{next(iter(tested.values()), '未标注')}）"))
+    if tested:
+        try:
+            import importlib.metadata as _md
+            installed = _md.version("astrbot")
+        except Exception:
+            installed = ""
+        if installed and installed not in set(tested.values()):
+            # 只提醒不失败：CI 环境和作者本机未必同版本
+            print(f"⚠️ 本机 AstrBot {installed} 与文档「实测」版本 {sorted(set(tested.values()))} 不同，确认是否要更新文档")
+
+    # 文档里的 version 徽章最容易漂（1.2.0 那次就是漏了 GUIDE），一并卡住
+    print("[文档版本徽章]")
+    for rel in ("README.md", os.path.join("docs", "GUIDE.md")):
+        path = os.path.join(BASE, rel)
+        if not os.path.exists(path):
+            continue
+        text = open(path, encoding="utf-8").read()
+        m = re.search(r"img\.shields\.io/badge/version-([0-9][0-9.]*)-", text)
+        check(bool(m), f"{rel} 有 version 徽章")
+        if m:
+            check(m.group(1) == ver, f"{rel} 徽章版本 = {ver}（当前 {m.group(1)}）")
+
     print()
     if FAILED:
         print(f"❌ 有 {len(FAILED)} 项未通过")
