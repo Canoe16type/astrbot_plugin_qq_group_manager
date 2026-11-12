@@ -3540,7 +3540,7 @@ class QQGroupManager(Star):
                     message_id = str(reply.id)
                     # 引用组件里带被引用消息的原文（官方接口不提供查消息内容，
                     # 引用撤回是唯一能拿到原文的途径），用于历史备份查验。
-                    quoted_content = getattr(reply, "message_str", "") or ""
+                    quoted_content = self._clean_quote_summary(getattr(reply, "message_str", "") or "")
                     if not quoted_content:
                         chain = getattr(reply, "chain", None)
                         if chain:
@@ -3668,14 +3668,14 @@ class QQGroupManager(Star):
                     mid = str(
                         e0.get("msg_idx") or e0.get("id") or e0.get("message_id") or ""
                     )
-                    content = str(e0.get("content") or "")
+                    content = self._clean_quote_summary(str(e0.get("content") or ""))
                 else:
                     mid = str(
                         getattr(e0, "msg_idx", "")
                         or getattr(e0, "id", "")
                         or getattr(e0, "message_id", "")
                     )
-                    content = str(getattr(e0, "content", "") or "")
+                    content = cls._clean_quote_summary(str(getattr(e0, "content", "") or ""))
             # 2) message_reference 直接携带被引用消息 ID
             if not mid:
                 if isinstance(ref, dict):
@@ -4873,6 +4873,44 @@ class QQGroupManager(Star):
     # 而转发消息本身在缓存里是 [群聊的聊天记录] / === 消息 N === / [消息内容] ...。
     # 两套格式互不包含，所以「整串 in」永远匹配不上；必须抽 [消息内容] 行做交集。
     _QUOTE_ITEM_RE = re.compile(r"\[消息内容\]\s*(.+)")
+
+    @classmethod
+    def _clean_quote_summary(cls, text: str) -> str:
+        """把引用摘要清洗成「被引用那一条」的正文。
+
+        适配器渲染摘要时会把**嵌套引用**也铺进来，例如：
+
+            === 消息 1 ===
+            [消息内容]  <@bot>
+            /群管 举报
+            [消息类型] 引用消息
+            [关联消息]
+            --- 第1条 ---
+                [消息内容] 转人机
+
+        整段拿去匹配缓存，会命中更里层的那条（上例的「转人机」）——
+        目标从「被举报的消息」漂到别人的旧消息上，发送者跟着错，上下文也围着错的人取。
+        所以在这里截断到 [关联消息] 之前，再剥掉标签与 <@openid> 占位；
+        没有嵌套标记（合并转发等）时原样返回，别破坏 `_quote_forward_items` 的解析。
+        """
+        raw = str(text or "")
+        if not raw:
+            return ""
+        cut = len(raw)
+        for mark in ("[关联消息]", "--- 第1条 ---"):
+            i = raw.find(mark)
+            if i != -1:
+                cut = min(cut, i)
+        if cut == len(raw):
+            return raw                      # 没有嵌套：保持原样（可能是合并转发摘要）
+        t = raw[:cut]
+        t = re.sub(r"===\s*消息\s*\d+\s*===", " ", t)
+        t = re.sub(r"\[消息(?:内容|类型)\]\s*(?:引用消息|合并转发|图片|视频|语音|文件)?", " ", t)
+        t = re.sub(r"<@!?[0-9A-Za-z_\-]+>", " ", t)   # 官方 @ 占位符
+        t = re.sub(r"^-+\s*第\s*\d+\s*条\s*-+$", " ", t, flags=re.M)
+        t = re.sub(r"[ \t]+\n", "\n", t)
+        t = re.sub(r"\n{3,}", "\n\n", t)
+        return t.strip()
     _FORWARD_NOISE = {
         "[群聊的聊天记录]", "群聊的聊天记录", "[转发消息]", "[合并转发]",
         "[聊天记录]", "聊天记录",
@@ -5056,20 +5094,20 @@ class QQGroupManager(Star):
                 rid = getattr(reply, "id", None)
                 if rid:
                     message_id = str(rid)
-                quoted_content = getattr(reply, "message_str", "") or ""
+                quoted_content = self._clean_quote_summary(getattr(reply, "message_str", "") or "")
                 # reply.chain 里的文本才是被引用原文；message_str 有时只剩占位标题。
                 chain_parts = []
                 for sub in (getattr(reply, "chain", None) or []):
                     if type(sub).__name__ == "Image":
-                        u = str(getattr(sub, "url", "") or getattr(sub, "file", "") or "")
-                        if u.startswith("http"):
+                        u = _norm_media_url(getattr(sub, "url", "") or getattr(sub, "file", "") or "")
+                        if u.startswith("http") and u not in quoted_images:
                             quoted_images.append(u)
                     else:
                         t = str(getattr(sub, "text", "") or "")
                         if t.strip():
                             chain_parts.append(t.strip())
                 if chain_parts:
-                    quoted_content = "\n".join(chain_parts)
+                    quoted_content = self._clean_quote_summary("\n".join(chain_parts))
         except Exception:
             pass
         try:
