@@ -117,6 +117,71 @@ class CleanSummaryTest(unittest.TestCase):
         self.assertEqual(QQGroupManager._clean_quote_summary("转人机"), "转人机")
 
 
+class TieBreakTest(unittest.TestCase):
+    def test_same_text_prefers_most_recent_and_flags_ambiguous(self):
+        """高频短句被多人说过：同分时取最近那条，并打 warning 说明存在歧义。"""
+        p = _plugin()
+        now = time.time()
+        p._recent_group_msgs["g1"] = [
+            {"id": "old", "text": "哈哈", "ts": now - 200, "sender": "u1",
+             "sender_name": "A", "images": []},
+            {"id": "new", "text": "哈哈", "ts": now - 2, "sender": "u2",
+             "sender_name": "B", "images": []},
+        ]
+        rep = p._mod_resolve_reported(_Event(_Raw("哈哈", message_type=0)))
+        self.assertEqual(rep["id"], "new")
+        self.assertEqual(rep["sender"], "u2")
+        self.assertTrue(rep.get("match_ambiguous"))
+        self.assertIn("同分候选", p.logger.text("warning"))
+
+    def test_ambiguous_never_executes(self):
+        """同文候选多条时选谁都可能错：即使判定违规，也只能判定不能处罚。"""
+        p = _plugin()
+        p.mod = SimpleNamespace(get_rules=lambda g: [])
+        p._read_config_value = lambda keys, default="", legacy_keys=(): default
+        import asyncio
+        res = asyncio.run(p._mod_execute(
+            SimpleNamespace(get_platform_id=lambda: "qq_official"), "g1",
+            {"match_ambiguous": True, "sender": "u2"},
+            {"violation": True, "basis": "semantic", "category": "ad", "severity": "high",
+             "confidence": 0.99, "reason": "广告"},
+            {"dry_run": False, "max_mute_seconds": 60},
+        ))
+        self.assertTrue(res["dry_run"])
+        self.assertTrue(res["ambiguous"])
+        self.assertFalse(res["executed"])
+
+
+class UnattributedTest(unittest.TestCase):
+    def test_old_message_keeps_content_but_marks_unattributed(self):
+        """引用超过缓存窗口：正文还在，但要如实标记「没定位到发送者」。"""
+        p = _plugin()
+        p._recent_group_msgs["g1"] = []
+        rep = p._mod_resolve_reported(_Event(_Raw("这人好烦啊", message_type=0)))
+        self.assertFalse(rep["resolved"])
+        self.assertTrue(rep["unattributed"])
+        self.assertEqual(rep["text"], "这人好烦啊")
+        self.assertEqual(rep["sender"], "")
+
+    def test_unattributed_never_executes(self):
+        """未定位发送者时，即使判定违规且 dry_run 关闭，也只能判定不能处罚。"""
+        p = _plugin()
+        p.mod = SimpleNamespace(get_rules=lambda g: [])
+        p._read_config_value = lambda keys, default="", legacy_keys=(): default
+        res = __import__("asyncio").run(p._mod_execute(
+            SimpleNamespace(get_platform_id=lambda: "qq_official"),
+            "g1",
+            {"unattributed": True, "sender": ""},
+            {"violation": True, "basis": "semantic", "category": "ad", "severity": "medium",
+             "confidence": 0.99, "reason": "广告"},
+            {"dry_run": False, "max_mute_seconds": 60},
+        ))
+        self.assertTrue(res["dry_run"])
+        self.assertTrue(res["unattributed"])
+        self.assertFalse(res["executed"])
+        self.assertIn("无法确定", res["skipped_reason"])
+
+
 class NestedResolveTest(unittest.TestCase):
     def test_target_is_outer_message_not_inner(self):
         p = _plugin()

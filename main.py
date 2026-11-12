@@ -4944,6 +4944,7 @@ class QQGroupManager(Star):
             qitems = self._quote_forward_items(text)
             bare = (text or "").strip()
             best, best_score = None, -1.0
+            top: list[dict] = []          # 与最高分并列的候选，用来判定「是不是撞了高频短句」
             for r in lst:
                 if now - float(r.get("ts") or 0) > max_age:
                     continue
@@ -4963,10 +4964,26 @@ class QQGroupManager(Star):
                     score += max(0.0, 3.0 - abs(float(r.get("ts") or 0) - ts))
                 if score > best_score:
                     best, best_score = r, score
+                    top = [r]
+                elif score == best_score and score > 0:
+                    top.append(r)
+                    # 并列时必须取「最近」那条：缓存是旧→新遍历，
+                    # 只写 score > best_score 会让同文消息永远命中最早的一条（发送者就错了）。
+                    if float(r.get("ts") or 0) > float(best.get("ts") or 0):
+                        best = r
             if best is not None:
+                senders = {str(r.get("sender") or "") for r in top}
+                if len(senders) > 1:
+                    self.logger.warning(
+                        f"[审核] 引用目标存在 {len(top)} 条同分候选（{len(senders)} 个发送者），"
+                        f"已按最近时间取 id={best.get('id')}；若判错请让当事人重新引用一次"
+                    )
+                    best = dict(best)
+                    best["match_ambiguous"] = True
                 self.logger.debug(
                     f"审核引用命中缓存: items={qitems[:3]} score={best_score:.1f} "
-                    f"id={best.get('id')} text_len={len(best.get('text') or '')}"
+                    f"id={best.get('id')} text_len={len(best.get('text') or '')} "
+                    f"candidates={len(top)}"
                 )
             return best if best_score > 0 else None
         except Exception:
@@ -5149,8 +5166,13 @@ class QQGroupManager(Star):
             items = self._quote_forward_items(quoted_content)
             out["text"] = "\n".join(items) if items else quoted_content
             out["images"] = quoted_images
+            # 内容有、发送者没定位到（引用的是 10 分钟以前的消息）：
+            # 不冒充已定位，但也不放弃审核——交给上层走「只判定不处罚」。
+            if out["text"].strip() or out["images"]:
+                out["unattributed"] = True
             self.logger.debug(
-                f"审核引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]}"
+                f"审核引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]} "
+                f"unattributed={bool(out.get('unattributed'))}"
             )
             return out
         real_id = str(rec.get("id") or "")
@@ -5170,6 +5192,7 @@ class QQGroupManager(Star):
                 )
         out.update({
             "resolved": True,
+            "match_ambiguous": bool(rec.get("match_ambiguous")),
             "id": message_id or real_id,
             "text": str(rec.get("text") or "") or quoted_content,
             "sender": str(rec.get("sender") or ""),
@@ -5767,6 +5790,10 @@ class QQGroupManager(Star):
     async def _mod_execute(self, event: AstrMessageEvent, group: str, rep: dict,
                            verdict: dict, settings: dict) -> dict:
         """按判定结果执行动作。返回执行摘要（含话术所需字段）。"""
+        # 归因不可靠时一律只判定、不处罚：
+        # - unattributed：引用超出缓存窗口，拿不到发送者
+        # - match_ambiguous：有多条同文候选，选中哪条都可能是错的（禁错人的代价远大于漏判）
+        forced_only = bool(rep.get("unattributed") or rep.get("match_ambiguous"))
         out = {
             "violation": bool(verdict.get("violation")),
             "basis": verdict.get("basis"),
@@ -5780,7 +5807,9 @@ class QQGroupManager(Star):
             "executed": False,
             "skipped_reason": "",
             "recall_note": "",
-            "dry_run": bool(settings.get("dry_run", True)),
+            "dry_run": bool(settings.get("dry_run", True)) or forced_only,
+            "unattributed": bool(rep.get("unattributed")),
+            "ambiguous": bool(rep.get("match_ambiguous")),
             "cached": bool(verdict.get("from_cache")),
         }
         if not out["violation"]:
@@ -6080,8 +6109,9 @@ class QQGroupManager(Star):
         if not rep.get("quoted"):
             await self._reply(event, self._mod_tpl(g, "mod_no_quote"))
             return
-        if not rep.get("resolved") or not (rep.get("text") or rep.get("images")):
-            # 引用了但定位不到目标消息：绝不猜人，直接如实提示重新引用
+        has_content = bool((rep.get("text") or "").strip() or rep.get("images"))
+        if not has_content or (not rep.get("resolved") and not rep.get("unattributed")):
+            # 引用了但既没内容、也无法定位目标：绝不猜人，直接如实提示重新引用
             await self._reply(event, self._mod_tpl(g, "mod_quote_lost"))
             self.mod.add_verdict({
                 "group": g, "reporter": reporter, "target": "", "text": "",
@@ -6090,6 +6120,13 @@ class QQGroupManager(Star):
                 "skipped_reason": "引用消息过旧或无法定位",
             })
             return
+        if rep.get("unattributed"):
+            # 引用的是 10 分钟以前的消息：正文/图片拿得到，但发送者定位不到。
+            # 仍然走一遍判定让人看到结果，但强制不处罚，也不做变体升级。
+            self.logger.info(
+                "[审核] 未定位到被举报消息的发送者（超出消息缓存窗口），"
+                f"本次只判定不处罚: text_len={len(rep.get('text') or '')} images={len(rep.get('images') or [])}"
+            )
         mid = str(rep.get("id") or "")
         if mid and mid in self._mod_pending:
             return  # 同一条消息正在审核，忽略重复举报
@@ -6104,7 +6141,7 @@ class QQGroupManager(Star):
             )
             # 变体检测（疑似信号，与「是否违规」的判定并行、互不影响）：
             # 命中只做 撤回 + 记录 + 进待办，绝不自动禁言。
-            variant = self._mod_variant_scan(g, rep, settings)
+            variant = None if rep.get("unattributed") else self._mod_variant_scan(g, rep, settings)
             if variant:
                 self.logger.info(
                     f"[审核][变体] 疑似命中：method={variant['method']} strength={variant['strength']} "
@@ -6192,6 +6229,22 @@ class QQGroupManager(Star):
                     await self._reply(event, self._mod_tpl(g, "mod_clean"))
                 return
             if result["dry_run"]:
+                if result.get("ambiguous"):
+                    await self._reply(
+                        event,
+                        "⚠️ 这条内容被判为疑似违规，但缓存里有两条以上同文消息，"
+                        "无法确定被举报的是哪一条，因此没有执行处罚。\n"
+                        "请直接引用目标消息、尽快发一次 `/群管 举报`。",
+                    )
+                    return
+                if result.get("unattributed"):
+                    await self._reply(
+                        event,
+                        "⚠️ 这条内容被判为疑似违规，但引用超出可定位范围（超过 10 分钟），"
+                        "无法确定发送者，因此没有执行处罚。\n"
+                        "需要处理的话，请当事人重新引用原消息发一次 `/群管 举报`。",
+                    )
+                    return
                 await self._reply(event, self._mod_tpl(
                     g, "mod_dry_run",
                     basis=self.mod.get_dim_names(g).get(str(result["basis"]), str(result["basis"] or "")),
