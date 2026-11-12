@@ -1,7 +1,8 @@
 """回归测试：嵌套引用（引用一条「本身是引用」的消息）不能把目标认错。
 
-线上现象：举报 A 的消息（A 那条内容其实是 B 的引用），插件把待审核消息解析成了更里层的
-B 的正文（「转人机」），发送者变成举报人自己，上下文也围着错的人取。
+线上现象（真实三步）：Matsi 先发「转人机」→ 独木舟引用它发 `/群管 举报` → Matsi 再引用
+独木舟那条举报指令，发 `/群管 举报 滥用举报功能`。插件把待审核目标解析成了**第 1 步**的
+「转人机」（更里层），发送者变成 Matsi，上下文也围着错误的那条取。
 
 根因：适配器渲染引用摘要时把嵌套引用一起铺进来：
 
@@ -124,9 +125,12 @@ class NestedResolveTest(unittest.TestCase):
             # 里层「转人机」是举报人自己几分钟前说的
             {"id": "m-inner", "text": "转人机", "ts": now - 300, "sender": "reporter",
              "sender_name": "Matsi", "images": []},
-            # 真正被举报的：独木舟那条「/群管 举报」
+            # 真正被举报的：独木舟那条「/群管 举报」（第 2 步）
             {"id": "m-target", "text": "/群管 举报", "ts": now - 5, "sender": "u-du",
              "sender_name": "独木舟TYPE16", "images": []},
+            # 第 3 步举报人自己刚发的那条，含相同前缀，不能把目标抢走
+            {"id": "m-report", "text": "/群管 举报 滥用举报功能", "ts": now - 1,
+             "sender": "reporter", "sender_name": "Matsi", "images": []},
         ]
         rep = p._mod_resolve_reported(_Event(_Raw(NESTED)))
         self.assertTrue(rep["resolved"])
