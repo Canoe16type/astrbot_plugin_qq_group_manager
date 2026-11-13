@@ -358,6 +358,16 @@ if (_scopeGo) _scopeGo.onclick = () => {
   const t = document.querySelector('.tab[data-tab="moderation"]');
   if (t) t.click();
 };
+// 反向快捷（与上面那个对称）：群规审核页头的「📋 判定记录」→ 记录页的判定记录子页签
+const _goVerdicts = $("btn-go-verdicts");
+if (_goVerdicts) _goVerdicts.onclick = () => {
+  const tab = document.querySelector('.tab[data-tab="records"]');
+  if (tab) tab.click();
+  const sub = document.querySelector('.rec-tab[data-rec-tab="verdicts"]');
+  if (sub) sub.click();
+  // 记录页按「当前选中群」取数；从上个群切过来时补一次刷新，免得看到旧群数据
+  setTimeout(() => { try { loadRecords(); } catch (e) {} }, 0);
+};
 
 // ---------------- 状态 ----------------
 async function loadStatus() {
