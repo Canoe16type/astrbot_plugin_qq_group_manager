@@ -6736,6 +6736,28 @@ class QQGroupManager(Star):
         self.mod.set_rules(g, clean)
         return json_response({"saved": True, "count": len(clean)})
 
+    async def web_mod_rules_transfer(self):
+        """POST /mod/rules/transfer — 把一个群的群规复制到另一个群。
+
+        append 追加（默认，id 自动去重）/ replace 覆盖目标群现有群规。
+        源群取的是**已保存**的群规，页面上没保存的改动不算，前端要提示。
+        """
+        payload = await request.json(default={})
+        src = str(payload.get("from") or "").strip()
+        dst = str(payload.get("to") or "").strip()
+        mode = str(payload.get("mode") or "append").lower()
+        if not src or not dst:
+            return json_response({"ok": False, "error": "缺少源群或目标群"})
+        if src == dst:
+            return json_response({"ok": False, "error": "源群和目标群相同"})
+        res = self.mod.transfer_rules(src, dst, mode)
+        if res.get("ok"):
+            self.logger.info(
+                f"[群规] 转移：{src} → {dst}，{mode} 模式，新增 {res['count']} 条，"
+                f"目标群现有 {res['total']} 条"
+            )
+        return json_response(res)
+
     async def web_mod_settings_save(self):
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
@@ -7776,6 +7798,7 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/groups", self.web_mod_groups, ["GET"], "审核-群列表")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/detail", self.web_mod_detail, ["GET"], "审核-单群详情(群规/设置/话术)")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/save", self.web_mod_rules_save, ["POST"], "审核-保存群规")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/transfer", self.web_mod_rules_transfer, ["POST"], "审核-转移群规到其他群")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/settings/save", self.web_mod_settings_save, ["POST"], "审核-保存举报设置")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/templates/save", self.web_mod_templates_save, ["POST"], "审核-保存话术模板")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts", self.web_mod_verdicts, ["GET"], "审核-判定记录")

@@ -1731,6 +1731,122 @@ async function saveRules() {
   }
 }
 
+/* ---------------- 群规导出 / 转移到其他群 ---------------- */
+function _ruleTypeLabel(cat) {
+  const all = Object.assign({}, CAT_LABELS, (detail && detail.cat_names) || {});
+  return all[cat] || cat || "其他";
+}
+
+/* 生成给群公告用的文本：只收「启用」的规则，别把停用的也贴出去 */
+function buildRulesAnnouncement() {
+  const rules = collectRules().filter((r) => r.enabled !== false);
+  if (!rules.length) return "";
+  const gname = groupLabelByOpenid(current) || "本群";
+  const lines = ["【" + gname + " 群规】", ""];
+  rules.forEach((r, i) => {
+    lines.push((i + 1) + ". " + (r.name || "未命名规则") + "（" + _ruleTypeLabel(r.category) + "）"
+      + "｜违规处理：禁言 " + fmtDur(r.seconds));
+    if (r.desc) lines.push("   说明：" + r.desc);
+  });
+  lines.push("", "共 " + rules.length + " 条 · 生成于 " + new Date().toLocaleString("zh-CN"));
+  return lines.join("\n");
+}
+
+/* 通用弹层：面板里几个小对话框共用，省得每处写一遍 overlay */
+function openOverlay(id, innerHtml) {
+  const old = document.getElementById(id);
+  if (old) old.remove();
+  const wrap = document.createElement("div");
+  wrap.id = id;
+  wrap.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;"
+    + "display:flex;align-items:center;justify-content:center;padding:24px";
+  wrap.innerHTML = '<div style="background:var(--panel,#1b1b1f);color:var(--text,#eee);max-width:720px;'
+    + 'width:100%;max-height:82vh;overflow:auto;border-radius:12px;padding:18px;'
+    + 'line-height:1.7;box-shadow:0 12px 40px rgba(0,0,0,.4)">' + innerHtml + '</div>';
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  document.body.appendChild(wrap);
+  return wrap;
+}
+
+function exportRules() {
+  if (!current) return toast("先选一个群", true);
+  const text = buildRulesAnnouncement();
+  if (!text) return toast("本群没有启用的群规，先添加并保存", true);
+  const wrap = openOverlay("rules-export",
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    + '<b>导出群规</b><button class="btn small" data-x="close">关闭</button></div>'
+    + '<div class="desc" style="margin:0 0 8px">只包含<b>已启用</b>的规则；复制后可直接粘到群公告，也可下载 .txt。</div>'
+    + '<textarea id="rules-export-text" spellcheck="false" style="width:100%;height:300px;font-size:12px;line-height:1.7"></textarea>'
+    + '<div style="display:flex;gap:8px;margin-top:10px">'
+    + '<button class="btn btn-primary small" data-x="copy">复制</button>'
+    + '<button class="btn small" data-x="download">下载 .txt</button></div>');
+  wrap.querySelector("#rules-export-text").value = text;
+  wrap.querySelector('[data-x="close"]').onclick = () => wrap.remove();
+  wrap.querySelector('[data-x="copy"]').onclick = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text)
+        .then(() => toast("已复制，去群公告里粘贴吧"))
+        .catch(() => toast("复制失败，请手动选中", true));
+    } else {
+      const ta = wrap.querySelector("#rules-export-text");
+      ta.select();
+      toast("浏览器不允许自动复制，已帮你选中", true);
+    }
+  };
+  wrap.querySelector('[data-x="download"]').onclick = () => {
+    const name = (groupLabelByOpenid(current) || "群规").replace(/[\\/:*?"<>|·\s]+/g, "-");
+    const blob = new Blob(["\ufeff" + text], { type: "text/plain;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "群规-" + name + "-" + new Date().toISOString().slice(0, 10) + ".txt";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  };
+}
+
+function transferRules() {
+  if (!current) return toast("先选一个群", true);
+  const mine = collectRules();
+  if (!mine.length) return toast("本群没有群规可转移", true);
+  const all = (state.status && state.status.known_groups) || [];
+  const targets = all.filter((g) => g.group_openid !== current);
+  if (!targets.length) return toast("没有其他群可选", true);
+  const opts = targets.map((g) =>
+    '<option value="' + esc(g.group_openid) + '">' + esc(groupLabelOf(g)) + '</option>').join("");
+  const wrap = openOverlay("rules-transfer",
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
+    + '<b>转移群规到其他群</b><button class="btn small" data-x="close">关闭</button></div>'
+    + '<div class="desc" style="margin:0 0 10px">源群：<b>' + esc(groupLabelByOpenid(current) || "当前群")
+    + '</b>（共 ' + mine.length + ' 条，取<b>已保存</b>的版本；页面上没保存的改动不算，请先保存本群群规）。</div>'
+    + '<label class="field"><span>目标群</span><select id="transfer-target">' + opts + '</select></label>'
+    + '<label class="field check" style="margin-top:8px"><input type="radio" name="transfer-mode" value="append" checked />'
+    + '<span>追加（保留目标群原有规则，id 自动去重）</span></label>'
+    + '<label class="field check"><input type="radio" name="transfer-mode" value="replace" />'
+    + '<span><b>覆盖</b>（清空目标群原有规则，不可撤销）</span></label>'
+    + '<div style="display:flex;gap:8px;margin-top:12px">'
+    + '<button class="btn btn-primary small" data-x="ok">确认转移</button>'
+    + '<button class="btn small" data-x="close2">取消</button></div>');
+  const close = () => wrap.remove();
+  wrap.querySelector('[data-x="close"]').onclick = close;
+  wrap.querySelector('[data-x="close2"]').onclick = close;
+  wrap.querySelector('[data-x="ok"]').onclick = async () => {
+    const to = wrap.querySelector("#transfer-target").value;
+    const mode = (wrap.querySelector('input[name="transfer-mode"]:checked') || {}).value || "append";
+    if (!to) return toast("先选目标群", true);
+    if (mode === "replace" && !confirm("覆盖会清空目标群现有的全部群规，确定继续？")) return;
+    try {
+      const r = await bridge.apiPost("mod/rules/transfer", { from: current, to: to, mode: mode });
+      if (r.ok === false) throw new Error(r.error || "转移失败");
+      toast("已转移 " + r.count + " 条；目标群现有 " + r.total + " 条");
+      close();
+    } catch (e) {
+      toast("转移失败：" + e.message, true);
+    }
+  };
+}
+
 async function saveSettings() {
   if (!current) return toast("先选一个群", true);
   try {
@@ -1812,6 +1928,10 @@ async function initModeration() {
     renderRules();
   };
   $("btn-save-rules").onclick = saveRules;
+  const _btnExport = $("btn-export-rules");
+  if (_btnExport) _btnExport.onclick = exportRules;
+  const _btnTransfer = $("btn-transfer-rules");
+  if (_btnTransfer) _btnTransfer.onclick = transferRules;
   $("btn-save-settings").onclick = saveSettings;
   $("btn-save-templates").onclick = saveTemplates;
   $("btn-clear-templates").onclick = clearTemplates;
