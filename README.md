@@ -13,9 +13,6 @@
 > OneBot v11 / NapCat / Lagrange / go-cqhttp 等第三方协议端**不支持**，装到那些账号上不会工作。
 > 涉及 `openid`、官方审批策略、`event_id` 等功能的地方，全是官方 API 独有的行为。
 
-> 🈶 **界面语言**：**简体中文**。插件面向中文社群，面板与帮助中心全部中文，不做多语言维护
-> （多语言方案曾实现于 1.2.x 开发期，因渲染层按中文原文匹配、维护成本高而移除，详见 CHANGELOG）。
-
 > 💬 **欢迎交流**：用着不顺手、想加功能、发现了 bug，都欢迎直接
 > [提 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose)
 > 或发邮件到 **oc16games@outlook.com**。不用纠结格式，说清「做了什么、期望什么、实际什么」就够。

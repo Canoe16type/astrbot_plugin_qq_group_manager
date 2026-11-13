@@ -54,7 +54,7 @@ class _Raw:
 
 
 class _Event:
-    def __init__(self, raw=None, message=None, group="g1", sender="u1", sname="Matsi",
+    def __init__(self, raw=None, message=None, group="g1", sender="u1", sname="A",
                  mid="quote-msg-1"):
         self.message_obj = SimpleNamespace(message=message or [], raw_message=raw, message_id=mid)
         self._g, self._sender, self._sname = group, sender, sname
@@ -83,9 +83,9 @@ class NearbyImagesTest(unittest.TestCase):
         now = time.time()
         p._recent_group_msgs["g1"] = [
             {"id": "m-text", "text": "😶", "ts": now - 1.2, "sender": "u1",
-             "sender_name": "Matsi", "images": []},
+             "sender_name": "A", "images": []},
             {"id": "m-img", "text": "", "ts": now - 0.9, "sender": "u1",
-             "sender_name": "Matsi", "images": ["https://multimedia.nt.qq.com.cn/a.png"]},
+             "sender_name": "A", "images": ["https://multimedia.nt.qq.com.cn/a.png"]},
         ]
         ev = _Event(raw=_Raw(elements=[{"content": "😶"}]))
         rep = p._mod_resolve_reported(ev)
@@ -101,7 +101,7 @@ class NearbyImagesTest(unittest.TestCase):
             {"id": "other", "text": "", "ts": now - 1, "sender": "u2",
              "sender_name": "x", "images": ["https://img/other.png"]},
             {"id": "far", "text": "", "ts": now - 30, "sender": "u1",
-             "sender_name": "Matsi", "images": ["https://img/far.png"]},
+             "sender_name": "A", "images": ["https://img/far.png"]},
         ]
         self.assertEqual(p._nearby_images("g1", "u1", now - 1), [])
 
@@ -113,7 +113,7 @@ class ImageOnlyQuoteTest(unittest.TestCase):
         now = time.time()
         p._recent_group_msgs["g1"] = [
             {"id": "m-img", "text": "", "ts": now - 5, "sender": "u1",
-             "sender_name": "Matsi", "images": ["https://img/x.png"]},
+             "sender_name": "A", "images": ["https://img/x.png"]},
         ]
         ev = _Event(raw=_Raw(elements=[{"content": ""}]))
         rep = p._mod_resolve_reported(ev)
@@ -127,7 +127,7 @@ class ImageOnlyQuoteTest(unittest.TestCase):
         now = time.time()
         p._recent_group_msgs["g1"] = [
             {"id": "m-img", "text": "", "ts": now - 2, "sender": "u1",
-             "sender_name": "Matsi", "images": []},
+             "sender_name": "A", "images": []},
         ]
         ev = _Event(raw=_Raw(elements=[{
             "content": "", "attachments": [{"content_type": "image/png", "url": "//gchat.qpic.cn/y.png"}],

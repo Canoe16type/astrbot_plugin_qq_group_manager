@@ -1,8 +1,8 @@
 """回归测试：嵌套引用（引用一条「本身是引用」的消息）不能把目标认错。
 
-线上现象（真实三步）：Matsi 先发「转人机」→ 独木舟引用它发 `/群管 举报` → Matsi 再引用
-独木舟那条举报指令，发 `/群管 举报 滥用举报功能`。插件把待审核目标解析成了**第 1 步**的
-「转人机」（更里层），发送者变成 Matsi，上下文也围着错误的那条取。
+线上现象（真实三步）：A 先发「转人机」→ B引用它发 `/群管 举报` → A 再引用
+B那条举报指令，发 `/群管 举报 滥用举报功能`。插件把待审核目标解析成了**第 1 步**的
+「转人机」（更里层），发送者变成 A，上下文也围着错误的那条取。
 
 根因：适配器渲染引用摘要时把嵌套引用一起铺进来：
 
@@ -78,7 +78,7 @@ class _Raw:
 
 
 class _Event:
-    def __init__(self, raw, group="g1", sender="reporter", sname="Matsi"):
+    def __init__(self, raw, group="g1", sender="reporter", sname="A"):
         self.message_obj = SimpleNamespace(message=[], raw_message=raw, message_id="evt-1")
         self._g, self._s, self._n = group, sender, sname
 
@@ -222,18 +222,18 @@ class DeepChainTest(unittest.TestCase):
         now = time.time()
         senders = {1: "u-zhu", 2: "u-alt", 3: "u-zhu", 4: "u-alt",
                    5: "u-zhu", 6: "u-alt", 7: "u-zhu", 8: "u-alt"}
-        names = {"u-zhu": "独木舟16", "u-alt": "独木舟"}
+        names = {"u-zhu": "B2", "u-alt": "B"}
         p._recent_group_msgs["g1"] = [
             {"id": f"m{i}", "text": str(i), "ts": now - (9 - i),
              "sender": senders[i], "sender_name": names[senders[i]], "images": []}
             for i in range(1, 9)
         ]
-        ev = _Event(_Raw(DEEP_CHAIN), sender="u-alt", sname="独木舟")
+        ev = _Event(_Raw(DEEP_CHAIN), sender="u-alt", sname="B")
         rep = p._mod_resolve_reported(ev)
         self.assertTrue(rep["resolved"])
         self.assertEqual(rep["text"], "7")
         self.assertEqual(rep["id"], "m7")
-        self.assertEqual(rep["sender_name"], "独木舟16")
+        self.assertEqual(rep["sender_name"], "B2")
 
 
 class NestedResolveTest(unittest.TestCase):
@@ -243,19 +243,19 @@ class NestedResolveTest(unittest.TestCase):
         p._recent_group_msgs["g1"] = [
             # 里层「转人机」是举报人自己几分钟前说的
             {"id": "m-inner", "text": "转人机", "ts": now - 300, "sender": "reporter",
-             "sender_name": "Matsi", "images": []},
-            # 真正被举报的：独木舟那条「/群管 举报」（第 2 步）
+             "sender_name": "A", "images": []},
+            # 真正被举报的：B那条「/群管 举报」（第 2 步）
             {"id": "m-target", "text": "/群管 举报", "ts": now - 5, "sender": "u-du",
-             "sender_name": "独木舟TYPE16", "images": []},
+             "sender_name": "BTYPE16", "images": []},
             # 第 3 步举报人自己刚发的那条，含相同前缀，不能把目标抢走
             {"id": "m-report", "text": "/群管 举报 滥用举报功能", "ts": now - 1,
-             "sender": "reporter", "sender_name": "Matsi", "images": []},
+             "sender": "reporter", "sender_name": "A", "images": []},
         ]
         rep = p._mod_resolve_reported(_Event(_Raw(NESTED)))
         self.assertTrue(rep["resolved"])
         self.assertEqual(rep["id"], "m-target")
         self.assertEqual(rep["sender"], "u-du")
-        self.assertEqual(rep["sender_name"], "独木舟TYPE16")
+        self.assertEqual(rep["sender_name"], "BTYPE16")
         self.assertNotIn("转人机", rep["text"])
 
 
