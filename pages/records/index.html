@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>群管 · 判定记录</title>
+<!--
+  侧边栏快捷入口：这一页不渲染内容，只把同一个面板的 URL 换成 dashboard，
+  并带上 ?tab=records&sub=verdicts，让面板直接落在「记录 → 判定记录 / 试跑」。
+
+  为什么用跳转而不是复制一份面板：面板的 app.js / app.css 有 150KB+，
+  复制一份必然两边漂移；跳转后仍然是同一个页面、同一份资源。
+  token 在路径里（/views/<view>/_t/<token>/），换 view 名保留 token 即可继续鉴权。
+-->
+</head>
+<body>
+<p id="tip" hidden>面板入口地址不符合预期，请从「QQ 群管理面板」进入。</p>
+<script>
+(function () {
+  var path = location.pathname;
+  // /api/v1/plugins/<plugin>/views/records/_t/<token>/ → .../views/dashboard/_t/<token>/
+  var target = path.replace(/\/views\/[^/]+\//, "/views/dashboard/");
+  if (target === path) {
+    /* 兜底：URL 形态变了也别白屏，给一句人话 */
+    document.getElementById("tip").hidden = false;
+    return;
+  }
+  var q = new URLSearchParams(location.search);
+  q.set("tab", "records");
+  q.set("sub", "verdicts");
+  location.replace(target + "?" + q.toString());
+})();
+</script>
+</body>
+</html>

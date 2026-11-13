@@ -98,6 +98,11 @@
 
 管理面板在 AstrBot 插件详情页打开，九个页签：**概览 / 设置 / 群管 / 入群审批 / 群规审核 / 成员档案 / 词典 / 记录 / 日志**。
 
+> **快捷入口**：AstrBot 侧边栏「QQ官机群管」下有两项——「QQ 群管理面板」和 **「群管 · 判定记录」**。
+> 后者直接落到「记录 → 判定记录 / 试跑」，看完判定就能顺手标误判、导出 CSV。
+> 面板本身也支持深链：`?tab=records&sub=verdicts`（`tab` 可填 status / settings / ops / moderation / members / lexicons / records / logs / approval），
+> 收藏夹里存带参数的 URL 也能直达。
+
 | 概览 | 群规审核 | 词典 |
 | --- | --- | --- |
 | ![概览：运行状态、机器人平台、功能开关、管理员判定](screenshots/01-overview.png) | ![群规审核：按群独立配置举报开关、试运行、维度开关](screenshots/03-moderation.png) | ![词典：内置词库状态、词条统计、上传自定义词库](screenshots/04-lexicon.png) |
