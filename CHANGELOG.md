@@ -94,6 +94,17 @@
   指令组装饰器上的 `alias=`，以及 `tests/test_command_consolidation.py` 中锁旧别名的 9 条映射断言与 2 条还原断言。
 - 移除后旧写法会落到「未知指令」，不再有任何兼容分支；README / GUIDE / 插件内帮助三处对照表要同步删掉「旧写法仍可用」的措辞。
 
+- **「通用禁止项」默认值换成 L4–L0 分级类别体系**（C1–C23 + 补充判定要求）：
+  - 按插件**实际输出契约**改写：每条类别标注 `severity=high|medium|low` 与 `category` 枚举映射
+    （ad / abuse / porn / illegal / spam / other）；C18 改为「basis=rule + 回填 matched_rule_id」，
+    不使用插件不存在的字段（level / categories / needs_human）。
+  - 去掉模板占位符 `{{GROUP_RULES}}` / `{{GROUP_TOPIC}}`（插件不支持），改为「以本群群规为准」「仅在群规写明群定位时启用」。
+  - 去掉「踢出 / 上报」——官方接口没有踢人能力，改为「按最高档处置 + 提醒管理员人工介入」。
+  - 补充三条原体系没有、但插件很需要的：非文本占位符不得推断、证据不足从轻、C1–C6 不适用「宁轻勿重」。
+  - 默认值写进 `_conf_schema.json`；**已保存过旧值的配置不会自动更新**，在插件配置里点一次「默认」即可覆盖。
+  - 约 1.4k 字，位于提示词稳定前缀内，可命中跨请求前缀缓存，不会每条消息重复计费。
+  - 新增 `tests/test_common_ban_default.py`（6 例）：category 枚举/severity 措辞与契约一致、无占位符、不承诺踢人、能注入系统提示词。
+
 > **发版检查清单（真发 1.6.0 时执行）**
 
 > - [ ] 版本号 1.5.0 → **1.6.0**（`metadata.yaml`），README / GUIDE 徽章同步，`tools/check_metadata.py` 全绿
