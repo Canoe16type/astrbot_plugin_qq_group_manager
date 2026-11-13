@@ -182,6 +182,60 @@ class UnattributedTest(unittest.TestCase):
         self.assertIn("无法确定", res["skipped_reason"])
 
 
+DEEP_CHAIN = """=== 消息 1 ===
+[消息内容] 7
+[消息类型] 引用消息
+[关联消息]
+--- 第1条 ---
+    [消息内容] 6
+    [消息类型] 引用消息
+    [关联消息]
+    --- 第1条 ---
+        [消息内容] 5
+        [消息类型] 引用消息
+        [关联消息]
+        --- 第1条 ---
+            [消息内容] 4
+            [消息类型] 引用消息
+            [关联消息]
+            --- 第1条 ---
+                [消息内容] 3
+                [消息类型] 引用消息
+                [关联消息]
+                --- 第1条 ---
+                    [消息内容] 2
+                    [消息类型] 引用消息
+                    [关联消息]
+                    --- 第1条 ---
+                        [消息内容] 1
+                        [消息类型] 引用消息"""
+
+
+class DeepChainTest(unittest.TestCase):
+    """7 层嵌套（1←2←…←7，消息 8 引用 7）：只能取最外层的 7，绝不能沉到底部的 1。"""
+
+    def test_cleaner_takes_outermost_only(self):
+        self.assertEqual(QQGroupManager._clean_quote_summary(DEEP_CHAIN), "7")
+
+    def test_resolve_picks_directly_quoted_message(self):
+        p = _plugin()
+        now = time.time()
+        senders = {1: "u-zhu", 2: "u-alt", 3: "u-zhu", 4: "u-alt",
+                   5: "u-zhu", 6: "u-alt", 7: "u-zhu", 8: "u-alt"}
+        names = {"u-zhu": "独木舟16", "u-alt": "独木舟"}
+        p._recent_group_msgs["g1"] = [
+            {"id": f"m{i}", "text": str(i), "ts": now - (9 - i),
+             "sender": senders[i], "sender_name": names[senders[i]], "images": []}
+            for i in range(1, 9)
+        ]
+        ev = _Event(_Raw(DEEP_CHAIN), sender="u-alt", sname="独木舟")
+        rep = p._mod_resolve_reported(ev)
+        self.assertTrue(rep["resolved"])
+        self.assertEqual(rep["text"], "7")
+        self.assertEqual(rep["id"], "m7")
+        self.assertEqual(rep["sender_name"], "独木舟16")
+
+
 class NestedResolveTest(unittest.TestCase):
     def test_target_is_outer_message_not_inner(self):
         p = _plugin()
