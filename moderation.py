@@ -656,15 +656,24 @@ class ModerationStore:
             i += 1
         return f"rule_{i:02d}"
 
-    def transfer_rules(self, src: str, dst: str, mode: str = "append") -> dict:
-        """把 src 的群规复制到 dst（append 追加 / replace 覆盖）。
+    def transfer_rules(self, src: str, dst: str, mode: str = "append",
+                       ids: Optional[list] = None) -> dict:
+        """把 src 的群规复制到 dst（append 追加 / replace 覆盖），可只转移指定 id。
 
         id 必须重新去重：每个群都从 rule_01 开始编号，直接追加会出现重复 id，
         之后按 id 删除/更新就会命中的是"另一条同名 id"。
+        `ids` 为空/None 表示全部；传了但一条都对不上时明确报错，不静默成功。
         """
         src_rules = self.get_rules(src)
         if not src_rules:
             return {"ok": False, "error": "源群没有群规", "count": 0, "total": 0}
+        if ids:
+            want = {str(i) for i in ids}
+            picked = [r for r in src_rules if str(r.get("id") or "") in want]
+            if not picked:
+                return {"ok": False, "error": "选中的规则在源群已不存在（可能刚被删除）",
+                        "count": 0, "total": len(self.get_rules(dst))}
+            src_rules = picked
         mode = "replace" if str(mode).lower() == "replace" else "append"
         dst_rules = [] if mode == "replace" else self.get_rules(dst)
         used = {str(r.get("id") or "") for r in dst_rules}

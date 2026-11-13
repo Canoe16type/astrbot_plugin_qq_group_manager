@@ -81,6 +81,24 @@ class TransferRulesTest(unittest.TestCase):
         self.store.transfer_rules("g-src", "g-dst", "append")
         self.assertEqual([r["name"] for r in self.store.get_rules("g-src")], ["广告"])
 
+    def test_only_selected_ids_are_transferred(self):
+        self.store.set_rules("g-src", [_rule("rule_01", "广告"), _rule("rule_02", "刷屏"),
+                                       _rule("rule_03", "引战")])
+        self.store.set_rules("g-dst", [])
+        res = self.store.transfer_rules("g-src", "g-dst", "append", ids=["rule_02"])
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["count"], 1)
+        self.assertEqual([r["name"] for r in self.store.get_rules("g-dst")], ["刷屏"])
+
+    def test_stale_ids_report_error(self):
+        """勾选的规则在源群已被删：明确报错，别静默成功。"""
+        self.store.set_rules("g-src", [_rule("rule_01", "广告")])
+        self.store.set_rules("g-dst", [])
+        res = self.store.transfer_rules("g-src", "g-dst", "append", ids=["rule_99"])
+        self.assertFalse(res["ok"])
+        self.assertIn("已不存在", res["error"])
+        self.assertEqual(self.store.get_rules("g-dst"), [])
+
     def test_empty_source_reports_error(self):
         self.store.set_rules("g-src", [])
         res = self.store.transfer_rules("g-src", "g-dst", "append")

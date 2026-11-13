@@ -1806,38 +1806,79 @@ function exportRules() {
   };
 }
 
-function transferRules() {
+async function transferRules() {
   if (!current) return toast("先选一个群", true);
-  const mine = collectRules();
-  if (!mine.length) return toast("本群没有群规可转移", true);
+  // 取「已保存」的群规：转移是动数据，不能把页面上没保存的半成品推过去
+  let saved = [];
+  try {
+    const d = await bridge.apiGet("mod/detail", { group: current });
+    saved = (d && d.rules) || [];
+  } catch (e) {
+    return toast("读取本群群规失败：" + e.message, true);
+  }
+  if (!saved.length) return toast("本群还没有已保存的群规", true);
   const all = (state.status && state.status.known_groups) || [];
   const targets = all.filter((g) => g.group_openid !== current);
   if (!targets.length) return toast("没有其他群可选", true);
+
   const opts = targets.map((g) =>
     '<option value="' + esc(g.group_openid) + '">' + esc(groupLabelOf(g)) + '</option>').join("");
+  const rows = saved.map((r, i) => {
+    const rid = String(r.id || "");
+    const label = (i + 1) + ". " + (r.name || "未命名规则")
+      + "（" + _ruleTypeLabel(r.category) + "）｜禁言 " + fmtDur(r.seconds);
+    return '<label class="field check" style="display:flex;gap:8px;align-items:flex-start;margin:2px 0">'
+      + '<input type="checkbox" data-rid="' + esc(rid) + '"' + (rid ? " checked" : " disabled") + ' />'
+      + '<span>' + esc(label) + '</span></label>';
+  }).join("");
+
   const wrap = openOverlay("rules-transfer",
     '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">'
     + '<b>转移群规到其他群</b><button class="btn small" data-x="close">关闭</button></div>'
-    + '<div class="desc" style="margin:0 0 10px">源群：<b>' + esc(groupLabelByOpenid(current) || "当前群")
-    + '</b>（共 ' + mine.length + ' 条，取<b>已保存</b>的版本；页面上没保存的改动不算，请先保存本群群规）。</div>'
-    + '<label class="field"><span>目标群</span><select id="transfer-target">' + opts + '</select></label>'
+    + '<div class="desc" style="margin:0 0 8px">源群：<b>' + esc(groupLabelByOpenid(current) || "当前群")
+    + '</b>（已保存 ' + saved.length + ' 条）。勾选要转移的规则，默认全选。</div>'
+    + '<div style="display:flex;align-items:center;gap:8px;margin:0 0 6px">'
+    + '<button class="btn small" id="transfer-all" type="button">全选 / 全不选</button>'
+    + '<span class="desc">已选 <b id="transfer-count">0 / 0</b></span></div>'
+    + '<div style="max-height:220px;overflow:auto;border:1px solid rgba(127,127,127,.25);'
+    + 'border-radius:8px;padding:8px 10px">' + rows + '</div>'
+    + '<label class="field" style="margin-top:10px"><span>目标群</span><select id="transfer-target">'
+    + opts + '</select></label>'
     + '<label class="field check" style="margin-top:8px"><input type="radio" name="transfer-mode" value="append" checked />'
     + '<span>追加（保留目标群原有规则，id 自动去重）</span></label>'
     + '<label class="field check"><input type="radio" name="transfer-mode" value="replace" />'
-    + '<span><b>覆盖</b>（清空目标群原有规则，不可撤销）</span></label>'
+    + '<span><b>覆盖</b>（先清空目标群原有规则，再写入勾选的，不可撤销）</span></label>'
     + '<div style="display:flex;gap:8px;margin-top:12px">'
     + '<button class="btn btn-primary small" data-x="ok">确认转移</button>'
     + '<button class="btn small" data-x="close2">取消</button></div>');
+
+  const boxes = () => Array.from(wrap.querySelectorAll("input[data-rid]"));
+  const pickedIds = () => boxes().filter((b) => b.checked).map((b) => b.dataset.rid).filter(Boolean);
+  const syncCount = () => {
+    const el = wrap.querySelector("#transfer-count");
+    if (el) el.textContent = pickedIds().length + " / " + boxes().length;
+  };
+  wrap.querySelector("#transfer-all").onclick = () => {
+    const bs = boxes().filter((b) => !b.disabled);
+    const target = !bs.every((b) => b.checked);
+    bs.forEach((b) => { b.checked = target; });
+    syncCount();
+  };
+  boxes().forEach((b) => b.addEventListener("change", syncCount));
+  syncCount();
+
   const close = () => wrap.remove();
   wrap.querySelector('[data-x="close"]').onclick = close;
   wrap.querySelector('[data-x="close2"]').onclick = close;
   wrap.querySelector('[data-x="ok"]').onclick = async () => {
     const to = wrap.querySelector("#transfer-target").value;
     const mode = (wrap.querySelector('input[name="transfer-mode"]:checked') || {}).value || "append";
+    const ids = pickedIds();
     if (!to) return toast("先选目标群", true);
-    if (mode === "replace" && !confirm("覆盖会清空目标群现有的全部群规，确定继续？")) return;
+    if (!ids.length) return toast("至少勾选一条规则", true);
+    if (mode === "replace" && !confirm("覆盖会先清空目标群现有的全部群规，再写入这 " + ids.length + " 条，确定继续？")) return;
     try {
-      const r = await bridge.apiPost("mod/rules/transfer", { from: current, to: to, mode: mode });
+      const r = await bridge.apiPost("mod/rules/transfer", { from: current, to: to, mode: mode, ids: ids });
       if (r.ok === false) throw new Error(r.error || "转移失败");
       toast("已转移 " + r.count + " 条；目标群现有 " + r.total + " 条");
       close();

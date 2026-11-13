@@ -6746,14 +6746,18 @@ class QQGroupManager(Star):
         src = str(payload.get("from") or "").strip()
         dst = str(payload.get("to") or "").strip()
         mode = str(payload.get("mode") or "append").lower()
+        ids = payload.get("ids")
+        if ids is not None and not isinstance(ids, list):
+            ids = None
         if not src or not dst:
             return json_response({"ok": False, "error": "缺少源群或目标群"})
         if src == dst:
             return json_response({"ok": False, "error": "源群和目标群相同"})
-        res = self.mod.transfer_rules(src, dst, mode)
+        res = self.mod.transfer_rules(src, dst, mode, ids=ids)
         if res.get("ok"):
+            scope = f"勾选 {len(ids)} 条" if ids else "全部"
             self.logger.info(
-                f"[群规] 转移：{src} → {dst}，{mode} 模式，新增 {res['count']} 条，"
+                f"[群规] 转移：{src} → {dst}，{mode} 模式，{scope}，新增 {res['count']} 条，"
                 f"目标群现有 {res['total']} 条"
             )
         return json_response(res)
