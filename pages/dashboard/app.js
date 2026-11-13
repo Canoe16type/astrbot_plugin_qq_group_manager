@@ -3025,28 +3025,6 @@ function switchTabSafe(name) {
   if (b) b.click();
 }
 
-/* 深链：?tab=records&sub=verdicts → 直接落到指定页签（侧边栏「群管 · 判定记录」就靠这个） */
-function applyUrlTab() {
-  try {
-    const q = new URLSearchParams(location.search);
-    const tab = (q.get("tab") || "").trim();
-    const sub = (q.get("sub") || "").trim();
-    if (tab) switchTabSafe(tab);
-    if (sub && document.querySelector('.rec-tab[data-rec-tab="' + sub + '"]')) {
-      const host = document.querySelector('.tab[data-tab="records"]');
-      if (host && !host.classList.contains("active")) host.click();
-      document.querySelector('.rec-tab[data-rec-tab="' + sub + '"]').click();
-    }
-  } catch (e) {
-    /* 深链只是锦上添花，参数异常时保持默认页签即可 */
-  }
-}
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => setTimeout(applyUrlTab, 0));
-} else {
-  setTimeout(applyUrlTab, 0);
-}
-
 /* 设置页精确定位：第一次点「设置」才异步拉 schema，所以要等 .set-item 出现；
    找到后清掉筛选条件 → 展开分组 → 滚到中间 → 高亮 */
 function focusSetting(key, group) {
