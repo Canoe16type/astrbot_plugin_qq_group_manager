@@ -1439,15 +1439,19 @@ async function loadRecords() {
       `<td><span class="tag ${v.violation ? "hit" : "clean"}">${v.violation ? esc(cats[v.category] || v.category || "违规") : "未违规"}</span>` +
       (v.variant_hit ? ` <span class="tag" title="疑似变体写法（${esc((v.variant || {}).method || "")}）${v.variant_recalled ? "，已按变体撤回" : ""}">变体</span>` : "") + `</td>` +
       `<td>${v.confidence == null ? "-" : Number(v.confidence).toFixed(2)}</td>` +
-      `<td>${v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : esc(v.skipped_reason || (v.violation ? "未执行" : "-"))}</td>` +
+      `<td>${v.revoked ? '<span class="tag" title="' + esc((v.revoked.reason || "已撤销")) + '">已撤销</span> ' : ""}` +
+      `${v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : esc(v.skipped_reason || (v.violation ? "未执行" : "-"))}</td>` +
       `<td>${v.from_cache ? "是" : "否"}</td>` +
       `<td style="white-space:nowrap"><button class="btn" data-fb="${v.id}">误判</button> ` +
       `<button class="btn" data-ok="${v.id}" title="判定正确，加入提示词正例">正确</button> ` +
+      (v.executed && !v.revoked ? `<button class="btn" data-rv="${v.id}" title="撤销这条处罚并致歉">撤销</button> ` : "") +
       `<button class="btn danger" data-dv="${v.id}" title="删除这条本地记录">✕</button></td>`;
     tr.querySelector("[data-fb]").onclick = () => markFeedback(v.id, "false_positive");
     tr.querySelector("[data-ok]").onclick = () => markFeedback(v.id, "true_positive");
     tr.querySelector("[data-vd]").onclick = () => showVerdictDetail(v);
     tr.querySelector("[data-dv]").onclick = () => delVerdict(v.id);
+    const rv = tr.querySelector("[data-rv]");
+    if (rv) rv.onclick = () => revokeVerdict(v);
     rows.appendChild(tr);
   });
   if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="9" style="color:var(--sub)">暂无记录</td></tr>';
@@ -1572,6 +1576,39 @@ async function markFeedback(id, label = "false_positive") {
   }
 }
 
+/* 撤销处罚：面板侧（AstrBot 管理员）——会尝试解禁，并留下审计 */
+async function revokeVerdict(v) {
+  const reason = prompt("撤销理由（会写进审计记录，可留空）：", "人工复核误判");
+  if (reason === null) return;
+  if (!confirm(`确认撤销记录 #${v.id} 的处罚？\n将尝试解除禁言，并从「前科」统计中排除。`)) return;
+  try {
+    const r = await bridge.apiPost("mod/verdicts/revoke", { id: v.id, group: v.group, reason: reason });
+    if (r.ok === false) throw new Error(r.error || "撤销失败");
+    if (r.already) toast("这条记录之前已经撤销过了");
+    else if (r.unmute && r.unmute.needed && r.unmute.ok === false) toast("已撤销，但解禁失败：" + (r.unmute.code || "请手动解禁"), true);
+    else toast("已撤销" + (r.unmute && r.unmute.needed ? "，禁言已解除" : ""));
+    loadRecords();
+  } catch (e) {
+    toast("撤销失败：" + e.message, true);
+  }
+}
+
+/* 按天清理判定记录：仅手动，不自动 */
+async function pruneVerdicts() {
+  const el = $("prune-days");
+  const days = parseInt((el && el.value) || "0", 10);
+  if (!days || days <= 0) return toast("请填写要删除多少天以前的记录", true);
+  if (!confirm(`删除「${current ? "本群" : "全部群"}」${days} 天以前的判定记录？\n该操作不可撤销，建议先导出 CSV。`)) return;
+  try {
+    const r = await bridge.apiPost("mod/verdicts/prune", { days: days, group: current || "" });
+    if (r.ok === false) throw new Error(r.error || "清理失败");
+    toast(`已删除 ${r.removed} 条（${days} 天以前）`);
+    loadRecords();
+  } catch (e) {
+    toast("清理失败：" + e.message, true);
+  }
+}
+
 /* 判定详情：原文 + 完整字段，用来人工二次确认（旧记录只有 200 字，会标注） */
 function showVerdictDetail(v) {
   const old = document.getElementById("vd-modal");
@@ -1594,6 +1631,8 @@ function showVerdictDetail(v) {
     ["执行模式", v.dry_run ? "试运行" : "真实执行"],
     ["模型", v.model || "-"],
     ["人工标注", v.feedback === "false_positive" ? "误判" : (v.feedback === "true_positive" ? "正确" : "-")],
+    ["撤销", v.revoked ? `已于 ${ts2str(v.revoked.at)} 由 ${v.revoked.by_name || v.revoked.by || "-"} 撤销`
+      + `（${v.revoked.reason || "未填理由"}）` + (v.revoked.unmute_needed ? (v.revoked.unmute_ok ? "，禁言已解除" : "，解禁失败") : "") : "-"],
   ];
   const wrap = document.createElement("div");
   wrap.id = "vd-modal";
@@ -1663,6 +1702,8 @@ async function exportVerdicts() {
 }
 const btnVerdictExport = document.getElementById("btnVerdictExport");
 if (btnVerdictExport) btnVerdictExport.addEventListener("click", exportVerdicts);
+const _btnPrune = document.getElementById("btnPruneVerdicts");
+if (_btnPrune) _btnPrune.addEventListener("click", pruneVerdicts);
 
 async function delVerdict(id) {
   if (!(await showConfirm(`删除判定记录 #${id}？只删本地这条留痕，不影响已生效的禁言。`))) return;

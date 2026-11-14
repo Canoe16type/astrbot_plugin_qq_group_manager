@@ -82,6 +82,11 @@ VARIANT_STRIKE_KEYS = (
 )
 
 
+def is_revoked(v: dict) -> bool:
+    """处罚是否已被管理员撤销；撤销的记录永久留档，但不再计入前科。"""
+    return bool((v or {}).get("revoked"))
+
+
 def is_false_positive(v: dict) -> bool:
     """该记录是否被人工标过误判。所有派生统计（前科 / 变体累计）都要排除它。"""
     return str((v or {}).get("feedback") or "") in FALSE_POSITIVE_FEEDBACK
@@ -467,7 +472,9 @@ class ModerationStore:
         self._rules_path = os.path.join(self.dir, "mod_rules.json")
         self._settings_path = os.path.join(self.dir, "mod_settings.json")
         self._tpl_path = os.path.join(self.dir, "mod_templates.json")
-        self._verdict_path = os.path.join(self.dir, "mod_verdicts.json")
+        self._verdict_path = os.path.join(self.dir, "mod_verdicts.json")      # 旧格式（迁移后改名）
+        self._verdict_log = os.path.join(self.dir, "mod_verdicts.jsonl")      # 现行：一行一条，磁盘优先
+        self._verdict_meta = os.path.join(self.dir, "mod_verdicts.meta.json")  # 只存 seq / count
         # 群名/备注 + 机器人昵称（openid 不直观，这里做本地映射）
         self._meta_path = os.path.join(self.dir, "mod_group_meta.json")
         # 审核提醒名单（管理员用「/管理登记」逐群自证登记，变体累计提醒只 @ 名单内的人）
@@ -476,12 +483,18 @@ class ModerationStore:
         self.rules: dict[str, list[dict]] = self._load(self._rules_path, {}) or {}
         self.settings: dict[str, dict] = self._load(self._settings_path, {}) or {}
         self.templates: dict[str, Any] = self._load(self._tpl_path, {}) or {}
-        self.verdicts: list[dict] = self._load(self._verdict_path, []) or []
+        self._migrate_verdicts()
+        try:
+            self._seq, self._vcount = self._load_vmeta()
+        except Exception:
+            self._seq, self._vcount = 0, 0
         self.admins: dict[str, dict] = (self._load(self._admin_path, {}) or {}).get("groups") or {}
         _meta = self._load(self._meta_path, {}) or {}
         self.group_meta: dict[str, dict] = _meta.get("groups") or {}   # group_openid -> {name, alias, platform_id, name_state}
         self.bot_meta: dict[str, dict] = _meta.get("bots") or {}       # platform_id -> {name}
         self._kw_cache: dict[str, Any] = {}   # 文本哈希 -> {"verdict":..., "ts":...}
+        # 判定记录条数上限（0=不限）。由插件按配置注入；只在追加时裁最旧的。
+        self.verdict_max_records: int = 5000
         self._seq: int = self._max_verdict_id()
 
     # ---------------- 审核提醒名单（管理员登记） ----------------
@@ -541,7 +554,7 @@ class ModerationStore:
         except (TypeError, ValueError):
             win = 7 * 86400
         since = int(time.time()) - win
-        for v in self.verdicts:
+        for v in self._iter_verdicts(reverse=False):
             if v.get("group") != group or str(v.get("target") or "") != str(member):
                 continue
             if not v.get("variant_hit") or v.get("dry_run"):
@@ -626,11 +639,137 @@ class ModerationStore:
         self._save_meta()
         return cur
 
-    def _max_verdict_id(self) -> int:
+    # ---------------- 判定记录：磁盘优先 ----------------
+    def _migrate_verdicts(self) -> None:
+        """把旧的 mod_verdicts.json（整表）迁移成 JSONL，迁移后旧文件改名留档。
+
+        记录只在需要时读盘，不再常驻内存。
+        """
+        if not os.path.exists(self._verdict_path):
+            return
+        existing = 0
+        if os.path.exists(self._verdict_log):
+            try:
+                with open(self._verdict_log, "r", encoding="utf-8") as f:
+                    existing = sum(1 for line in f if line.strip())
+            except Exception:
+                existing = 0
+        if existing == 0:
+            try:
+                old = self._load(self._verdict_path, []) or []
+                with open(self._verdict_log, "w", encoding="utf-8") as f:
+                    for rec in old:
+                        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                if self.logger:
+                    self.logger.info(f"[审核] 判定记录已迁移到 JSONL：{len(old)} 条")
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"[审核] 判定记录迁移失败（保留旧文件）：{e}")
+                return
         try:
-            return max([int(v.get("id", 0)) for v in self.verdicts] or [0])
+            os.replace(self._verdict_path, self._verdict_path + ".migrated")
         except Exception:
+            pass
+
+    def _iter_verdicts(self, reverse: bool = True):
+        """逐行读判定记录，不整体驻留内存。坏行跳过，不阻断其它记录。"""
+        try:
+            with open(self._verdict_log, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            return
+        it = reversed(lines) if reverse else lines
+        for line in it:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except Exception:
+                continue
+
+    def _read_verdicts(self) -> list[dict]:
+        return list(self._iter_verdicts(reverse=False))
+
+    def _rewrite_verdicts(self, records: list) -> None:
+        """整表重写（删除/更新/裁剪用），先写临时文件再原子替换。"""
+        tmp = self._verdict_log + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            for rec in records or []:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        os.replace(tmp, self._verdict_log)
+        self._vcount = len(records or [])
+        self._save_vmeta()
+
+    def _load_vmeta(self) -> tuple[int, int]:
+        meta = self._load(self._verdict_meta, {}) or {}
+        seq = int(meta.get("seq") or 0)
+        cnt = int(meta.get("count") or 0)
+        if not seq or not cnt:
+            seq, cnt = 0, 0
+            for v in self._iter_verdicts(reverse=False):
+                cnt += 1
+                try:
+                    seq = max(seq, int(v.get("id") or 0))
+                except Exception:
+                    pass
+            self._seq, self._vcount = seq, cnt
+            self._save_vmeta()
+        return seq, cnt
+
+    def _save_vmeta(self) -> None:
+        try:
+            self._save(self._verdict_meta, {"seq": int(self._seq), "count": int(self._vcount)})
+        except Exception:
+            pass
+
+    @property
+    def verdicts(self) -> list[dict]:
+        """兼容旧调用：整表读取。正常路径请用 _iter_verdicts / list_verdicts。"""
+        return self._read_verdicts()
+
+    @verdicts.setter
+    def verdicts(self, records) -> None:
+        self._rewrite_verdicts(list(records or []))
+        try:
+            self._seq = max([int(v.get("id") or 0) for v in records] or [0])
+        except Exception:
+            self._seq = 0
+
+    def _max_verdict_id(self) -> int:
+        return int(self._seq or 0)
+
+    def count_verdicts(self, group: str = "") -> int:
+        if not group:
+            return int(self._vcount or 0)
+        return sum(1 for v in self._iter_verdicts() if v.get("group") == group)
+
+    def get_verdict(self, vid: int) -> Optional[dict]:
+        try:
+            target = int(vid)
+        except (TypeError, ValueError):
+            return None
+        for v in self._iter_verdicts():
+            if int(v.get("id") or 0) == target:
+                return v
+        return None
+
+    def prune_older_than(self, days: int, group: str = "") -> int:
+        """删除 N 天以前的判定记录（仅管理员手动触发，绝不自动定期清理）。"""
+        days = int(days or 0)
+        if days <= 0:
             return 0
+        floor = int(time.time()) - days * 86400
+        keep, removed = [], 0
+        for v in self._iter_verdicts(reverse=False):
+            too_old = int(v.get("created_at") or 0) < floor
+            if too_old and (not group or v.get("group") == group):
+                removed += 1
+                continue
+            keep.append(v)
+        if removed:
+            self._rewrite_verdicts(keep)
+        return removed
 
     # ---------------- 群规 ----------------
     def get_rules(self, group: str) -> list[dict]:
@@ -815,15 +954,21 @@ class ModerationStore:
         return out
 
     # ---------------- 判定记录 ----------------
-    def add_verdict(self, rec: dict, max_records: int = 5000) -> dict:
+    def add_verdict(self, rec: dict, max_records: int = 0) -> dict:
+        """追加一条判定记录：直接写盘（一行 JSON），不驻留内存。"""
         self._seq += 1
         rec = dict(rec or {})
         rec["id"] = self._seq
         rec.setdefault("created_at", int(time.time()))
-        self.verdicts.append(rec)
-        if len(self.verdicts) > int(max_records):
-            del self.verdicts[: len(self.verdicts) - int(max_records)]
-        self._save(self._verdict_path, self.verdicts)
+        with open(self._verdict_log, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        self._vcount += 1
+        self._save_vmeta()
+        limit = int(max_records or self.verdict_max_records or 0)
+        if limit > 0 and self._vcount > limit:
+            # 条数上限由管理员配置（0=不限）；只裁最旧的，且只在追加时触发
+            keep = list(self._iter_verdicts(reverse=False))[-limit:]
+            self._rewrite_verdicts(keep)
         return rec
 
     def feedback_samples(self, limit: int = 40) -> dict:
@@ -834,7 +979,7 @@ class ModerationStore:
         """
         out = {"false_positive": [], "true_positive": []}
         seen: set[str] = set()
-        for v in reversed(self.verdicts or []):
+        for v in self._iter_verdicts():
             label = str(v.get("feedback") or "")
             if label not in out:
                 continue
@@ -859,12 +1004,15 @@ class ModerationStore:
             target = int(vid)
         except (TypeError, ValueError):
             return False
-        for i, v in enumerate(self.verdicts):
-            if int(v.get("id") or 0) == target:
-                del self.verdicts[i]
-                self._save(self._verdict_path, self.verdicts)
-                return True
-        return False
+        keep, hit = [], False
+        for v in self._iter_verdicts(reverse=False):
+            if not hit and int(v.get("id") or 0) == target:
+                hit = True
+                continue
+            keep.append(v)
+        if hit:
+            self._rewrite_verdicts(keep)
+        return hit
 
     def update_verdict(self, vid: int, **fields) -> bool:
         """就地更新一条判定记录（用于回填变体累计升级的结果）。"""
@@ -872,12 +1020,15 @@ class ModerationStore:
             target = int(vid)
         except (TypeError, ValueError):
             return False
-        for v in self.verdicts:
+        keep, changed = [], False
+        for v in self._iter_verdicts(reverse=False):
             if int(v.get("id") or 0) == target:
                 v.update(fields or {})
-                self._save(self._verdict_path, self.verdicts)
-                return True
-        return False
+                changed = True
+            keep.append(v)
+        if changed:
+            self._rewrite_verdicts(keep)
+        return changed
 
     def purge_group(self, group: str) -> dict:
         """整群回收：群规、审核设置、判定记录、群名/备注、提醒名单里的该群条目。
@@ -900,11 +1051,10 @@ class ModerationStore:
         if removed["admins"]:
             self._save_admins()
 
-        before = len(self.verdicts)
-        self.verdicts[:] = [v for v in self.verdicts if v.get("group") != group]
-        removed["verdicts"] = before - len(self.verdicts)
+        keep = [v for v in self._iter_verdicts(reverse=False) if v.get("group") != group]
+        removed["verdicts"] = int(self._vcount) - len(keep)
         if removed["verdicts"]:
-            self._save(self._verdict_path, self.verdicts)
+            self._rewrite_verdicts(keep)
 
         # 该群的模板覆盖（全局模板不动）
         groups = dict(self.templates.get("groups") or {})
@@ -920,20 +1070,25 @@ class ModerationStore:
 
     def clear_verdicts(self, group: str = "") -> int:
         """清空判定记录；传 group 则只清该群。返回删除条数。"""
+        before = int(self._vcount)
         if group:
-            keep = [v for v in self.verdicts if v.get("group") != group]
-            removed = len(self.verdicts) - len(keep)
+            keep = [v for v in self._iter_verdicts(reverse=False) if v.get("group") != group]
         else:
             keep = []
-            removed = len(self.verdicts)
+        removed = before - len(keep)
         if removed:
-            self.verdicts[:] = keep
-            self._save(self._verdict_path, self.verdicts)
+            self._rewrite_verdicts(keep)
         return removed
 
     def list_verdicts(self, group: str = "", limit: int = 100) -> list[dict]:
-        items = self.verdicts if not group else [v for v in self.verdicts if v.get("group") == group]
-        return list(reversed(items))[: int(limit)]
+        out: list[dict] = []
+        for v in self._iter_verdicts():
+            if group and v.get("group") != group:
+                continue
+            out.append(v)
+            if len(out) >= int(limit):
+                break
+        return out
 
     # ---------------- 复犯累进：前科统计 ----------------
     def repeat_count(self, group: str, member: str, *, window_days: int = 30,
@@ -952,10 +1107,12 @@ class ModerationStore:
         since = int(time.time()) - win
         cat = str(category or "").strip()
         n = 0
-        for v in self.verdicts:
+        for v in self._iter_verdicts(reverse=False):
             if v.get("group") != group or str(v.get("target") or "") != str(member):
                 continue
             if not v.get("violation") or not v.get("executed") or v.get("dry_run"):
+                continue
+            if is_revoked(v):
                 continue
             if int(v.get("created_at") or 0) < since:
                 continue
@@ -977,8 +1134,10 @@ class ModerationStore:
             win = 30 * 86400
         since = int(time.time()) - win
         agg: dict[str, dict] = {}
-        for v in self.verdicts:
+        for v in self._iter_verdicts(reverse=False):
             if v.get("group") != group or not v.get("violation") or not v.get("executed"):
+                continue
+            if is_revoked(v):
                 continue
             if int(v.get("created_at") or 0) < since:
                 continue
@@ -1029,7 +1188,7 @@ class ModerationStore:
         days = self.TODO_WINDOW_DAYS if within_days is None else int(within_days)
         floor = (int(time.time()) - days * 86400) if days and days > 0 else 0
         out: list[dict] = []
-        for v in reversed(self.verdicts):
+        for v in self._iter_verdicts():
             if group and v.get("group") != group:
                 continue
             if floor and int(v.get("created_at") or 0) < floor:
@@ -1075,45 +1234,60 @@ class ModerationStore:
             return 0
         changed = 0
         now = int(time.time())
-        for v in self.verdicts:
+        keep = []
+        for v in self._iter_verdicts(reverse=False):
             if int(v.get("id") or 0) in want:
                 v["todo_state"] = str(state or "done")
                 v["todo_by"] = str(operator or "")[:64]
                 v["todo_note"] = str(note or "")[:200]
                 v["todo_at"] = now
                 changed += 1
+            keep.append(v)
         if changed:
-            self._save(self._verdict_path, self.verdicts)
+            self._rewrite_verdicts(keep)
         return changed
 
     def stats(self, group: str = "") -> dict:
-        items = self.verdicts if not group else [v for v in self.verdicts if v.get("group") == group]
-        total = len(items)
-        hit = sum(1 for v in items if v.get("violation"))
-        cached = sum(1 for v in items if v.get("from_cache"))
+        """一次遍历算完全部计数（不把记录整体读进内存）。"""
         today = int(time.time()) - 86400
-        today_items = [v for v in items if int(v.get("created_at") or 0) >= today]
+        total = hit = cached = 0
+        today_total = today_hit = today_llm = 0
+        variant_hits = variant_today = strike_muted = 0
+        for v in self._iter_verdicts():
+            if group and v.get("group") != group:
+                continue
+            total += 1
+            is_hit = bool(v.get("violation"))
+            hit += 1 if is_hit else 0
+            cached += 1 if v.get("from_cache") else 0
+            is_variant = bool(v.get("variant_hit"))
+            variant_hits += 1 if is_variant else 0
+            strike_muted += 1 if is_strike_muted(v) else 0
+            if int(v.get("created_at") or 0) >= today:
+                today_total += 1
+                today_hit += 1 if is_hit else 0
+                variant_today += 1 if is_variant else 0
+                if str(v.get("model") or "") not in ("", "keyword", "variant"):
+                    today_llm += 1
         return {
             "total": total,
             "hit": hit,
             "clean": total - hit,
             "from_cache": cached,
             "cache_rate": round(cached / total, 3) if total else 0.0,
-            "today_total": len(today_items),
-            "today_hit": sum(1 for v in today_items if v.get("violation")),
-            # 当日真正调用过模型的条数（关键词直判不计），用于「每日调用上限」熔断
-            "today_llm_calls": sum(1 for v in today_items if str(v.get("model") or "") not in ("", "keyword", "variant")),
-            "variant_hits": sum(1 for v in items if v.get("variant_hit")),
-            "variant_today": sum(1 for v in today_items if v.get("variant_hit")),
-            # 变体累计升级触发过自动禁言的条数（口径见 is_strike_muted，兼容新旧字段）
-            "variant_strike_muted": sum(1 for v in items if is_strike_muted(v)),
+            "today_total": today_total,
+            "today_hit": today_hit,
+            "today_llm_calls": today_llm,
+            "variant_hits": variant_hits,
+            "variant_today": variant_today,
+            "variant_strike_muted": strike_muted,
             "todo_open": self.todo_count(group),
         }
 
     def groups_overview(self) -> list[dict]:
         groups = set(self.rules.keys()) | set(self.settings.keys())
         groups |= set((self.templates.get("groups") or {}).keys())
-        groups |= {v.get("group") for v in self.verdicts if v.get("group")}
+        groups |= {v.get("group") for v in self._iter_verdicts() if v.get("group")}
         out = []
         for g in sorted(x for x in groups if x):
             st = self.get_settings(g)

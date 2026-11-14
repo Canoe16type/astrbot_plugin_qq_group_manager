@@ -257,7 +257,7 @@ DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\
 
 # 管理指令集合（需要管理员权限）
 # 管理员指令：新的「大类」+ 旧的独立写法都列在这里（旧写法会先被 _normalize_aliases 折进大类）
-ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/管理登记", "/成员",
+ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/管理登记", "/成员", "/撤销",
                   "/解禁", "/查禁言", "/禁言历史", "/通过", "/拒绝", "/群名", "/汇报", "/体检", "/自检")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
@@ -269,7 +269,7 @@ ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/管�
 # 旧的独立指令（解禁、查禁言、禁言历史、通过、拒绝、汇报、体检、自检、群名）
 # 仍作为别名挂在对应大类下，老写法继续可用。
 REGISTERED_COMMANDS = (
-    "禁言", "审批", "状态", "撤回", "审核", "群规",
+    "禁言", "审批", "状态", "撤回", "审核", "群规", "撤销",
     "管理登记", "群管", "举报", "成员", "帮助",
 )
 
@@ -635,6 +635,13 @@ class QQGroupManager(Star):
         # 群规审核（/举报）：数据按群隔离、全部本地落盘；
         # 注意：只有收到 /举报 才会调用模型，平时不扫描、不判定、不执行。
         self.mod = moderation.ModerationStore(self._plugin_data_dir(), self.logger)
+        try:
+            self.mod.verdict_max_records = int(
+                self._read_config_value(("moderation", "verdict_max_records"), default=5000,
+                                        legacy_keys=("verdict_max_records",)) or 0
+            )
+        except Exception:
+            self.mod.verdict_max_records = 5000
         # 群成员档案（openid -> 昵称/备注）：官方事件与消息里只有 openid、没有昵称，
         # 所以"这个人是谁"必须落一张可人工维护的表；退群通知、禁言列表都从这取名。
         self.members = member_registry_lib.MemberRegistry(
@@ -1115,6 +1122,164 @@ class QQGroupManager(Star):
                 "· 自检＝审核链路配置与今日用量\n"
                 "· 群名＝刷新本群群名",
             )
+
+    def _is_bot_admin_only(self, event: AstrMessageEvent) -> bool:
+        """是不是「机器人管理员」（AstrBot 管理员 / 自定义 OpenID 名单）。
+
+        只用于「群管理员不能撤销针对自己的处罚」这条判定：机器人管理员不受限。
+        """
+        sid = event.get_sender_id()
+        try:
+            if bool(self._read_config_value(("admin", "admin_use_astrbot_admin"), default=True,
+                                           legacy_keys=("admin_use_astrbot_admin",))):
+                admins = (self.context.get_config() or {}).get("admins_id") or []
+                if sid in admins or getattr(event, "role", "") == "admin":
+                    return True
+        except Exception:
+            pass
+        extra = self._read_config_value(("admin", "admin_openids"), default=[],
+                                        legacy_keys=("admin_openids",)) or []
+        return sid in extra
+
+    async def _revoke_verdict(self, group: str, vid: int, *, operator: str = "",
+                              operator_name: str = "", reason: str = "",
+                              is_bot_admin: bool = False) -> dict:
+        """撤销一条已生效的处罚：留审计 → 尝试解禁 → 从「前科统计」中排除。
+
+        解禁以**接口真值**为准（get_mute_state），不信本地禁言记录：
+        群管手动解禁、自然到期、机器人重启都会让本地记录漂移。
+        """
+        rec = self.mod.get_verdict(vid)
+        if rec is None:
+            return {"ok": False, "error": "not_found"}
+        if str(rec.get("group") or "") != str(group):
+            return {"ok": False, "error": "cross_group"}
+        if rec.get("revoked"):
+            return {"ok": True, "already": True, "record": rec}
+        if not rec.get("violation") or not (
+            rec.get("executed") or str(rec.get("action") or "") in ("warn", "recall", "mute")
+        ):
+            return {"ok": False, "error": "not_punished"}
+        target = str(rec.get("target") or "")
+        if not is_bot_admin and target and target == str(operator):
+            return {"ok": False, "error": "self_revoke"}
+
+        unmute = {"needed": False, "ok": None, "code": ""}
+        muted = bool(rec.get("ban_seconds")) or str(rec.get("action") or "") == "mute"
+        if target and muted:
+            unmute["needed"] = True
+            try:
+                api = self._api_for_group_or_default(group)
+                state = await api.get_mute_state(group)
+                members = state.get("members") or []
+                still = any(str(m.get("member_openid") or "") == target for m in members)
+                if still:
+                    await api.set_mute(group, target, op="del")
+                    self._mark_unmuted(group, target)
+                    try:                                     # 复查，别"看起来成功了"
+                        state2 = await api.get_mute_state(group)
+                        still = any(str(m.get("member_openid") or "") == target
+                                    for m in (state2.get("members") or []))
+                    except Exception:
+                        still = False
+                    unmute["ok"] = not still
+                else:
+                    unmute["ok"] = True                      # 本来就已经不在了（手动/到期）
+            except Exception as e:
+                unmute["ok"] = False
+                unmute["code"] = str(e)[:120]
+
+        info = {
+            "by": str(operator or ""),
+            "by_name": str(operator_name or "")[:40],
+            "at": int(time.time()),
+            "reason": str(reason or "")[:200],
+            "unmute_needed": unmute["needed"],
+            "unmute_ok": unmute["ok"],
+            "unmute_code": unmute["code"],
+        }
+        self.mod.update_verdict(vid, revoked=info)
+        self.logger.info(
+            f"[审核] 撤销处罚 id={vid} group={group} by={info['by_name'] or info['by']} "
+            f"reason={info['reason']!r} 解禁={unmute}"
+        )
+        return {"ok": True, "record": rec, "revoke": info, "unmute": unmute}
+
+    async def _cmd_revoke(self, event: AstrMessageEvent, parts: list[str]) -> None:
+        """撤销一条处罚记录并致歉：/群管 撤销 <记录ID> [理由]"""
+        g = event.get_group_id()
+        args = parts[1:]
+        vid, reason = 0, ""
+        for i, a in enumerate(args):
+            if str(a).isdigit():
+                vid = int(a)
+                reason = " ".join(str(x) for x in args[i + 1:])
+                break
+        if not vid:
+            await self._reply(event, "用法：/群管 撤销 <记录ID> [理由]\n记录ID 在面板「记录 → 判定记录」里能查到。")
+            return
+        rec = self.mod.get_verdict(vid)
+        if rec is None:
+            await self._reply(event, f"没找到记录 #{vid}。")
+            return
+        if str(rec.get("group") or "") != str(g):
+            await self._reply(event, "只能撤销本群的处罚记录。")
+            return
+        if not self._is_admin(event):
+            await self._reply(event, "只有群主、群管理员或机器人管理员可以撤销处罚。")
+            return
+        is_bot_admin = self._is_bot_admin_only(event)
+
+        res = await self._revoke_verdict(
+            g, vid,
+            operator=event.get_sender_id() or "",
+            operator_name=event.get_sender_name() or "",
+            reason=reason,
+            is_bot_admin=is_bot_admin,
+        )
+        if not res.get("ok"):
+            reason_map = {
+                "self_revoke": "不能撤销针对自己的处罚（机器人管理员除外）。",
+                "not_punished": "这条记录没有实际处罚（未违规 / 试运行 / 未执行），无需撤销。",
+                "cross_group": "只能撤销本群的处罚记录。",
+                "not_found": f"没找到记录 #{vid}。",
+            }
+            await self._reply(event, reason_map.get(res.get("error"), f"撤销失败：{res.get('error')}"))
+            return
+        if res.get("already"):
+            await self._reply(event, f"记录 #{vid} 已经在 {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(res['record']['revoked'].get('at') or 0)))} 被撤销过了。")
+            return
+
+        target = str(rec.get("target") or "")
+        unmute = res.get("unmute") or {}
+        if unmute.get("needed"):
+            unmute_txt = "已解除" if unmute.get("ok") else (
+                "无需解除(当前不在禁言中)" if unmute.get("ok") is True else "解除失败，请手动解禁"
+            )
+        else:
+            unmute_txt = "无需解除"
+        lines = [
+            f"✅ 已撤销处罚记录 #{vid}",
+            f"{self._at_tag(target) if target else ''} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。",
+            f"原处罚：{self._punish_text(rec)}",
+            f"禁言状态：{unmute_txt}" + (f"（{unmute.get('code')}）" if unmute.get("code") else ""),
+            f"撤销人：{event.get_sender_name() or event.get_sender_id()}",
+        ]
+        if reason:
+            lines.append(f"说明：{reason}")
+        await self._reply(event, "\n".join(x for x in lines if x))
+
+    def _punish_text(self, rec: dict) -> str:
+        """把一条记录的原处罚描述成人话，供撤销回执使用。"""
+        action = str(rec.get("action") or "")
+        secs = int(rec.get("ban_seconds") or 0)
+        if action == "mute" or secs:
+            return f"禁言 {fmt_duration(secs)}（记录 #{rec.get('id')}）"
+        if action == "recall" or rec.get("executed"):
+            return f"撤回消息（记录 #{rec.get('id')}）"
+        if action == "warn":
+            return f"警告（记录 #{rec.get('id')}）"
+        return f"无处罚（记录 #{rec.get('id')}）"
 
     async def _cmd_selfcheck(self, event: AstrMessageEvent) -> None:
         """/群管 自检：一眼看清审核链路「配没配好、调没调上、花了多少」。
@@ -2039,7 +2204,7 @@ class QQGroupManager(Star):
                 if not self._is_mentioned_bot(event):
                     return
                 if first not in ("禁言", "审批", "状态", "撤回", "群管", "举报", "群规", "审核",
-                                 "管理登记", "成员", "帮助",
+                                 "管理登记", "成员", "帮助", "撤销",
                                  "解禁", "查禁言", "禁言历史", "通过", "拒绝",
                                  "汇报", "体检", "自检", "群名"):
                     return
@@ -2592,6 +2757,11 @@ class QQGroupManager(Star):
         """待处理入群申请｜审批 通过 N｜审批 拒绝 N [理由]"""
         await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/审批"), skip=1)
 
+    @qgm_group.command("撤销")
+    async def g_revoke(self, event: AstrMessageEvent):
+        """撤销一条处罚记录并致歉：/群管 撤销 <记录ID> [理由]"""
+        await self._run_command(event, forced_cmd="/撤销", skip=1)
+
     @qgm_group.command("状态", alias={"汇报", "体检", "自检", "群名"})
     async def g_status(self, event: AstrMessageEvent):
         """日报（默认）｜状态 群｜状态 自检｜状态 群名"""
@@ -3114,6 +3284,8 @@ class QQGroupManager(Star):
                 await self._cmd_list_requests(event, parts)
         elif cmd == "/状态":
             await self._cmd_status(event, parts)
+        elif cmd == "/撤销":
+            await self._cmd_revoke(event, parts)
         elif cmd == "/撤回":
             await self._cmd_recall(event, parts)
         elif cmd == "/管理登记":
@@ -6841,6 +7013,40 @@ class QQGroupManager(Star):
             self.mod.set_templates(scope, clean)
         return json_response({"saved": True})
 
+    async def web_mod_verdicts_revoke(self):
+        """POST /mod/verdicts/revoke {id, reason} — 面板撤销（操作者为当前登录管理员）。"""
+        payload = await request.json(default={})
+        try:
+            vid = int(payload.get("id") or 0)
+        except (TypeError, ValueError):
+            return json_response({"ok": False, "error": "invalid id"})
+        reason = str(payload.get("reason") or "")[:200]
+        rec = self.mod.get_verdict(vid)
+        if rec is None:
+            return json_response({"ok": False, "error": "not_found"})
+        group = str(payload.get("group") or rec.get("group") or "")
+        # 面板登录者就是 AstrBot 管理员，按 bot admin 处理（不受「不能撤自己」限制）
+        res = await self._revoke_verdict(
+            group, vid, operator="panel", operator_name="面板管理员",
+            reason=reason, is_bot_admin=True,
+        )
+        res.pop("record", None)
+        return json_response(res)
+
+    async def web_mod_verdicts_prune(self):
+        """POST /mod/verdicts/prune {days, group} — 删除 N 天以前的记录（仅手动触发）。"""
+        payload = await request.json(default={})
+        try:
+            days = int(payload.get("days") or 0)
+        except (TypeError, ValueError):
+            days = 0
+        group = str(payload.get("group") or "")
+        if days <= 0:
+            return json_response({"ok": False, "error": "days 必须大于 0"})
+        removed = self.mod.prune_older_than(days, group)
+        self.logger.info(f"[审核] 手动清理判定记录：{days} 天以前，删除 {removed} 条（group={group or '全部'}）")
+        return json_response({"ok": True, "removed": removed, "days": days})
+
     async def web_mod_verdicts_export(self):
         """GET /mod/verdicts/export?group=&days=&limit= — 导出判定记录。
 
@@ -6850,11 +7056,12 @@ class QQGroupManager(Star):
         days = request.query.get("days", 0, type=int) or 0
         limit = min(5000, max(1, request.query.get("limit", 1000, type=int)))
         since = int(time.time()) - days * 86400 if days > 0 else 0
-        items = [
-            v for v in (self.mod.verdicts or [])
-            if (not g or v.get("group") == g) and (not since or int(v.get("created_at") or 0) >= since)
-        ]
-        items = items[-limit:]
+        from collections import deque
+        items = deque(maxlen=limit)
+        for v in self.mod._iter_verdicts():
+            if (not g or v.get("group") == g) and (not since or int(v.get("created_at") or 0) >= since):
+                items.append(v)
+        items = list(items)
         return json_response({"items": items, "total": len(items)})
 
     async def web_mod_verdicts(self):
@@ -6870,12 +7077,8 @@ class QQGroupManager(Star):
             return json_response({"error": "invalid id"})
         label = str(payload.get("label") or "")[:20]
         note = str(payload.get("note") or "")[:300]
-        target = next((v for v in self.mod.verdicts if int(v.get("id") or 0) == vid), None)
-        if target is None:
+        if not self.mod.update_verdict(vid, feedback=label, feedback_note=note):
             return json_response({"error": "not found"})
-        target["feedback"] = label
-        target["feedback_note"] = note
-        self.mod._save(self.mod._verdict_path, self.mod.verdicts)
         # 人工标注回灌到提示词示例（只做提示，不自动改判定规则）。
         # 以前是往内存里 += 一行，重启就丢；现在从判定记录重建，持久化生效。
         self._rebuild_mod_few_shot()
@@ -7103,10 +7306,8 @@ class QQGroupManager(Star):
             if action == "recall":
                 # 找到被举报消息 ID（判定记录里存的是 msg_id）
                 mid = ""
-                for v in self.mod.verdicts:
-                    if int(v.get("id") or 0) == vid:
-                        mid = str(v.get("msg_id") or "")
-                        break
+                rec = self.mod.get_verdict(vid)
+                mid = str((rec or {}).get("msg_id") or "")
                 if mid:
                     try:
                         await api.recall_group_message(g, mid)
@@ -7809,6 +8010,8 @@ class QQGroupManager(Star):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/export", self.web_mod_verdicts_export, ["GET"], "审核-导出判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/delete", self.web_mod_verdicts_delete, ["POST"], "审核-删除单条判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/clear", self.web_mod_verdicts_clear, ["POST"], "审核-清空判定记录")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/revoke", self.web_mod_verdicts_revoke, ["POST"], "审核-撤销处罚")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/prune", self.web_mod_verdicts_prune, ["POST"], "审核-按天清理判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/feedback", self.web_mod_feedback, ["POST"], "审核-误判标记")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/admins", self.web_mod_admins, ["GET"], "审核-提醒名单")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/admins/remove", self.web_mod_admins_remove, ["POST"], "审核-移出提醒名单")

@@ -142,16 +142,16 @@ def test_store() -> None:
     ok(store2.todo_count("g") == 2, "待办计数 = 2")
     ok(store2.mark_todo([11, 12], "done", operator="tester") == 2, "标记已处理 2 条")
     ok(store2.todo_count("g") == 0, "标记后待办清零")
-    store2.verdicts.append({"id": 15, "group": "g", "violation": True, "executed": False,
-                            "dry_run": False, "skipped_reason": "置信度不足", "created_at": now,
-                            "todo_state": "disabled"})
+    store2.verdicts = store2.verdicts + [{"id": 15, "group": "g", "violation": True, "executed": False,
+                                          "dry_run": False, "skipped_reason": "置信度不足", "created_at": now,
+                                          "todo_state": "disabled"}]
     ok(store2.todo_count("g") == 0, "本群关闭待办（todo_state=disabled）时不进队列")
 
     store3 = moderation.ModerationStore(tmp)
     old_ts = now - 30 * 86400
-    store3.verdicts.append({"id": 16, "group": "g", "violation": True, "executed": False,
-                            "dry_run": False, "skipped_reason": "置信度不足", "created_at": old_ts,
-                            "text": "一个月前的低置信记录"})
+    store3.verdicts = store3.verdicts + [{"id": 16, "group": "g", "violation": True, "executed": False,
+                                          "dry_run": False, "skipped_reason": "置信度不足", "created_at": old_ts,
+                                          "text": "一个月前的低置信记录"}]
     ok(store3.todo_count("g") == 0, "超窗口（30 天前）的历史账不进待办")
     ok(store3.todo_count("g", within_days=0) == 1, "within_days=0 表示不限，老记录可见")
     ok(store3.todo_count("g", within_days=60) == 1, "放宽窗口即能看到")

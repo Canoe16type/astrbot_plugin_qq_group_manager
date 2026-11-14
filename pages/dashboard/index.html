@@ -668,6 +668,10 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <div class="log-controls" style="margin:10px 0 4px">
  <button class="btn ghost small" id="btnVerdictRefresh">↻ 刷新记录</button>
  <button class="btn ghost small" id="btnVerdictExport">⭳ 导出 CSV</button>
+ <span class="hint" style="margin-left:10px">删除</span>
+ <input type="number" id="prune-days" min="1" value="90" style="width:72px" title="只删判定记录，不动禁言/撤回记录" />
+ <span class="hint">天以前的记录</span>
+ <button class="btn ghost small" id="btnPruneVerdicts" title="手动清理，不会自动执行；可先导出 CSV 备份">清理</button>
  <button class="btn danger small" id="btnVerdictClearOne"> 清空本群记录</button>
  <button class="btn danger small" id="btnVerdictClearAll"> 清空全部群记录</button>
  <span class="hint" id="verdictClearMsg">删除只清本地留痕（省空间），不会撤销已执行的禁言</span>

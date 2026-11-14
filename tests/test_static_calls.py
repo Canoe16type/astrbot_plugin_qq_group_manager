@@ -53,6 +53,10 @@ class TestNoShadowedMethods(unittest.TestCase):
                 seen: dict[str, int] = {}
                 for item in cls.body:
                     if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        # property 的 setter 必须与 getter 同名，属正常写法，跳过
+                        if any(isinstance(d, ast.Attribute) and d.attr == "setter"
+                               for d in getattr(item, "decorator_list", [])):
+                            continue
                         if item.name in seen:
                             problems.append(
                                 f"{name}: {cls.name}.{item.name} "
