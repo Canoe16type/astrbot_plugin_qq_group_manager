@@ -1010,6 +1010,9 @@ const TPL_FIELDS = [
   ["mod_admin_registered", "管理员登记成功（变体提醒名单）"],
   ["mod_admin_unregistered", "管理员取消登记"],
   ["mod_admin_not_registered", "取消登记时本来就不在名单"],
+  ["msg_mod_warn", "警告提示（智能分级：轻微/中度）"],
+  ["msg_mod_todo", "转人工复核回执（高危但置信度不足）"],
+  ["msg_mod_revoke", "撤销处罚并致歉"],
   ["mod_admin_list", "查看提醒名单"],
   ["mod_admin_list_empty", "提醒名单为空时的提示"],
   ["mod_admin_register_off", "登记成功但本群未开提醒"],
@@ -1702,6 +1705,16 @@ async function exportVerdicts() {
 }
 const btnVerdictExport = document.getElementById("btnVerdictExport");
 if (btnVerdictExport) btnVerdictExport.addEventListener("click", exportVerdicts);
+const _goModTpl = document.getElementById("btnGoModTpl");
+if (_goModTpl) _goModTpl.onclick = () => {
+  switchTabSafe("moderation");
+  const mt = document.querySelector('.mod-tab[data-mod-tab="templates"]');
+  if (mt) mt.click();
+  setTimeout(() => {
+    const f = document.querySelector("#tpl-fields");
+    if (f) f.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 60);
+};
 const _btnPrune = document.getElementById("btnPruneVerdicts");
 if (_btnPrune) _btnPrune.addEventListener("click", pruneVerdicts);
 

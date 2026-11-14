@@ -183,3 +183,30 @@ class ExecuteSmartTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TemplateOverrideTest(unittest.TestCase):
+    """新话术必须能按群覆盖（群规审核 → 话术模板），而不是只能改全局。"""
+
+    def test_defaults_registered(self):
+        for key in ("msg_mod_warn", "msg_mod_todo", "msg_mod_revoke"):
+            self.assertIn(key, moderation.DEFAULT_TEMPLATES)
+
+    def test_group_override_wins(self):
+        p = _plugin(_Api())
+        p.mod.templates = {"groups": {"g1": {"msg_mod_warn": "自定义警告：{rule}"}}}
+        p.mod.get_templates = lambda g: {"msg_mod_warn": "自定义警告：{rule}"}
+        text = p._mod_tpl("g1", "msg_mod_warn", at="", rule="群规3",
+                          severity="轻微", reason="", next="5分钟")
+        self.assertIn("自定义警告", text)
+        self.assertIn("群规3", text)
+
+    def test_falls_back_to_default(self):
+        p = _plugin(_Api())
+        p.mod.templates = {}
+        p.mod.get_templates = lambda g: {}
+        text = p._mod_tpl("g1", "msg_mod_todo")
+        self.assertIn("人工复核", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

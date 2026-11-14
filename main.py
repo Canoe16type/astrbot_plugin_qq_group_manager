@@ -1258,7 +1258,8 @@ class QQGroupManager(Star):
             )
         else:
             unmute_txt = "无需解除"
-        await self._reply(event, self._render(
+        await self._reply(event, self._mod_tpl(
+            g,
             "msg_mod_revoke",
             vid=vid,
             at=self._at_tag(target) if target else "",
@@ -6017,7 +6018,8 @@ class QQGroupManager(Star):
             nxt = fmt_duration(secs)
         except Exception:
             nxt = "按群规处理"
-        text = self._render(
+        text = self._mod_tpl(
+            group,
             "msg_mod_warn",
             at=target,
             rule=out.get("rule_name") or "群规",
@@ -6519,7 +6521,7 @@ class QQGroupManager(Star):
                 ))
                 return
             if result.get("pending_review"):
-                await self._reply(event, self._render("msg_mod_todo"))
+                await self._reply(event, self._mod_tpl(g, "msg_mod_todo"))
                 return
             if not result["executed"]:
                 # 置信度不足 / 豁免成员 / 执行失败：宁可回复“未处理”也不误报“已禁言”

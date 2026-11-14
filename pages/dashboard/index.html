@@ -459,6 +459,8 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <p class="desc">
  留空表示<b>继承全局默认</b>（占位符里显示的就是全局值）。可用变量：
  <code>{basis}</code> <code>{category}</code> <code>{duration}</code> <code>{user}</code> <code>{reason}</code>
+ <br/><b>警告 / 转人工 / 撤销三条</b>另有：<code>{at}</code> <code>{rule}</code> <code>{severity}</code>
+ <code>{next}</code> <code>{vid}</code> <code>{punish}</code> <code>{unmute}</code> <code>{operator}</code> <code>{reason_line}</code>
  </p>
  <div id="tpl-fields" class="grid one"></div>
  <h3 class="h3">维度显示名（<code>{basis}</code> 的取值）</h3>
@@ -757,6 +759,10 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <div class="seg" id="setSeg" style="margin:0 0 12px;max-width:280px">
    <button class="on" data-sub="general">常规设置</button>
    <button data-sub="templates">消息模板</button>
+ </div>
+
+ <div class="row-actions" style="margin:-4px 0 10px">
+   <button class="btn ghost small" id="btnGoModTpl" title="按群保存的话术在「群规审核 → 话术模板」；本页改的是所有群共用的全局默认">→ 按群话术（群规审核）</button>
  </div>
 
  <div class="md-help-bar" id="tplMdBar" style="display:none">

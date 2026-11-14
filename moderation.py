@@ -106,6 +106,10 @@ def is_strike_muted(v: dict) -> bool:
 #: 默认话术（与用户指定的两条一致，第三条为「综合判定违规但无对应规则」兜底）
 #: 注意：插件没有「人工审核」环节，话术不得承诺人工处理；记录位置=面板「记录 → 判定记录」
 DEFAULT_TEMPLATES: dict[str, str] = {
+    "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。",
+    "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
+    "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
+                      "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
     "mod_hit": "根据{basis}，符合{category}，已被禁言{duration}",
     "mod_clean": "根据多重维度评判，此消息不涉嫌违规",
     "mod_hit_general": "根据多重维度评判，符合{category}，已被禁言{duration}",
