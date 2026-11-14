@@ -990,6 +990,8 @@ class ModerationStore:
         # 举报受理时先回一句「已收到，正在核对」，再给结果。
         # 旧逻辑只在走模型时才回，关键词层瞬间出结果时用户会以为没反应。
         "report_ack_enabled": True,
+        # 警告不改变群成员状态，风险远低于禁言：置信度可以比主阈值低一档也放行
+        "warn_confidence_threshold": 0.6,
         "recall_max_age_seconds": 110,   # 超过官方 2 分钟撤回时限就别白费力气（0=总是尝试）
         "smart_penalty": False,
         "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
@@ -1030,8 +1032,10 @@ class ModerationStore:
     }
 
     def get_settings(self, group: str) -> dict:
+        """默认值 ← 已保存值。已保存里的 None 视为「没设置」，否则会把新开关的默认值覆盖掉。"""
         s = dict(self.DEFAULT_SETTINGS)
-        s.update(self.settings.get(group) or {})
+        saved = {k: v for k, v in (self.settings.get(group) or {}).items() if v is not None}
+        s.update(saved)
         return s
 
     def set_settings(self, group: str, patches: dict) -> dict:

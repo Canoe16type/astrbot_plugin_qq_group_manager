@@ -292,6 +292,30 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertEqual(pred["seconds"], res["seconds"])
 
 
+    def test_low_confidence_within_warn_band_warns(self):
+        """置信度低于主阈值但高于警告下限：只警告（不撤回、不禁言）。"""
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True,
+                                         confidence_threshold=0.75, warn_confidence_threshold=0.6)
+        plan = p._mod_plan("g1", _verdict("low", 0.62), _rep())
+        self.assertEqual(plan["action"], "warn")
+        self.assertFalse(plan["recall"])
+
+    def test_below_warn_threshold_stays_none(self):
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True,
+                                         confidence_threshold=0.75, warn_confidence_threshold=0.6)
+        plan = p._mod_plan("g1", _verdict("low", 0.5), _rep())
+        self.assertEqual(plan["action"], "none")
+
+    def test_high_low_confidence_still_todo(self):
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True,
+                                         confidence_threshold=0.75, warn_confidence_threshold=0.6)
+        plan = p._mod_plan("g1", _verdict("high", 0.62), _rep())
+        self.assertEqual(plan["action"], "todo")
+
+
 if __name__ == "__main__":
     unittest.main()
 

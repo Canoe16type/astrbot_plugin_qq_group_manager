@@ -6074,9 +6074,15 @@ class QQGroupManager(Star):
             return plan
 
         thr = float(st.get("confidence_threshold") or 0.75)
+        warn_thr = float(st.get("warn_confidence_threshold") or 0.6)
         if conf < thr and not verdict.get("from_cache"):
             if smart and sev0.lower() == "high":
                 plan.update(action="todo", reason=f"高危但置信度 {conf:.2f} < {thr:.2f}，转人工复核")
+            elif smart and warn_thr <= conf < thr:
+                # 拿不准但已经像违规：警告不改变成员状态，可以放行；不撤回、不禁言
+                plan.update(action="warn", recall=False, source="smart",
+                            severity=sev0 or "medium",
+                            reason=f"置信度 {conf:.2f} 低于阈值 {thr:.2f}，仅警告不处罚")
             else:
                 plan.update(action="none", reason=f"置信度 {conf:.2f} < 阈值 {thr:.2f}")
             plan["trace"] = self._plan_trace(plan, st, conf)

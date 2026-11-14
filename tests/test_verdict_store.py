@@ -182,5 +182,13 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertEqual(self.store.count_verdicts(), 10)
 
 
+    def test_none_saved_values_do_not_override_defaults(self):
+        """旧配置里没有的新开关会以 None 存下来，不能把默认值覆盖成 None。"""
+        self.store.set_settings("g1", {"smart_penalty": None, "report_ack_enabled": None})
+        st = self.store.get_settings("g1")
+        self.assertFalse(st["smart_penalty"])
+        self.assertTrue(st["report_ack_enabled"])
+
+
 if __name__ == "__main__":
     unittest.main()
