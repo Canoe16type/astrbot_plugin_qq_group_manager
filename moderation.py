@@ -262,6 +262,9 @@ def decide_action(
     rules: list[dict],
     max_seconds: int = 86400,
     default_seconds: int = 600,
+    smart: bool = False,
+    low_conf: float = 0.75,
+    high_conf: float = 0.6,
 ) -> dict:
     """把 AI（或关键词层）的判定翻译成可执行动作 + 时长。
 
@@ -308,6 +311,32 @@ def decide_action(
                 matched_rule = next((r for r in same if str(r.get("severity") or "") == sev), None)
     if matched_rule is not None:
         seconds = _take(matched_rule)
+
+    # ---- 智能分级（默认关闭）----
+    # 原则仍然是「AI 只定性质，代码定罚」：这里只把 severity 映射成动作类型，
+    # 时长依旧来自群规或 severity 阶梯，模型永远拿不到写秒数的权力。
+    if smart and matched_rule is None:
+        sev = str(verdict.get("severity") or "medium").lower()
+        try:
+            conf = float(verdict.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if sev == "high":
+            if conf < float(high_conf):
+                return {"action": "todo", "seconds": 0, "rule_name": "",
+                        "basis": verdict.get("basis") or DIM_SEMANTIC,
+                        "skipped_reason": f"高危但置信度 {conf:.2f} < {high_conf:.2f}，转人工复核"}
+            secs = max(60, min(int(severity_to_seconds("high")), int(max_seconds)))
+            return {"action": "mute", "seconds": secs, "rule_name": "",
+                    "basis": verdict.get("basis") or DIM_SEMANTIC}
+        if sev == "medium":
+            return {"action": "warn", "seconds": 0, "recall": True, "rule_name": "",
+                    "basis": verdict.get("basis") or DIM_SEMANTIC}
+        # low / 未知：只警告，不撤回
+        # 轻微：只警告、不撤回（撤回伤面子且容易误伤玩笑）
+        return {"action": "warn", "seconds": 0, "recall": False, "rule_name": "",
+                "basis": verdict.get("basis") or DIM_SEMANTIC}
+
     if seconds is None:
         seconds = severity_to_seconds(str(verdict.get("severity") or "medium"))
     if seconds < 60:
@@ -874,6 +903,9 @@ class ModerationStore:
         "daily_budget": 500,
         "llm_queue_limit": 3,         # 同群模型调用排队上限（超出直接跳过模型层，只走关键词层）
         "llm_timeout": 45,            # 单次模型调用超时（秒）；超时按失败处理，不无限占着队列
+        # 智能分级（P2）：low→警告、medium→撤回+警告、high→禁言；高危且置信度不足→转人工待办。
+        # 关闭时完全走原逻辑（degree→固定时长、只撤回+禁言）。
+        "smart_penalty": False,
         "whitelist": [],              # 豁免成员 openid（管理员自动豁免）
         "keywords": {},               # 群自定义关键词 {category: [pattern]}
         # ---- 变体检测（谐音/形近/插符号绕过）----

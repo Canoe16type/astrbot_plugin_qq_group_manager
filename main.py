@@ -1717,6 +1717,9 @@ class QQGroupManager(Star):
     # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
     # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
     TPL_FALLBACKS = {
+        "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n"
+                        "命中：{rule}\n判定：{severity}\n理由：{reason}\n"
+                        "后续：再次出现将禁言 {next}\n有异议请联系群管理。",
         "msg_join_request_auto_approved": (
             "✅ 新成员 {username} 的入群申请已由自动审批策略通过（策略 {strategy}）"
         ),
@@ -1759,6 +1762,8 @@ class QQGroupManager(Star):
     def _tpl_format(self, key: str) -> str:
         meta = self._tpl_formats.get(key) or {}
         kind = str(meta.get("type") or "text").strip().lower()
+        if not meta and key == "msg_mod_warn":
+            return "markdown"          # 警告默认 markdown；可在「消息模板」页改回文本
         return kind if kind in self.TPL_FORMAT_KINDS else "text"
 
     def _tpl_keys(self) -> set[str]:
@@ -1908,10 +1913,14 @@ class QQGroupManager(Star):
             return
         try:
             if fmt == "markdown":
-                chain = MessageChain([Plain(content)])
-                chain.use_markdown(True)
-                await event.send(chain)
-                return
+                try:
+                    chain = MessageChain([Plain(content)])
+                    chain.use_markdown(True)
+                    await event.send(chain)
+                    return
+                except Exception as e:
+                    # markdown 通道失败（40034124 / 内容校验等）→ 退回纯文本，别把消息吞了
+                    self.logger.warning(f"markdown 发送失败，降级为纯文本: {e}")
             if is_img:
                 if img_url:
                     comps: list = [Image(file=img_url)]
@@ -5959,6 +5968,63 @@ class QQGroupManager(Star):
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
+    async def _mod_try_recall(self, event: AstrMessageEvent, group: str, rep: dict,
+                              settings: dict) -> str:
+        """尽力撤回被处罚消息，返回一行说明（失败不影响后续动作）。"""
+        mid = str(rep.get("id") or "")
+        if not mid:
+            return ""
+        try:
+            max_age = float(settings.get("recall_max_age_seconds", 110) or 0)
+        except (TypeError, ValueError):
+            max_age = 110.0
+        age = time.time() - float(rep.get("ts") or 0)
+        if max_age > 0 and age > max_age:
+            note = (f"消息已发出 {int(age)} 秒，超出官方 2 分钟撤回时限，跳过撤回"
+                    f"（可将本群 recall_max_age_seconds 设为 0 强制尝试）")
+            self.logger.info(f"[审核] {note}")
+            return note
+        api = self._api_for_group_or_default(group, fallback_pid=event.get_platform_id())
+        if api is None:
+            return "无可用 API 客户端，跳过撤回"
+        try:
+            await api.recall_group_message(group, mid)
+            self.logger.info(f"[审核] 已撤回消息 {mid} (group={group})")
+            self._add_recall_record(
+                group_openid=group,
+                platform_id=event.get_platform_id(),
+                message_id=mid,
+                content=str(rep.get("text") or ""),
+                source="report_auto",
+                operator=event.get_sender_id(),
+                operator_name=event.get_sender_name() or "",
+            )
+            return ""
+        except Exception as e:
+            note = _recall_hint(e)
+            self.logger.warning(f"[审核] 撤回失败（不影响后续动作）: {note}")
+            return note
+
+    async def _send_mod_warning(self, event: AstrMessageEvent, group: str, rep: dict,
+                                out: dict, dec: dict) -> None:
+        """发一条警告（默认 markdown + @）。发送失败由 _reply 降级为纯文本。"""
+        target = str(rep.get("sender") or "")
+        sev_map = {"high": "严重", "medium": "中度", "low": "轻微"}
+        try:
+            secs = int(moderation.severity_to_seconds(str(out.get("severity") or "medium")))
+            nxt = fmt_duration(secs)
+        except Exception:
+            nxt = "按群规处理"
+        text = self._render(
+            "msg_mod_warn",
+            at=target,
+            rule=out.get("rule_name") or "群规",
+            severity=sev_map.get(str(out.get("severity") or ""), "中度"),
+            reason=out.get("reason") or "",
+            next=nxt,
+        )
+        await self._reply(event, text)
+
     async def _mod_execute(self, event: AstrMessageEvent, group: str, rep: dict,
                            verdict: dict, settings: dict) -> dict:
         """按判定结果执行动作。返回执行摘要（含话术所需字段）。"""
@@ -5991,7 +6057,18 @@ class QQGroupManager(Star):
             thr = float(settings.get("confidence_threshold") or 0.75)
         except (TypeError, ValueError):
             thr = 0.75
+        smart = bool(settings.get("smart_penalty", False))
         if float(out["confidence"] or 0) < thr and not out["cached"]:
+            if smart and str(out["severity"]).lower() == "high":
+                # 高危但拿不准：宁可转人工，也不自动禁言
+                out.update({
+                    "action": "todo",
+                    "pending_review": True,
+                    "executed": False,
+                    "skipped_reason": f"高危但置信度 {out['confidence']:.2f} < {thr:.2f}，转人工复核",
+                })
+                self.logger.info(f"[审核] {group} 高危低置信（{out['confidence']:.2f} < {thr:.2f}），转人工待办")
+                return out
             out["skipped_reason"] = f"置信度 {out['confidence']:.2f} < 阈值 {thr:.2f}"
             return out
 
@@ -6000,11 +6077,14 @@ class QQGroupManager(Star):
             rules=self.mod.get_rules(group),
             max_seconds=int(settings.get("max_mute_seconds") or 86400),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
+            smart=smart,
         )
+        kind = str(dec.get("action") or "mute")
         out.update({
+            "action": kind,
             "rule_name": dec.get("rule_name") or "",
-            "seconds": int(dec.get("seconds") or 0),
-            "duration": fmt_duration(int(dec.get("seconds") or 0)),
+            "seconds": int(dec.get("seconds") or 0) if kind == "mute" else 0,
+            "duration": fmt_duration(int(dec.get("seconds") or 0)) if kind == "mute" else "",
         })
 
         target = str(rep.get("sender") or "")
@@ -6059,32 +6139,16 @@ class QQGroupManager(Star):
         #      这是与身份无关的硬限制。
         # 所以默认只在 2 分钟内尝试；若想验证自己账号的实际权限，可把本群
         # recall_max_age_seconds 设为 0（= 不限，总是尝试，失败会记录原因）。
-        mid = str(rep.get("id") or "")
-        try:
-            max_age = float(settings.get("recall_max_age_seconds", 110) or 0)
-        except (TypeError, ValueError):
-            max_age = 110.0
-        age = time.time() - float(rep.get("ts") or 0)
-        if mid and (max_age <= 0 or age <= max_age):
-            try:
-                await api.recall_group_message(group, mid)
-                self.logger.info(f"[审核] 已撤回消息 {mid} (group={group})")
-                self._add_recall_record(
-                    group_openid=group,
-                    platform_id=event.get_platform_id(),
-                    message_id=mid,
-                    content=str(rep.get("text") or ""),
-                    source="report_auto",
-                    operator=event.get_sender_id(),
-                    operator_name=event.get_sender_name() or "",
-                )
-            except Exception as e:
-                out["recall_note"] = _recall_hint(e)
-                self.logger.warning(f"[审核] 撤回失败（不影响禁言）: {out['recall_note']}")
-        elif mid:
-            out["recall_note"] = (f"消息已发出 {int(age)} 秒，超出官方 2 分钟撤回时限，"
-                                  f"跳过撤回（可将本群 recall_max_age_seconds 设为 0 强制尝试）")
-            self.logger.info(f"[审核] {out['recall_note']}")
+        if kind in ("mute", "warn") and (kind == "mute" or dec.get("recall")):
+            out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
+
+        if kind == "warn":
+            out["executed"] = True
+            await self._send_mod_warning(event, group, rep, out, dec)
+            self.logger.info(
+                f"[审核] 已警告 {target[-6:]}（group={group}） severity={out.get('severity')} conf={out.get('confidence')}"
+            )
+            return out
 
         # 2) 禁言
         expire_ts = time.time() + int(out["seconds"])
@@ -6225,11 +6289,12 @@ class QQGroupManager(Star):
             rec = self.mod.add_verdict({
                 "group": g, "msg_id": rep["id"], "reporter": "auto_scan",
                 "target": rep["sender"], "target_name": rep["sender_name"],
-                "text": text[:200], "violation": result["violation"],
+                **self._verdict_text(rep), "violation": result["violation"],
                 "basis": result["basis"], "category": result["category"],
                 "confidence": result["confidence"], "reason": result["reason"],
                 "rule_name": result["rule_name"],
-                "action": "mute" if result["executed"] else "none",
+                "action": str(result.get("action") or ("mute" if result["executed"] else "none")),
+                "pending_review": bool(result.get("pending_review")),
                 "ban_seconds": result["seconds"], "skipped_reason": result["skipped_reason"],
                 "executed": result["executed"], "dry_run": result["dry_run"],
                 "recall_note": result.get("recall_note", ""),
@@ -6361,7 +6426,8 @@ class QQGroupManager(Star):
                 "confidence": result["confidence"],
                 "reason": result["reason"],
                 "rule_name": result["rule_name"],
-                "action": "mute" if result["executed"] else "none",
+                "action": str(result.get("action") or ("mute" if result["executed"] else "none")),
+                "pending_review": bool(result.get("pending_review")),
                 "ban_seconds": result["seconds"],
                 "skipped_reason": result["skipped_reason"],
                 "recall_note": result.get("recall_note", ""),
@@ -6424,6 +6490,12 @@ class QQGroupManager(Star):
                     duration=result["duration"],
                 ))
                 return
+            if result.get("pending_review"):
+                await self._reply(
+                    event,
+                    "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
+                )
+                return
             if not result["executed"]:
                 # 置信度不足 / 豁免成员 / 执行失败：宁可回复“未处理”也不误报“已禁言”
                 rsn = str(result["skipped_reason"] or "")
@@ -6438,6 +6510,8 @@ class QQGroupManager(Star):
                 else:
                     await self._reply(event, self._mod_tpl(g, "mod_failed", error=rsn[:40] or "执行未成功"))
                 return
+            if str(result.get("action") or "") == "warn":
+                return          # 警告已经公开发过，别再补一条“已禁言”
             await self._reply(event, self._mod_tpl(
                 g, "mod_hit",
                 basis=self.mod.get_dim_names(g).get(str(result["basis"]), "多重维度"),

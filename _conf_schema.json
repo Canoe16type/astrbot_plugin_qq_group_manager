@@ -663,6 +663,11 @@
         "type": "text",
         "default": "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人",
         "hint": "可用变量：{date} {time} {pending_count} {list} {muted_count} {group}。{list} 会自动展开成申请名单，没有申请时是一句「暂无待处理申请」"
+      },
+      "msg_mod_warn": {
+        "description": "审核 · 警告提示（默认 markdown）",
+        "type": "text",
+        "default": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

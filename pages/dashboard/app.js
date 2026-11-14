@@ -1291,7 +1291,7 @@ const S_KEYS = ["enabled", "dry_run", "auto_scan", "auto_scan_llm", "enable_keyw
   "variant_strike_enabled", "variant_strike_window_days", "variant_strike_threshold",
   "variant_strike_notify", "variant_strike_mute", "variant_strike_mute_threshold",
   "variant_strike_mute_seconds", "variant_strike_require_confirm", "variant_strike_cooldown_hours",
-  "todo_enabled",
+  "todo_enabled", "smart_penalty",
   "escalate_enabled", "escalate_window_days", "escalate_step", "escalate_max_multiplier"];
 
 function renderSettings() {
@@ -1578,9 +1578,8 @@ async function markFeedback(id, label = "false_positive") {
 
 /* 撤销处罚：面板侧（AstrBot 管理员）——会尝试解禁，并留下审计 */
 async function revokeVerdict(v) {
-  const reason = prompt("撤销理由（会写进审计记录，可留空）：", "人工复核误判");
-  if (reason === null) return;
-  if (!confirm(`确认撤销记录 #${v.id} 的处罚？\n将尝试解除禁言，并从「前科」统计中排除。`)) return;
+  const reason = "面板管理员人工复核撤销";
+  if (!(await showConfirm(`确认撤销记录 #${v.id} 的处罚？\n将尝试解除禁言，并从「前科」统计中排除。`))) return;
   try {
     const r = await bridge.apiPost("mod/verdicts/revoke", { id: v.id, group: v.group, reason: reason });
     if (r.ok === false) throw new Error(r.error || "撤销失败");
@@ -1598,7 +1597,7 @@ async function pruneVerdicts() {
   const el = $("prune-days");
   const days = parseInt((el && el.value) || "0", 10);
   if (!days || days <= 0) return toast("请填写要删除多少天以前的记录", true);
-  if (!confirm(`删除「${current ? "本群" : "全部群"}」${days} 天以前的判定记录？\n该操作不可撤销，建议先导出 CSV。`)) return;
+  if (!(await showConfirm(`删除「${current ? "本群" : "全部群"}」${days} 天以前的判定记录？\n该操作不可撤销，建议先导出 CSV。`))) return;
   try {
     const r = await bridge.apiPost("mod/verdicts/prune", { days: days, group: current || "" });
     if (r.ok === false) throw new Error(r.error || "清理失败");
@@ -1917,7 +1916,7 @@ async function transferRules() {
     const ids = pickedIds();
     if (!to) return toast("先选目标群", true);
     if (!ids.length) return toast("至少勾选一条规则", true);
-    if (mode === "replace" && !confirm("覆盖会先清空目标群现有的全部群规，再写入这 " + ids.length + " 条，确定继续？")) return;
+    if (mode === "replace" && !(await showConfirm("覆盖会先清空目标群现有的全部群规，再写入这 " + ids.length + " 条，确定继续？"))) return;
     try {
       const r = await bridge.apiPost("mod/rules/transfer", { from: current, to: to, mode: mode, ids: ids });
       if (r.ok === false) throw new Error(r.error || "转移失败");
