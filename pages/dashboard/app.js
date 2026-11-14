@@ -1748,7 +1748,9 @@ async function runTest() {
   if (!text) return toast("先输入一条消息内容", true);
   $("test-result").textContent = "判定中…（走模型可能要几秒）";
   try {
-    const r = await bridge.apiPost("mod/test", { group: current, text });
+    const priorEl = $("test-prior");
+    const prior = Math.max(0, Math.min(99, parseInt((priorEl && priorEl.value) || "0", 10) || 0));
+    const r = await bridge.apiPost("mod/test", { group: current, text, prior: prior });
     if (r.error) {
       $("test-result").textContent = "❌ " + r.error;
       return;

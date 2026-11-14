@@ -642,6 +642,11 @@ class QQGroupManager(Star):
             )
         except Exception:
             self.mod.verdict_max_records = 5000
+        # 面板/配置页改了上限后不必重载：每次追加时读一次（内存字典读取，成本可忽略）
+        self.mod.verdict_limit_provider = lambda: int(
+            self._read_config_value(("moderation", "verdict_max_records"), default=5000,
+                                    legacy_keys=("verdict_max_records",)) or 0
+        )
         # 群成员档案（openid -> 昵称/备注）：官方事件与消息里只有 openid、没有昵称，
         # 所以"这个人是谁"必须落一张可人工维护的表；退群通知、禁言列表都从这取名。
         self.members = member_registry_lib.MemberRegistry(
@@ -5971,7 +5976,8 @@ class QQGroupManager(Star):
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
-    def _mod_predict_action(self, group: str, verdict: dict, rep: dict) -> dict:
+    def _mod_predict_action(self, group: str, verdict: dict, rep: dict,
+                            prior_override: int | None = None) -> dict:
         """只算「会怎么罚」，不执行任何动作——供试跑、/审核 测试、面板预览使用。
 
         与 `_mod_execute` 使用同一套参数（smart / 前科 / 阈值 / 上限），
@@ -5981,7 +5987,9 @@ class QQGroupManager(Star):
         smart = bool(st.get("smart_penalty", False))
         prior = 0
         try:
-            if smart or st.get("escalate_enabled", False):
+            if prior_override is not None:
+                prior = max(0, int(prior_override))
+            elif smart or st.get("escalate_enabled", False):
                 prior = self.mod.repeat_count(
                     group, str(rep.get("sender") or ""),
                     window_days=int(st.get("escalate_window_days") or 30),
@@ -6812,8 +6820,14 @@ class QQGroupManager(Star):
             return
         if sub == "测试":
             text = " ".join(parts[2:]).strip()
+            # 可选：在末尾加「前科=3」模拟该成员已有 3 次前科（不写任何数据）
+            prior_override = None
+            m_prior = re.search(r"(?:前科|prior)=(\d{1,3})", text)
+            if m_prior:
+                prior_override = int(m_prior.group(1))
+                text = (text[:m_prior.start()] + text[m_prior.end():]).strip()
             if not text:
-                await self._reply(event, "用法：/群管 审核 测试 <消息内容>")
+                await self._reply(event, "用法：/群管 审核 测试 <消息内容> [前科=3]")
                 return
             rep = {"text": text, "sender": "test", "sender_name": "测试用户", "images": [], "ts": time.time(), "id": ""}
             v = self._mod_review_fast(g, rep, respect_switches=False, scene="审核测试") or await self._mod_review_llm(
@@ -6821,7 +6835,7 @@ class QQGroupManager(Star):
             if not v:
                 await self._reply(event, "测试失败：模型未返回结果。")
                 return
-            d = self._mod_predict_action(g, v, rep)
+            d = self._mod_predict_action(g, v, rep, prior_override=prior_override)
             try:
                 vh = self._mod_variant_scan(g, rep, {**st, "variant_check": True})
             except Exception:
@@ -7534,6 +7548,10 @@ class QQGroupManager(Star):
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
         text = str(payload.get("text") or "")
+        try:
+            prior_override = int(payload.get("prior")) if payload.get("prior") not in (None, "") else None
+        except (TypeError, ValueError):
+            prior_override = None
         if not g or not text:
             return json_response({"error": "missing group or text"})
         rep = {"text": text, "sender": "test", "sender_name": "测试用户", "images": [], "ts": time.time(), "id": ""}
@@ -7552,7 +7570,7 @@ class QQGroupManager(Star):
             used_llm = True
         if not v:
             return json_response({"error": "判定失败：模型未返回结果"})
-        d = self._mod_predict_action(g, v, rep)
+        d = self._mod_predict_action(g, v, rep, prior_override=prior_override)
         # 变体层也一起试跑：不看本群开关（页面测试就是要看效果），只借本群的阈值配置
         try:
             vopts = {**self._mod_settings(g), "variant_check": True}

@@ -716,6 +716,10 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <h3 class="h3">试跑（用当前提示词判一条，不执行动作）</h3>
  <div class="test-box">
  <textarea id="test-text" rows="2" placeholder="粘贴一条消息内容试试判定结果…"></textarea>
+ <span class="hint">假设前科</span>
+ <input type="number" id="test-prior" min="0" max="99" step="1" value="0" style="width:64px"
+        title="模拟该成员已有多少次前科，用于验证升档/加刑；只影响这次试跑，不写任何数据" />
+ <span class="hint">次</span>
  <button class="btn btn-primary" id="btn-test">试跑</button>
  </div>
  <pre id="test-result" class="test-result"></pre>

@@ -184,6 +184,18 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertIn(("mute", "u-target"), api.calls)
 
 
+    def test_prior_override_simulates_history(self):
+        """试跑可指定「假设前科」，不影响真实数据。"""
+        p = _plugin(_Api(), prior=0)
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True, max_mute_seconds=604800)
+        d0 = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep(), prior_override=0)
+        d2 = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep(), prior_override=2)
+        self.assertEqual(d0["action"], "warn")
+        self.assertEqual(d2["action"], "mute")
+        self.assertEqual(d2["prior_offenses"], 2)
+        self.assertGreater(d2["escalation"], 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

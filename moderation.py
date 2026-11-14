@@ -541,6 +541,8 @@ class ModerationStore:
         self._kw_cache: dict[str, Any] = {}   # 文本哈希 -> {"verdict":..., "ts":...}
         # 判定记录条数上限（0=不限）。由插件按配置注入；只在追加时裁最旧的。
         self.verdict_max_records: int = 5000
+        # 可选：由插件注入的「读取最新上限」回调（每次追加时调用一次配置读取，成本可忽略）
+        self.verdict_limit_provider = None
         self._stats_cache: dict[str, tuple[float, dict]] = {}   # group -> (ts, 计数结果)
         self._seq: int = self._max_verdict_id()
 
@@ -1025,7 +1027,12 @@ class ModerationStore:
         self._vcount += 1
         self._save_vmeta()
         self._invalidate_stats()
-        limit = int(max_records or self.verdict_max_records or 0)
+        limit = int(max_records or 0)
+        if not limit:
+            try:
+                limit = int(self.verdict_limit_provider()) if callable(self.verdict_limit_provider) else int(self.verdict_max_records or 0)
+            except Exception:
+                limit = int(self.verdict_max_records or 0)
         if limit > 0 and self._vcount > limit:
             # 条数上限由管理员配置（0=不限）；只裁最旧的，且只在追加时触发
             keep = list(self._iter_verdicts(reverse=False))[-limit:]

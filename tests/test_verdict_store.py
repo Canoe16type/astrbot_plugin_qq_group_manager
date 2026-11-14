@@ -160,5 +160,17 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertEqual(self.store.repeat_count("g1", "u1"), 2.0)
 
 
+    def test_limit_provider_takes_effect_without_restart(self):
+        """配置改了不必重载：每次追加时读一次即可。"""
+        self.store.verdict_limit_provider = lambda: 2
+        for i in range(4):
+            self._add(f"t{i}")
+        self.assertEqual(self.store.count_verdicts(), 2)
+        self.store.verdict_limit_provider = lambda: 0      # 0=不限
+        for i in range(3):
+            self._add(f"n{i}")
+        self.assertEqual(self.store.count_verdicts(), 5)
+
+
 if __name__ == "__main__":
     unittest.main()
