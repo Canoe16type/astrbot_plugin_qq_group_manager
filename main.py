@@ -7067,7 +7067,7 @@ class QQGroupManager(Star):
             f"举报审核：{'开启' if st.get('enabled') else '关闭'}｜试运行：{'开' if st.get('dry_run') else '关'}"
             f"｜巡检：{'开' if st.get('auto_scan') else '关'}" + chr(10) + ""
             f"群规：{len(self.mod.get_rules(g))} 条｜阈值：{st.get('confidence_threshold')}｜上限：{fmt_duration(int(st.get('max_mute_seconds') or 0))}" + chr(10) + ""
-            f"累计：{s['total']} 次（违规 {s['hit']}）｜今日：{s['today_total']} 次｜缓存命中率：{s['cache_rate']:.0%}" + chr(10) + ""
+            f"累计：{s['total']} 次（违规 {s['hit']}）｜今日：{s['today_total']} 次（违规 {s['today_hit']}）" + chr(10) + ""
             f"变体检测：{'开' if st.get('variant_check') else '关'}"
             f"（命中即撤回：{'开' if st.get('variant_recall') else '关'}）"
             f"｜待办：{s.get('todo_open', 0)} 条｜复犯累进：{'开' if st.get('escalate_enabled') else '关'}" + chr(10) + ""
