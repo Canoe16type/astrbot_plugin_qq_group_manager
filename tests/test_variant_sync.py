@@ -84,5 +84,46 @@ class ReportAckTest(unittest.TestCase):
         self.assertTrue(moderation.ModerationStore.DEFAULT_SETTINGS.get("report_ack_enabled", False))
 
 
+class RevokeTemplateTest(unittest.TestCase):
+    """撤销致歉必须走 markdown（否则 <qqbot-at-user> 不会渲染），且含独立致歉句。"""
+
+    def test_revoke_default_is_markdown(self):
+        p = object.__new__(QQGroupManager)
+        p._tpl_formats = {}
+        self.assertEqual(p._tpl_format("msg_mod_revoke"), "markdown")
+
+    def test_default_has_apology_sentence(self):
+        moderation = importlib.import_module("plugins.astrbot_plugin_qq_group_manager.moderation")
+        text = moderation.DEFAULT_TEMPLATES["msg_mod_revoke"]
+        self.assertIn("非常抱歉", text)
+        self.assertIn("LLM 审核", text)
+
+    def test_legacy_default_is_migrated(self):
+        old = QQGroupManager._LEGACY_TEMPLATE_DEFAULTS["msg_mod_revoke"]
+        saved = {}
+
+        class _Cfg(dict):
+            def save_config(self):
+                saved["ok"] = True
+
+        p = object.__new__(QQGroupManager)
+        p.logger = _Logger()
+        p.config = _Cfg({"templates": {"msg_mod_revoke": old}})
+        p._migrate_template_defaults()
+        self.assertIn("非常抱歉", p.config["templates"]["msg_mod_revoke"])
+        self.assertTrue(saved.get("ok"))
+
+    def test_user_customized_template_untouched(self):
+        class _Cfg(dict):
+            def save_config(self):
+                pass
+
+        p = object.__new__(QQGroupManager)
+        p.logger = _Logger()
+        p.config = _Cfg({"templates": {"msg_mod_revoke": "我自己改的 {vid}"}})
+        p._migrate_template_defaults()
+        self.assertEqual(p.config["templates"]["msg_mod_revoke"], "我自己改的 {vid}")
+
+
 if __name__ == "__main__":
     unittest.main()

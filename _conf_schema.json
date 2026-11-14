@@ -695,7 +695,7 @@
       "msg_mod_revoke": {
         "description": "审核 · 撤销处罚并致歉",
         "type": "text",
-        "default": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
+        "default": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
       },
       "msg_mod_unattributed": {
         "description": "审核 · 无法定位被举报发送者时的回执",

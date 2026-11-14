@@ -111,7 +111,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
                             "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
                             "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
     "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-    "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
+    "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
                       "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
     "mod_hit": "根据{basis}，符合{category}，已被禁言{duration}",
     "mod_clean": "根据多重维度评判，此消息不涉嫌违规",

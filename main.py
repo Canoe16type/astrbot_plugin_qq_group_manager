@@ -635,6 +635,7 @@ class QQGroupManager(Star):
         # 群规审核（/举报）：数据按群隔离、全部本地落盘；
         # 注意：只有收到 /举报 才会调用模型，平时不扫描、不判定、不执行。
         self.mod = moderation.ModerationStore(self._plugin_data_dir(), self.logger)
+        self._migrate_template_defaults()
         try:
             self.mod.verdict_max_records = int(
                 self._read_config_value(("moderation", "verdict_max_records"), default=5000,
@@ -1799,7 +1800,7 @@ class QQGroupManager(Star):
                                "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
                                "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
         "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-        "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
+        "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
                           "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
         "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n"
                         "命中：{rule}\n判定：{severity}\n理由：{reason}\n"
@@ -1846,8 +1847,9 @@ class QQGroupManager(Star):
     def _tpl_format(self, key: str) -> str:
         meta = self._tpl_formats.get(key) or {}
         kind = str(meta.get("type") or "text").strip().lower()
-        if not meta and key == "msg_mod_warn":
-            return "markdown"          # 警告默认 markdown；可在「消息模板」页改回文本
+        if not meta and key in ("msg_mod_warn", "msg_mod_revoke"):
+            # 两条都带 @：纯文本通道不解析 <qqbot-at-user>，必须走 markdown
+            return "markdown"
         return kind if kind in self.TPL_FORMAT_KINDS else "text"
 
     def _tpl_keys(self) -> set[str]:
@@ -6210,6 +6212,34 @@ class QQGroupManager(Star):
 
         plan["trace"] = self._plan_trace(plan, st, conf)
         return plan
+
+    _LEGACY_TEMPLATE_DEFAULTS = {
+        "msg_mod_revoke": (
+            "✅ 已撤销处罚记录 #{vid}\n"
+            "{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
+            "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
+        ),
+    }
+
+    def _migrate_template_defaults(self) -> None:
+        """旧版默认文案（逐字完全相同才替换）自动升级；用户改过的不动。"""
+        try:
+            tpls = dict(self.config.get("templates") or {})
+        except Exception:
+            return
+        changed = False
+        for key, old_text in self._LEGACY_TEMPLATE_DEFAULTS.items():
+            if str(tpls.get(key) or "") == old_text:
+                tpls[key] = moderation.DEFAULT_TEMPLATES.get(key) or old_text
+                changed = True
+        if not changed:
+            return
+        try:
+            self.config["templates"] = tpls
+            self.config.save_config()
+            self.logger.info("[模板] 已升级撤销致歉默认文案（含独立致歉句）")
+        except Exception as e:
+            self.logger.debug(f"[模板] 默认文案升级未写盘（仅本次生效）：{e}")
 
     @staticmethod
     def _plan_trace(plan: dict, st: dict, conf: float) -> dict:
