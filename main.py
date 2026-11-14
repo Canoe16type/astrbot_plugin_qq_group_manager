@@ -6031,6 +6031,10 @@ class QQGroupManager(Star):
                 )
             except Exception:
                 pass
+        intended = min(1.0 + float(prior or 0) * 0.5, 3.0)
+        capped = bool(secs == int(dec.get("seconds") or 0) and intended > 1.0)
+        if capped:
+            mult = intended
         return {
             "action": dec.get("action") or "none",
             "recall": bool(dec.get("recall")),
@@ -6039,6 +6043,7 @@ class QQGroupManager(Star):
             "rule_name": dec.get("rule_name") or "",
             "prior_offenses": prior,
             "escalation": mult,
+            "escalation_capped": capped,
             "smart": smart,
             "reason": dec.get("skipped_reason") or "",
         }
@@ -6193,15 +6198,26 @@ class QQGroupManager(Star):
         if smart_mode and not settings.get("escalate_enabled", False) and out.get("action") == "mute" and prior:
             # 智能分级：前科只做温和加成（每次 +50%，上限 3×）
             try:
+                before = int(out["seconds"] or 0)
                 secs, mult = moderation.escalate_seconds(
-                    int(out["seconds"] or 0), prior, step=0.5, max_multiplier=3.0,
-                    cap=int(settings.get("max_mute_seconds") or 86400),
+                    before, prior, step=0.5, max_multiplier=3.0,
+                    cap=int(settings.get("max_mute_seconds") or 604800),
                 )
-                if secs != out["seconds"]:
-                    self.logger.info(f"[审核] 智能分级加刑：前科 {prior} 次，{out['seconds']}s → {secs}s（×{mult}）")
+                intended = min(1.0 + float(prior or 0) * 0.5, 3.0)
+                if secs != before:
+                    self.logger.info(f"[审核] 智能分级加刑：前科 {prior} 次，{before}s → {secs}s（×{mult}）")
                     out["seconds"] = secs
                     out["duration"] = fmt_duration(secs)
-                out["escalation"] = mult
+                    out["escalation"] = mult
+                elif intended > 1.0:
+                    # 被 max_mute_seconds 截断：如实暴露，别让人以为「前科没用」
+                    out["escalation_capped"] = True
+                    out["escalation"] = intended
+                    self.logger.info(
+                        f"[审核] 智能分级加刑被上限截断：前科 {prior} 次本应 ×{intended}，"
+                        f"但 max_mute_seconds={int(settings.get('max_mute_seconds') or 0)} 已封顶"
+                    )
+
             except Exception as e:
                 self.logger.warning(f"[审核] 智能分级加刑计算失败，按原时长执行：{e}")
         if settings.get("escalate_enabled", False):

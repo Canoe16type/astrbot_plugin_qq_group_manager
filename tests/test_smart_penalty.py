@@ -228,6 +228,26 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertEqual(d["action"], "todo")
 
 
+    def test_escalation_capped_is_reported(self):
+        """上限=1 天且 high 基础=1 天时，倍率被截断要明确标记，不能静默当没升。"""
+        cfg = dict(SETTINGS, max_mute_seconds=86400)
+        p = _plugin(_Api(), prior=5)
+        p._mod_settings = lambda g: dict(cfg)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.9), cfg))
+        self.assertEqual(res["seconds"], 86400)
+        self.assertTrue(res.get("escalation_capped"))
+        self.assertGreater(res["escalation"], 1.0)
+
+    def test_default_cap_leaves_headroom(self):
+        """默认上限 7 天时，前科 5 次要能真的加长（> 基础 1 天）。"""
+        cfg = dict(SETTINGS, max_mute_seconds=604800)
+        p = _plugin(_Api(), prior=5)
+        p._mod_settings = lambda g: dict(cfg)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.9), cfg))
+        self.assertGreater(res["seconds"], 86400)
+        self.assertFalse(res.get("escalation_capped"))
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -1774,7 +1774,8 @@ async function runTest() {
         const prior = r.action && r.action.prior_offenses
           ? `｜前科 ${r.action.prior_offenses} 次` + (r.action.escalation && r.action.escalation !== 1 ? `，倍率 ×${r.action.escalation}` : "")
           : "";
-        return base + prior + (r.action && r.action.smart ? "（智能分级已开启）" : "");
+        const capped = r.action && r.action.escalation_capped ? "（已达单次上限）" : "";
+        return base + prior + capped + (r.action && r.action.smart ? "（智能分级已开启）" : "");
       })()}` ,
       `变体层：${r.variant ? `疑似命中（${r.variant.hint}｜强度 ${r.variant.strength}｜${r.variant.count} 处）` : "未命中"}${r.variant && !(detail && detail.settings && detail.settings.variant_check) ? "（本群未开启变体检测，此处仅试跑）" : ""}`,
       "",

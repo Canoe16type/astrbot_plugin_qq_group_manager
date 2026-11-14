@@ -934,7 +934,9 @@ class ModerationStore:
         "keep_context": True,     # 静默留存最近消息，供审核取上下文（仅本地）
         "context_size": 6,        # 取多少条上下文
         "confidence_threshold": 0.75,
-        "max_mute_seconds": 86400,
+        # 单次禁言上限。默认 7 天：若与 high 档基础时长（1 天）相同，累犯倍率会被上限吃掉，
+        # 表现为「前科 0 次与前科 5 次结果一样」。仍可由群管理员按群调低。
+        "max_mute_seconds": 604800,
     # 撤回尝试的时间窗口（秒）：110 秒 = 官方 2 分钟限制内；0 = 不限，总是尝试
     "recall_max_age_seconds": 110,
         "report_limit_per_hour": 5,   # 每人每小时举报次数上限
