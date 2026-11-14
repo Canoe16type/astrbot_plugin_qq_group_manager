@@ -1179,7 +1179,9 @@ class QQGroupManager(Star):
                 members = state.get("members") or []
                 still = any(str(m.get("member_openid") or "") == target for m in members)
                 if still:
-                    await api.set_mute(group, target, op="del")
+                    ok, err = await self._run_action(api.set_mute(group, target, op="del"))
+                    if not ok:
+                        raise RuntimeError(err)
                     self._mark_unmuted(group, target)
                     try:                                     # 复查，别"看起来成功了"
                         state2 = await api.get_mute_state(group)
@@ -5976,78 +5978,159 @@ class QQGroupManager(Star):
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
-    def _mod_predict_action(self, group: str, verdict: dict, rep: dict,
-                            prior_override: int | None = None) -> dict:
-        """只算「会怎么罚」，不执行任何动作——供试跑、/审核 测试、面板预览使用。
+    def _mod_plan(self, group: str, verdict: dict, rep: dict, *,
+                  settings: dict | None = None, prior_override=None) -> dict:
+        """把「判定结果」变成「处罚计划」的唯一来源。
 
-        与 `_mod_execute` 使用同一套参数（smart / 前科 / 阈值 / 上限），
-        否则会出现「试跑显示警告、真实执行却禁言」这种不可解释的差异。
+        试跑（_mod_predict_action）与真实执行（_mod_execute）都走这里，
+        避免两份参数拼装漂移——之前就出现过「试跑显示警告、实际不处罚」。
+        只计算，不产生任何副作用。
         """
-        st = self._mod_settings(group)
+        st = settings if settings is not None else self._mod_settings(group)
         smart = bool(st.get("smart_penalty", False))
-        prior = 0
-        try:
-            if prior_override is not None:
-                prior = max(0, int(prior_override))
-            elif smart or st.get("escalate_enabled", False):
-                prior = self.mod.repeat_count(
-                    group, str(rep.get("sender") or ""),
-                    window_days=int(st.get("escalate_window_days") or 30),
-                )
-        except Exception:
-            prior = 0
+        sev0 = str(verdict.get("severity") or "")
+        plan = {
+            "action": "none", "recall": False, "seconds": 0, "duration": "",
+            "rule_name": "", "rule_id": "", "match_by": "none", "source": "none",
+            "severity": sev0, "confidence": verdict.get("confidence", 0),
+            "prior_offenses": 0, "escalation": 1.0, "escalation_capped": False,
+            "smart": smart, "reason": "",
+        }
         try:
             conf = float(verdict.get("confidence") or 0)
         except (TypeError, ValueError):
             conf = 0.0
+
+        prior = 0.0
+        try:
+            if prior_override is not None:
+                prior = max(0.0, float(prior_override))
+            elif smart or st.get("escalate_enabled", False):
+                prior = float(self.mod.repeat_count(
+                    group, str(rep.get("sender") or ""),
+                    window_days=int(st.get("escalate_window_days") or 30),
+                ))
+        except Exception:
+            prior = 0.0
+        plan["prior_offenses"] = prior
+
+        if not verdict or not verdict.get("violation"):
+            plan["reason"] = "未违规"
+            plan["trace"] = self._plan_trace(plan, st, conf)
+            return plan
+
         thr = float(st.get("confidence_threshold") or 0.75)
         if conf < thr and not verdict.get("from_cache"):
-            sev = str(verdict.get("severity") or "").lower()
-            if smart and sev == "high":
-                return {"action": "todo", "recall": False, "seconds": 0, "duration": "",
-                        "rule_name": "", "prior_offenses": prior, "escalation": 1.0,
-                        "smart": smart, "reason": f"高危但置信度 {conf:.2f} < {thr:.2f}，转人工复核"}
-            return {"action": "none", "recall": False, "seconds": 0, "duration": "",
-                    "rule_name": "", "prior_offenses": prior, "escalation": 1.0,
-                    "smart": smart, "reason": f"置信度 {conf:.2f} < 阈值 {thr:.2f}"}
+            if smart and sev0.lower() == "high":
+                plan.update(action="todo", reason=f"高危但置信度 {conf:.2f} < {thr:.2f}，转人工复核")
+            else:
+                plan.update(action="none", reason=f"置信度 {conf:.2f} < 阈值 {thr:.2f}")
+            plan["trace"] = self._plan_trace(plan, st, conf)
+            return plan
+
         dec = moderation.decide_action(
             verdict,
             rules=self.mod.get_rules(group),
             max_seconds=int(st.get("max_mute_seconds") or 604800),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
             smart=smart,
-            high_conf=float(st.get("confidence_threshold") or 0.75),
+            high_conf=thr,
             prior_offenses=prior,
             prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
             force_mute_priors=int(st.get("smart_force_mute_priors") or 0),
         )
-        secs = int(dec.get("seconds") or 0)
-        mult = 1.0
-        max_mult = float(st.get("smart_max_multiplier") or 3.0)
-        if dec.get("action") == "mute" and smart and not st.get("escalate_enabled", False) and prior:
+        kind = str(dec.get("action") or "mute")
+        plan.update({
+            "action": kind,
+            "recall": bool(dec.get("recall")),
+            "seconds": int(dec.get("seconds") or 0) if kind == "mute" else 0,
+            "duration": fmt_duration(int(dec.get("seconds") or 0)) if kind == "mute" else "",
+            "rule_name": dec.get("rule_name") or "",
+            "rule_id": dec.get("rule_id") or "",
+            "match_by": dec.get("match_by") or "none",
+            "source": dec.get("source") or "legacy",
+            "severity": dec.get("severity") or sev0,
+            "reason": dec.get("skipped_reason") or "",
+        })
+
+        if kind == "mute" and prior:
+            before = int(plan["seconds"] or 0)
             try:
-                secs, mult = moderation.escalate_seconds(
-                    secs, prior, step=0.5, max_multiplier=max_mult,
-                    cap=int(st.get("max_mute_seconds") or 604800),
-                )
+                if smart and not st.get("escalate_enabled", False):
+                    max_mult = float(st.get("smart_max_multiplier") or 3.0)
+                    secs, mult = moderation.escalate_seconds(
+                        before, prior, step=0.5, max_multiplier=max_mult,
+                        cap=int(st.get("max_mute_seconds") or 604800),
+                    )
+                    intended = min(1.0 + float(prior) * 0.5, max_mult)
+                else:
+                    secs, mult = moderation.escalate_seconds(
+                        before, prior,
+                        step=float(st.get("escalate_step") or 1.0),
+                        max_multiplier=float(st.get("escalate_max_multiplier") or 4.0),
+                        cap=int(st.get("max_mute_seconds") or 604800),
+                    )
+                    intended = mult
+                if secs != before:
+                    plan["seconds"] = secs
+                    plan["duration"] = fmt_duration(secs)
+                    plan["escalation"] = mult
+                elif intended > 1.0:
+                    plan["escalation"] = intended
+                    plan["escalation_capped"] = True
+            except Exception as e:
+                self.logger.warning(f"[审核] 累犯加刑计算失败，按原时长执行：{e}")
+
+        plan["trace"] = self._plan_trace(plan, st, conf)
+        return plan
+
+    @staticmethod
+    def _plan_trace(plan: dict, st: dict, conf: float) -> dict:
+        """写进判定记录的决策依据，便于事后回答「为什么罚成这样」。"""
+        return {
+            "source": plan.get("source") or "none",
+            "rule_id": plan.get("rule_id") or "",
+            "rule_name": plan.get("rule_name") or "",
+            "match_by": plan.get("match_by") or "none",
+            "severity": plan.get("severity") or "",
+            "confidence": round(float(conf or 0), 3),
+            "threshold": float(st.get("confidence_threshold") or 0.75),
+            "prior": plan.get("prior_offenses") or 0,
+            "bump_at": int(st.get("smart_tier_bump_at") or 2),
+            "force_at": int(st.get("smart_force_mute_priors") or 0),
+            "escalation": plan.get("escalation") or 1.0,
+            "capped": bool(plan.get("escalation_capped")),
+            "smart": bool(st.get("smart_penalty", False)),
+            "action": plan.get("action") or "none",
+        }
+
+    def _mod_predict_action(self, group: str, verdict: dict, rep: dict,
+                            prior_override: int | None = None) -> dict:
+        """试跑用：与真实执行共用 _mod_plan，只算不执行。"""
+        return self._mod_plan(group, verdict, rep, prior_override=prior_override)
+
+    async def _run_action(self, coro):
+        """在动作闸门内执行一个 QQ API 调用。
+
+        同时最多 2 个撤回/禁言请求；排队超过 5 秒就放弃本次动作（稍后可重试/人工处理），
+        避免刷屏时几十条一起罚把接口打到限频、拖住事件循环。
+        返回 (ok, error_message)。
+        """
+        if getattr(self, "_mod_action_sem", None) is None:
+            self._mod_action_sem = asyncio.Semaphore(2)
+        try:
+            await asyncio.wait_for(self._mod_action_sem.acquire(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                coro.close()
             except Exception:
                 pass
-        intended = min(1.0 + float(prior or 0) * 0.5, max_mult)
-        capped = bool(secs == int(dec.get("seconds") or 0) and intended > 1.0)
-        if capped:
-            mult = intended
-        return {
-            "action": dec.get("action") or "none",
-            "recall": bool(dec.get("recall")),
-            "seconds": secs,
-            "duration": fmt_duration(secs) if secs else "",
-            "rule_name": dec.get("rule_name") or "",
-            "prior_offenses": prior,
-            "escalation": mult,
-            "escalation_capped": capped,
-            "smart": smart,
-            "reason": dec.get("skipped_reason") or "",
-        }
+            return False, "动作队列繁忙（并发上限 2），本次未执行"
+        try:
+            await coro
+            return True, ""
+        finally:
+            self._mod_action_sem.release()
 
     async def _mod_try_recall(self, event: AstrMessageEvent, group: str, rep: dict,
                               settings: dict) -> str:
@@ -6069,7 +6152,9 @@ class QQGroupManager(Star):
         if api is None:
             return "无可用 API 客户端，跳过撤回"
         try:
-            await api.recall_group_message(group, mid)
+            ok, err = await self._run_action(api.recall_group_message(group, mid))
+            if not ok:
+                return err
             self.logger.info(f"[审核] 已撤回消息 {mid} (group={group})")
             self._add_recall_record(
                 group_openid=group,
@@ -6134,54 +6219,25 @@ class QQGroupManager(Star):
         }
         if not out["violation"]:
             return out
-        # 置信度不足：不自动执行，只记录（避免误杀）
-        try:
-            thr = float(settings.get("confidence_threshold") or 0.75)
-        except (TypeError, ValueError):
-            thr = 0.75
-        smart = bool(settings.get("smart_penalty", False))
-        if float(out["confidence"] or 0) < thr and not out["cached"]:
-            if smart and str(out["severity"]).lower() == "high":
-                # 高危但拿不准：宁可转人工，也不自动禁言
-                out.update({
-                    "action": "todo",
-                    "pending_review": True,
-                    "executed": False,
-                    "skipped_reason": f"高危但置信度 {out['confidence']:.2f} < {thr:.2f}，转人工复核",
-                })
-                self.logger.info(f"[审核] {group} 高危低置信（{out['confidence']:.2f} < {thr:.2f}），转人工待办")
-                return out
-            out["skipped_reason"] = f"置信度 {out['confidence']:.2f} < 阈值 {thr:.2f}"
-            return out
-
-        smart_mode = bool(settings.get("smart_penalty", False))
-        prior = 0
-        try:
-            if smart_mode or settings.get("escalate_enabled", False):
-                prior = self.mod.repeat_count(
-                    group, str(rep.get("sender") or ""),
-                    window_days=int(settings.get("escalate_window_days") or 30),
-                )
-        except Exception:
-            prior = 0
-        dec = moderation.decide_action(
-            verdict,
-            rules=self.mod.get_rules(group),
-            max_seconds=int(settings.get("max_mute_seconds") or 604800),
-            default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
-            smart=smart_mode,
-            high_conf=float(settings.get("confidence_threshold") or 0.75),
-            prior_offenses=prior,
-            prior_bump_at=int(settings.get("smart_tier_bump_at") or 2),
-            force_mute_priors=int(settings.get("smart_force_mute_priors") or 0),
-        )
-        kind = str(dec.get("action") or "mute")
+        plan = self._mod_plan(group, verdict, rep, settings=settings)
         out.update({
-            "action": kind,
-            "rule_name": dec.get("rule_name") or "",
-            "seconds": int(dec.get("seconds") or 0) if kind == "mute" else 0,
-            "duration": fmt_duration(int(dec.get("seconds") or 0)) if kind == "mute" else "",
+            "action": plan["action"],
+            "rule_name": plan["rule_name"],
+            "rule_id": plan["rule_id"],
+            "match_by": plan["match_by"],
+            "source": plan["source"],
+            "severity": plan["severity"] or out["severity"],
+            "seconds": plan["seconds"] if plan["action"] == "mute" else 0,
+            "duration": plan["duration"] if plan["action"] == "mute" else "",
+            "prior_offenses": plan["prior_offenses"],
+            "escalation": plan["escalation"],
+            "escalation_capped": bool(plan["escalation_capped"]),
+            "policy_trace": plan.get("trace") or {},
         })
+        kind = plan["action"]
+        if kind == "none":
+            out["skipped_reason"] = plan.get("reason") or "未触发处罚"
+            return out
 
         target = str(rep.get("sender") or "")
         if not target:
@@ -6192,58 +6248,7 @@ class QQGroupManager(Star):
         if target in wl or self._is_qq_admin_openid(group, target):
             out["skipped_reason"] = "该成员在豁免名单中"
             return out
-        # 复犯累进（默认关）：按窗口内的前科次数把时长乘一个倍率。
-        # 只延长时长、不改判定；没开启或没有前科时原样返回。
-        out["prior_offenses"] = prior
-        out["escalation"] = 1.0
-        if smart_mode and not settings.get("escalate_enabled", False) and out.get("action") == "mute" and prior:
-            # 智能分级：前科只做温和加成（每次 +50%，上限 3×）
-            try:
-                before = int(out["seconds"] or 0)
-                max_mult = float(settings.get("smart_max_multiplier") or 3.0)
-                secs, mult = moderation.escalate_seconds(
-                    before, prior, step=0.5, max_multiplier=max_mult,
-                    cap=int(settings.get("max_mute_seconds") or 604800),
-                )
-                intended = min(1.0 + float(prior or 0) * 0.5, max_mult)
-                if secs != before:
-                    self.logger.info(f"[审核] 智能分级加刑：前科 {prior} 次，{before}s → {secs}s（×{mult}）")
-                    out["seconds"] = secs
-                    out["duration"] = fmt_duration(secs)
-                    out["escalation"] = mult
-                elif intended > 1.0:
-                    # 被 max_mute_seconds 截断：如实暴露，别让人以为「前科没用」
-                    out["escalation_capped"] = True
-                    out["escalation"] = intended
-                    self.logger.info(
-                        f"[审核] 智能分级加刑被上限截断：前科 {prior} 次本应 ×{intended}，"
-                        f"但 max_mute_seconds={int(settings.get('max_mute_seconds') or 0)} 已封顶"
-                    )
 
-            except Exception as e:
-                self.logger.warning(f"[审核] 智能分级加刑计算失败，按原时长执行：{e}")
-        if settings.get("escalate_enabled", False):
-            try:
-                prior = self.mod.repeat_count(
-                    group, target, window_days=int(settings.get("escalate_window_days") or 30)
-                )
-                if prior:
-                    secs, mult = moderation.escalate_seconds(
-                        int(out["seconds"] or 0), prior,
-                        step=float(settings.get("escalate_step") or 1.0),
-                        max_multiplier=float(settings.get("escalate_max_multiplier") or 4.0),
-                        cap=int(settings.get("max_mute_seconds") or 86400),
-                    )
-                    out["prior_offenses"] = prior
-                    out["escalation"] = mult
-                    if secs != out["seconds"]:
-                        self.logger.info(
-                            f"[审核] 复犯累进：前科 {prior} 次，时长 {out['seconds']}s → {secs}s（×{mult}）"
-                        )
-                        out["seconds"] = secs
-                        out["duration"] = fmt_duration(secs)
-            except Exception as e:
-                self.logger.warning(f"[审核] 复犯累进计算失败，按原时长执行：{e}")
         if out["dry_run"]:
             out["skipped_reason"] = "试运行模式，未实际执行"
             return out
@@ -6258,13 +6263,13 @@ class QQGroupManager(Star):
 
         # 1) 撤回：警告与禁言都可能用到；失败不影响后续动作。
         # 官方限制：非管理员只能撤自己的消息（40062003）；超过 2 分钟不可撤回（40064004）。
-        if kind in ("mute", "warn") and (kind == "mute" or dec.get("recall")):
+        if kind in ("mute", "warn") and (kind == "mute" or plan.get("recall")):
             out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
 
         if kind == "warn":
             # 警告靠消息通道，不需要 API 客户端；发完即收口
             out["executed"] = True
-            await self._send_mod_warning(event, group, rep, out, dec)
+            await self._send_mod_warning(event, group, rep, out, plan)
             self.logger.info(
                 f"[审核] 已警告 {target[-6:]}（group={group}） severity={out.get('severity')} conf={out.get('confidence')}"
             )
@@ -6278,7 +6283,13 @@ class QQGroupManager(Star):
         # 2) 禁言
         expire_ts = time.time() + int(out["seconds"])
         try:
-            await api.set_mute(group, target, mute_expire_at=QQApi.format_rfc3339(expire_ts), op="add")
+            ok, err = await self._run_action(
+                api.set_mute(group, target, mute_expire_at=QQApi.format_rfc3339(expire_ts), op="add")
+            )
+            if not ok:
+                out["executed"] = False
+                out["skipped_reason"] = err
+                return out
         except Exception as e:
             self.logger.error(f"[审核] 禁言失败: {e}")
             out["skipped_reason"] = f"禁言失败：{e}"
@@ -6420,6 +6431,9 @@ class QQGroupManager(Star):
                 "rule_name": result["rule_name"],
                 "action": str(result.get("action") or ("mute" if result["executed"] else "none")),
                 "pending_review": bool(result.get("pending_review")),
+                "rule_id": result.get("rule_id") or "",
+                "match_by": result.get("match_by") or "none",
+                "policy_trace": result.get("policy_trace") or {},
                 "ban_seconds": result["seconds"], "skipped_reason": result["skipped_reason"],
                 "executed": result["executed"], "dry_run": result["dry_run"],
                 "recall_note": result.get("recall_note", ""),
@@ -6553,6 +6567,9 @@ class QQGroupManager(Star):
                 "rule_name": result["rule_name"],
                 "action": str(result.get("action") or ("mute" if result["executed"] else "none")),
                 "pending_review": bool(result.get("pending_review")),
+                "rule_id": result.get("rule_id") or "",
+                "match_by": result.get("match_by") or "none",
+                "policy_trace": result.get("policy_trace") or {},
                 "ban_seconds": result["seconds"],
                 "skipped_reason": result["skipped_reason"],
                 "recall_note": result.get("recall_note", ""),

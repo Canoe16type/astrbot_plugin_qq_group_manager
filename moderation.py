@@ -294,9 +294,12 @@ def decide_action(
             return None
         return v if v > 0 else None
 
+    match_by = "none"
     rid = str(verdict.get("matched_rule_id") or "").strip()
     if rid:
         matched_rule = next((r for r in usable if str(r.get("id")) == rid), None)
+        if matched_rule is not None:
+            match_by = "id"
     if matched_rule is None:
         # 模型常只回规则“名字”，按名称匹配（双向包含，容忍措辞差异）
         rn = str(verdict.get("rule_name") or "").strip()
@@ -306,6 +309,8 @@ def decide_action(
                  and (str(r["name"]).strip() in rn or rn in str(r["name"]).strip())),
                 None,
             )
+            if matched_rule is not None:
+                match_by = "name"
     if matched_rule is None:
         # 兜底：按违规类型找同类规则（关键词层也适用，保证群规配置的时长优先）
         cat = str(verdict.get("category") or "")
@@ -313,9 +318,12 @@ def decide_action(
             same = [r for r in usable if str(r.get("category") or "") == cat]
             if len(same) == 1:
                 matched_rule = same[0]
+                match_by = "category"
             elif same:
                 sev = str(verdict.get("severity") or "")
                 matched_rule = next((r for r in same if str(r.get("severity") or "") == sev), None)
+                if matched_rule is not None:
+                    match_by = "category+severity"
     if matched_rule is not None:
         seconds = _take(matched_rule)
 
@@ -355,21 +363,33 @@ def decide_action(
             pass
         if sev == "high":
             if conf < float(high_conf):
-                return {"action": "todo", "seconds": 0, "rule_name": "",
+                return {"action": "todo", "seconds": 0,
+                        "rule_name": (matched_rule or {}).get("name") or "",
+                        "rule_id": (matched_rule or {}).get("id") or "",
+                        "match_by": match_by, "source": "smart", "severity": sev,
                         "basis": verdict.get("basis") or DIM_SEMANTIC,
                         "skipped_reason": f"高危但置信度 {conf:.2f} < {high_conf:.2f}，转人工复核"}
             base_secs = int(severity_to_seconds("high"))
             if rule_secs:
                 base_secs = max(base_secs, int(rule_secs))
             secs = max(60, min(base_secs, int(max_seconds)))
-            return {"action": "mute", "seconds": secs, "rule_name": "",
+            return {"action": "mute", "seconds": secs,
+                    "rule_name": (matched_rule or {}).get("name") or "",
+                    "rule_id": (matched_rule or {}).get("id") or "",
+                    "match_by": match_by, "source": "smart", "severity": sev,
                     "basis": verdict.get("basis") or DIM_SEMANTIC}
         if sev == "medium":
-            return {"action": "warn", "seconds": 0, "recall": True, "rule_name": "",
+            return {"action": "warn", "seconds": 0, "recall": True,
+                    "rule_name": (matched_rule or {}).get("name") or "",
+                    "rule_id": (matched_rule or {}).get("id") or "",
+                    "match_by": match_by, "source": "smart", "severity": sev,
                     "basis": verdict.get("basis") or DIM_SEMANTIC}
         # low / 未知：只警告，不撤回
         # 轻微：只警告、不撤回（撤回伤面子且容易误伤玩笑）
-        return {"action": "warn", "seconds": 0, "recall": False, "rule_name": "",
+        return {"action": "warn", "seconds": 0, "recall": False,
+                "rule_name": (matched_rule or {}).get("name") or "",
+                "rule_id": (matched_rule or {}).get("id") or "",
+                "match_by": match_by, "source": "smart", "severity": sev,
                 "basis": verdict.get("basis") or DIM_SEMANTIC}
 
     if seconds is None:
@@ -382,6 +402,10 @@ def decide_action(
         "action": "mute",
         "seconds": seconds,
         "rule_name": (matched_rule or {}).get("name") or "",
+        "rule_id": (matched_rule or {}).get("id") or "",
+        "match_by": match_by,
+        "source": "rule" if matched_rule is not None else "legacy",
+        "severity": str(verdict.get("severity") or "medium"),
         "basis": verdict.get("basis") or DIM_SEMANTIC,
     }
 
@@ -411,7 +435,7 @@ def escalate_seconds(
         return base, 1.0
     mult = min(1.0 + n * st, max(mx, 1.0))
     out = int(round(base * mult))
-    out = max(base, min(out, int(cap or 86400), 30 * 86400))
+    out = max(base, min(out, int(cap or 86400)))
     return out, round(out / base, 2) if base else 1.0
 
 

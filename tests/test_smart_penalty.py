@@ -268,6 +268,30 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertGreaterEqual(res["seconds"], 86400)
 
 
+    def test_plan_trace_records_rule_match(self):
+        """决策依据必须能说明「命中哪条规则、靠什么匹配」。"""
+        p = _plugin(_Api())
+        p.mod.get_rules = lambda g: [{"id": "r1", "name": "广告", "enabled": True,
+                                      "category": "ad", "severity": "medium", "seconds": 600}]
+        plan = p._mod_plan("g1", _verdict("medium", 0.9, cat="ad", rid="r1"), _rep())
+        tr = plan["trace"]
+        self.assertEqual(tr["source"], "rule")
+        self.assertEqual(tr["rule_id"], "r1")
+        self.assertEqual(tr["rule_name"], "广告")
+        self.assertEqual(tr["match_by"], "id")
+        self.assertEqual(plan["seconds"], 600)
+
+    def test_predict_and_execute_agree(self):
+        """同一输入下，试跑与真实执行必须给出相同动作与时长。"""
+        cfg = dict(SETTINGS, smart_penalty=True, max_mute_seconds=604800)
+        p = _plugin(_Api(), prior=4)
+        p._mod_settings = lambda g: dict(cfg)
+        pred = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep())
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("medium", 0.9), cfg))
+        self.assertEqual(pred["action"], res["action"])
+        self.assertEqual(pred["seconds"], res["seconds"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

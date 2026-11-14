@@ -1636,6 +1636,12 @@ function showVerdictDetail(v) {
     ["执行模式", v.dry_run ? "试运行" : "真实执行"],
     ["模型", v.model || "-"],
     ["人工标注", v.feedback === "false_positive" ? "误判" : (v.feedback === "true_positive" ? "正确" : "-")],
+    ["判定依据", (v.policy_trace && v.policy_trace.source)
+      ? `${v.policy_trace.source === "rule" ? "群规" : v.policy_trace.source === "smart" ? "智能分级" : "通用阶梯"}`
+        + (v.policy_trace.rule_name ? `「${v.policy_trace.rule_name}」` : "")
+        + `｜匹配方式 ${v.policy_trace.match_by || "none"}｜前科 ${v.policy_trace.prior ?? 0}｜倍率 ×${v.policy_trace.escalation ?? 1}`
+        + (v.policy_trace.capped ? "（已达上限）" : "")
+      : "-"],
     ["撤销", v.revoked ? `已于 ${ts2str(v.revoked.at)} 由 ${v.revoked.by_name || v.revoked.by || "-"} 撤销`
       + `（${v.revoked.reason || "未填理由"}）` + (v.revoked.unmute_needed ? (v.revoked.unmute_ok ? "，禁言已解除" : "，解禁失败") : "") : "-"],
   ];
@@ -1776,7 +1782,12 @@ async function runTest() {
           ? `｜前科 ${r.action.prior_offenses} 次` + (r.action.escalation && r.action.escalation !== 1 ? `，倍率 ×${r.action.escalation}` : "")
           : "";
         const capped = r.action && r.action.escalation_capped ? "（已达单次上限）" : "";
-        return base + prior + capped + (r.action && r.action.smart ? "（智能分级已开启）" : "");
+        const src = r.action && r.action.source && r.action.source !== "none"
+          ? `｜依据 ${r.action.source === "rule" ? "群规" : r.action.source === "smart" ? "智能分级" : "通用阶梯"}`
+            + (r.action.rule_name ? `「${r.action.rule_name}」` : "")
+            + (r.action.match_by && r.action.match_by !== "none" ? `（${r.action.match_by}）` : "")
+          : "";
+        return base + prior + capped + src + (r.action && r.action.smart ? "（智能分级已开启）" : "");
       })()}` ,
       `变体层：${r.variant ? `疑似命中（${r.variant.hint}｜强度 ${r.variant.strength}｜${r.variant.count} 处）` : "未命中"}${r.variant && !(detail && detail.settings && detail.settings.variant_check) ? "（本群未开启变体检测，此处仅试跑）" : ""}`,
       "",
