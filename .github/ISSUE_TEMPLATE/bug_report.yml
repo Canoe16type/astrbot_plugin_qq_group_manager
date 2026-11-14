@@ -13,13 +13,17 @@ body:
         用旧写法的报障也收，但请在下面注明写法，方便区分「兼容层问题」和「新逻辑问题」。
 
         ⚠️ **提交前请删掉日志里的 AppID / AppSecret / openid / 群号 / 成员昵称。**
+
+        📌 `1.6.0` 处于**功能冻结**阶段：只修缺陷与补测试，新功能请用「功能建议」模板。
+        如果你在测 `next/1.6.0` 分支，请在下方注明提交号。
   - type: dropdown
     id: plugin-version
     attributes:
       label: 插件版本
       description: AstrBot「插件管理」页或仓库 Release 里可以看到
       options:
-        - 1.5.0（最新）
+        - 1.6.0（next 分支 / 未发布）
+        - 1.5.0（最新发布）
         - 1.4.x
         - 1.3.x
         - 1.2.x 或更早
@@ -64,6 +68,25 @@ body:
     validations:
       required: true
   - type: dropdown
+    id: smart-penalty
+    attributes:
+      label: 是否开启「智能分级处罚」
+      description: 群规审核 → 设置 → 处罚策略里的 smart_penalty；判定/处罚类问题必填
+      options:
+        - 未开启（走旧逻辑）
+        - 已开启
+        - 不确定
+    validations:
+      required: true
+  - type: input
+    id: prior-offenses
+    attributes:
+      label: 相关成员当时的前科次数（可选）
+      description: 试跑里可用「假设前科」复现；真实前科可在「撤销 列表 @某人」里看到
+      placeholder: "例如 4（或「试跑填了 5」）"
+    validations:
+      required: false
+  - type: dropdown
     id: area
     attributes:
       label: 出问题的模块
@@ -73,6 +96,9 @@ body:
         - 消息撤回
         - 入群审批（列表 / 通过 / 拒绝 / 自动审批策略 / 欢迎）
         - 群规审核（/群管 举报、巡检、模型判定）
+        - 智能分级（警告 / 撤回 / 禁言 / 待办）
+        - 处罚撤销与审计（/群管 撤销、解禁）
+        - 判定记录 / 存储（ID、序号、清理）
         - 判定记录 / 详情 / 导出 CSV
         - 模型调用（并发闸门 / 超时 / 每日预算）
         - 状态与自检（/群管 状态）
@@ -110,7 +136,7 @@ body:
     id: selfcheck
     attributes:
       label: /群管 状态 自检 的输出
-      description: 在出问题的群里发 `/群管 状态 自检`，把返回整段贴进来（脱敏）。它包含开关、审核模型、今日用量、并发与最近一次模型调用，能省很多来回。
+      description: 在出问题的群里发 `/群管 状态 自检`，把返回整段贴进来（脱敏）。它包含开关、审核模型、今日用量、并发与最近一次模型调用；判定类问题再附「记录 ID」与详情里的「判定依据（policy_trace）」。
       render: shell
     validations:
       required: false
@@ -150,5 +176,7 @@ body:
           required: true
         - label: 我已把旧写法换成新写法（如 `/群管 禁言 解除`、`/群管 状态 自检`）重新试过一次
           required: true
-        - label: 我理解旧指令只是 1.5.0 的兼容别名，会在 1.6.0 移除
+        - label: 我理解旧指令只是 1.5.0 的兼容别名，1.6.0 起移除
           required: true
+        - label: 判定/处罚类问题，我已附上记录 ID 或 `撤销 列表` 的截图（脱敏）
+          required: false

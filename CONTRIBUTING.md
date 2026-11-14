@@ -4,10 +4,15 @@
 
 ## 环境准备
 
+> **当前阶段（1.6.0）**：功能已冻结，**只接受缺陷修复与测试补充**（重点：智能分级处罚、撤销、记录存储）。
+> 新功能建议先开 issue 讨论，不直接提 PR。
+
 ```bash
 git clone https://github.com/Canoe16type/astrbot_plugin_qq_group_manager.git
 cd astrbot_plugin_qq_group_manager
-python3 -m pip install pyyaml        # 仅校验脚本需要，插件本体零第三方依赖
+# 用 AstrBot 自带解释器跑测试（缺 astrbot 依赖时导入会失败）：
+#   Linux/macOS 常见路径：~/.local/share/uv/tools/astrbot/bin/python
+python -m pip install pyyaml         # 仅元数据校验脚本需要；插件本体零第三方依赖
 ```
 
 把目录放进 AstrBot 的 `plugins/` 下，或直接在仓库里跑离线自检（不需要 AstrBot 实例）：
@@ -19,8 +24,25 @@ python3 tools/selftest_variant.py        # 变体检测（谐音 / 形近 / 插�
 python3 tools/selftest_mod_integration.py  # 审核链路（无 AstrBot 时自动跳过 B 层）
 python3 tools/selftest_admin_register.py   # /管理登记 指令链路
 python3 tools/selftest_rule_spec.py        # 群规文本解析（时长 / 阈值 / 规则字段）
-python3 -m unittest discover -s tests -v   # 离线单测：审批 / 欢迎 / 按钮 / 模板
+python -m unittest discover -s tests -v     # 当前 281 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
+node --check pages/dashboard/app.js         # 动过面板必跑
 ```
+
+测试文件速查：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `test_command_consolidation.py` | 新旧指令映射、别名还原（1.6.0 移除旧别名时这些断言会一并删除） |
+| `test_mod_hardening.py` | 原文留存、并发闸门、超时、反馈样本 |
+| `test_mod_image_review.py` | 引用消息的图片维度、拆条投递、纯图片兜底 |
+| `test_quote_nested.py` | 嵌套引用 / 同分歧义 / 超窗降级 |
+| `test_revoke.py` | 撤销权限、幂等、解禁三态、按 @用户撤销、历史查询 |
+| `test_verdict_store.py` | JSONL 存储、迁移、条数上限、摊还裁剪、序号规则、警告 0.5 权重 |
+| `test_smart_penalty.py` | 档位动作、前科升档/加刑、硬阈值、低置信警告带、试跑一致性 |
+| `test_recent_cache.py` | 最近消息缓存落盘与恢复 |
+| `test_variant_sync.py` | 词库开关后变体索引重建、撤销致歉模板 |
+| `test_common_ban_default.py` | 通用禁止项默认值与输出契约一致性 |
+| `test_rules_transfer.py` | 群规导出/转移的存储行为 |
 
 **提 PR 前至少跑通前两个**，CI 会跑全部。
 
@@ -29,7 +51,7 @@ python3 -m unittest discover -s tests -v   # 离线单测：审批 / 欢迎 / �
 | 路径 | 作用 |
 | --- | --- |
 | `main.py` | 插件入口：指令、事件、WebAPI 路由 |
-| `moderation.py` | 群规审核：判定、待办队列、复犯累进、存储 |
+| `moderation.py` | 审核核心：判定、处罚计划、累犯、待办、存储（`mod_verdicts.jsonl` / `recent_msgs.json`） |
 | `lexicon.py` / `lexicons/` | 关键词层与内置词库 |
 | `variant.py` / `data/` | 变体检测（拼音表 + 形近字组） |
 | `qq_api.py` | QQ 官方 API 封装 |
@@ -50,15 +72,25 @@ python3 -m unittest discover -s tests -v   # 离线单测：审批 / 欢迎 / �
 
 - Python 3.11+，只用标准库与 AstrBot 自带依赖，**不新增第三方包**（需要的话先开 issue 讨论）。
 - 中文注释、中文用户话术；面向用户的话术走 `_conf_schema.json` 的 `templates`，别硬编码在逻辑里。
-- 新增配置项要写 `description` 与 `default`，并在 `docs/GUIDE.md` 的「插件配置说明」里补一行。
-- 涉及审核判定 / 变体检测的改动，**必须**补对应 `tools/selftest_*.py` 的用例。
+- **判定与处罚必须走 `_mod_plan()`**：它是真实执行与试跑的唯一决策来源，不要在别处再拼一份参数
+  （历史上两份逻辑漂移导致过「试跑说警告、实际不处罚」）。
+- **用户可见文案一律走模板**：全局默认在 `_conf_schema.json` 的 `templates`，按群覆盖在
+  `moderation.DEFAULT_TEMPLATES`（面板「群规审核 → 话术模板」）。不要硬编码在逻辑里；
+  带 `@` 的模板默认走 markdown，否则 `<qqbot-at-user>` 不会被解析。
+- **新增群级配置**要同时改四处：`moderation.DEFAULT_SETTINGS`、面板 `index.html` 的 `s-<key>`、
+  `app.js` 的 `S_KEYS` 与数值裁剪、`docs/GUIDE.md` 配置说明；插件级配置改 `_conf_schema.json`。
+- 涉及审核判定 / 变体检测 / 撤销 / 存储的改动，**必须**补 `tests/` 用例（见上表），并跑全量 281 例。
+- 改存储层时注意：记录**不常驻内存**、写盘要节流/摊还、序号在「清空后归零、有记录时单调」。
 - 不引入构建步骤（面板保持单文件 HTML 可直接打开）。
 
 ## 提交与 PR
 
 - 提交信息用 `type: 摘要` 形式（`feat` / `fix` / `docs` / `chore` / `refactor`），一条提交做一件事。
 - PR 描述里写清：**改了什么、为什么、怎么验证的**（跑了哪些自检）。
-- 涉及行为的改动请在 `CHANGELOG.md` 顶部对应版本里加一行（发版前该版本号即「未发布」）。
+- 涉及行为的改动请在 `CHANGELOG.md` 对应版本（当前为 `1.6.0（未发布）`）里按「新增 / 修复 / 调整」加条目；
+  文档改动同步 README（简洁）、`docs/GUIDE.md`（详细）、`CHANGELOG`（变更记录）三处。
+- PR 描述请附：变更摘要、影响面（判定/处罚/面板/存储）、跑过的测试与结果、需要人工验证的点
+  （例如 markdown `@` 在真实群的渲染）。
 
 ## 合规红线
 
