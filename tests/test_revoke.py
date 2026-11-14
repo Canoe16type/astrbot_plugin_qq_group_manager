@@ -190,7 +190,57 @@ class RevokeCommandTest(unittest.TestCase):
         p = _plugin()
         p._is_admin = lambda e: True
         asyncio.run(p._cmd_revoke(_event(), ["/撤销"]))
-        self.assertIn("用法：/群管 撤销", "".join(p.replies))
+        self.assertIn("撤销 @某人", "".join(p.replies))
+
+
+class RevokeByMentionTest(unittest.TestCase):
+    """按 @用户 撤销：群管不需要知道记录 ID。"""
+
+    def _wire(self, p, replies):
+        p._mentioned_openids = lambda e: ["u-target"]
+        p._is_admin = lambda e: True
+        p._is_bot_admin_only = lambda e: True
+        p._mod_tpl = lambda g, k, **kw: f"回执#{kw.get('vid')}"
+        p._at_tag = lambda t: ""
+        p.replies = []
+
+        async def _rep(event, text):
+            p.replies.append(text)
+        p._reply = _rep
+        return p
+
+    def test_picks_latest_punishable_skip_revoked(self):
+        p = _plugin()
+        old = _rec(p, action="mute", ban_seconds=60, created_at=int(time.time()) - 300)
+        revoked = _rec(p, action="warn", created_at=int(time.time()) - 200)
+        p.mod.update_verdict(revoked["id"], revoked={"by": "x", "at": int(time.time())})
+        latest = _rec(p, action="warn", created_at=int(time.time()))
+        self._wire(p, None)
+        calls = []
+
+        async def fake(g, vid, **kw):
+            calls.append(vid)
+            return {"ok": True, "record": p.mod.get_verdict(vid), "revoke": {}, "unmute": {}}
+        p._revoke_verdict = fake
+        asyncio.run(p._cmd_revoke(_event(), ["/撤销", "@某人", "误判"]))
+        self.assertEqual(calls, [latest["id"]])
+
+    def test_list_mode_shows_history(self):
+        p = _plugin()
+        r1 = _rec(p, action="mute", ban_seconds=60)
+        r2 = _rec(p, action="warn")
+        self._wire(p, None)
+        asyncio.run(p._cmd_revoke(_event(), ["/撤销", "列表", "@某人", "5"]))
+        text = "\n".join(p.replies)
+        self.assertIn(f"#{r1['id']}", text)
+        self.assertIn(f"#{r2['id']}", text)
+        self.assertIn("判定记录", text)
+
+    def test_no_punishable_record(self):
+        p = _plugin()
+        self._wire(p, None)
+        asyncio.run(p._cmd_revoke(_event(), ["/撤销", "@某人"]))
+        self.assertIn("没有可撤销", "\n".join(p.replies))
 
 
 if __name__ == "__main__":

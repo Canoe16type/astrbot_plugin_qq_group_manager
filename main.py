@@ -1216,19 +1216,90 @@ class QQGroupManager(Star):
         )
         return {"ok": True, "record": rec, "revoke": info, "unmute": unmute}
 
+    @staticmethod
+    def _is_punishable(v: dict) -> bool:
+        """这条记录是否属于「可撤销的处罚」。"""
+        return (bool(v.get("violation"))
+                and (bool(v.get("executed")) or str(v.get("action") or "") in ("warn", "recall", "mute"))
+                and not v.get("revoked"))
+
+    def _fmt_verdict_line(self, v: dict) -> str:
+        """把一条判定记录压成一行，供「撤销 列表」和回执使用。"""
+        act = str(v.get("action") or ("mute" if v.get("executed") else "none"))
+        act_txt = {
+            "warn": "警告",
+            "recall": "已撤回",
+            "mute": f"禁言 {fmt_duration(int(v.get('ban_seconds') or 0))}",
+            "todo": "转人工待办",
+            "none": "未处罚",
+        }.get(act, act)
+        if v.get("revoked"):
+            act_txt = "已撤销"
+        ts = time.strftime("%m-%d %H:%M", time.localtime(int(v.get("created_at") or 0)))
+        verdict = (self.mod.get_cat_names(str(v.get("group") or "")).get(str(v.get("category") or ""), "违规")
+                   if v.get("violation") else "未违规")
+        return (f"#{v.get('id')} {ts} {v.get('target_name') or v.get('target') or '-'}｜{verdict}"
+                f"｜{act_txt}｜置信度 {float(v.get('confidence') or 0):.2f}")
+
     async def _cmd_revoke(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """撤销一条处罚记录并致歉：/群管 撤销 <记录ID> [理由]"""
+        """撤销处罚：/群管 撤销 @用户 [理由]｜/群管 撤销 <记录ID> [理由]｜/群管 撤销 列表 [@用户] [条数]"""
         g = event.get_group_id()
-        args = parts[1:]
+        if not self._is_admin(event):
+            await self._reply(event, "只有群主、群管理员或机器人管理员可以撤销处罚或查看记录。")
+            return
+        args = [str(x) for x in parts[1:]]
+        is_bot_admin = self._is_bot_admin_only(event)
+        targets = self._mentioned_openids(event)
+
+        # ---- 列表模式：查这个人的判定/处罚历史（撤销前先看）----
+        if args and args[0] in ("列表", "记录", "历史"):
+            limit = 5
+            for a in args[1:]:
+                if a.isdigit():
+                    limit = max(1, min(20, int(a)))
+                    break
+            recs = []
+            for v in self.mod.list_verdicts(g, limit=400):
+                if targets and str(v.get("target") or "") not in targets:
+                    continue
+                recs.append(v)
+                if len(recs) >= limit:
+                    break
+            if not recs:
+                await self._reply(event, "没有查到判定记录。可以带条数，例如：/群管 撤销 列表 @某人 10")
+                return
+            who = f"@{recs[0].get('target_name') or recs[0].get('target')}" if targets else "本群最近"
+            lines = [f"【判定记录】{who}（最近 {len(recs)} 条）"]
+            lines += [self._fmt_verdict_line(v) for v in recs]
+            lines.append("撤销：/群管 撤销 @某人 [理由]，或 /群管 撤销 <记录ID> [理由]")
+            await self._reply(event, "\n".join(lines))
+            return
+
+        # ---- 指定记录 ID ----
         vid, reason = 0, ""
         for i, a in enumerate(args):
-            if str(a).isdigit():
+            if a.isdigit():
                 vid = int(a)
-                reason = " ".join(str(x) for x in args[i + 1:])
+                reason = " ".join(args[i + 1:])
                 break
+
+        # ---- 未给 ID：按 @用户 找最近一条可撤销的处罚 ----
         if not vid:
-            await self._reply(event, "用法：/群管 撤销 <记录ID> [理由]\n记录ID 在面板「记录 → 判定记录」里能查到。")
-            return
+            target = targets[0] if targets else ""
+            if not target:
+                await self._reply(event, "用法：\n"
+                                          "· /群管 撤销 @某人 [理由]（撤销他最近一次处罚）\n"
+                                          "· /群管 撤销 <记录ID> [理由]\n"
+                                          "· /群管 撤销 列表 @某人 [条数]（先看判定历史）")
+                return
+            rec = next((v for v in self.mod.list_verdicts(g, limit=400)
+                        if str(v.get("target") or "") == target and self._is_punishable(v)), None)
+            if rec is None:
+                await self._reply(event, "这个成员没有可撤销的处罚记录。可以先看历史：/群管 撤销 列表 @某人")
+                return
+            vid = int(rec.get("id") or 0)
+            reason = " ".join(a for a in args if not a.isdigit() and not a.startswith("@") and not a.startswith("<@"))
+
         rec = self.mod.get_verdict(vid)
         if rec is None:
             await self._reply(event, f"没找到记录 #{vid}。")
@@ -1236,10 +1307,6 @@ class QQGroupManager(Star):
         if str(rec.get("group") or "") != str(g):
             await self._reply(event, "只能撤销本群的处罚记录。")
             return
-        if not self._is_admin(event):
-            await self._reply(event, "只有群主、群管理员或机器人管理员可以撤销处罚。")
-            return
-        is_bot_admin = self._is_bot_admin_only(event)
 
         res = await self._revoke_verdict(
             g, vid,
@@ -1258,7 +1325,8 @@ class QQGroupManager(Star):
             await self._reply(event, reason_map.get(res.get("error"), f"撤销失败：{res.get('error')}"))
             return
         if res.get("already"):
-            await self._reply(event, f"记录 #{vid} 已经在 {time.strftime('%Y-%m-%d %H:%M', time.localtime(int(res['record']['revoked'].get('at') or 0)))} 被撤销过了。")
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(int(res["record"]["revoked"].get("at") or 0)))
+            await self._reply(event, f"记录 #{vid} 已经在 {ts} 被撤销过了。")
             return
 
         target = str(rec.get("target") or "")
@@ -1270,8 +1338,7 @@ class QQGroupManager(Star):
         else:
             unmute_txt = "无需解除"
         await self._reply(event, self._mod_tpl(
-            g,
-            "msg_mod_revoke",
+            g, "msg_mod_revoke",
             vid=vid,
             at=self._at_tag(target) if target else "",
             punish=self._punish_text(rec),

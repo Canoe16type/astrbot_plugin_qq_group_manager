@@ -1439,6 +1439,7 @@ async function loadRecords() {
     const dim = (detail && detail.dim_names) || DIM_LABELS;
     const cats = (detail && detail.cat_names) || CAT_LABELS;
     tr.innerHTML =
+      `<td>#${v.id == null ? "-" : v.id}</td>` +
       `<td>${ts2str(v.created_at)}</td>` +
       `<td>${esc((v.target_name || v.target || "-").slice(0, 12))}</td>` +
       `<td class="vtext" data-vd="${v.id}" title="${esc(v.text || "")}">${esc((v.text || "—").slice(0, 24))}${(v.text || "").length > 24 ? "…" : ""}` +
@@ -1447,8 +1448,15 @@ async function loadRecords() {
       `<td><span class="tag ${v.violation ? "hit" : "clean"}">${v.violation ? esc(cats[v.category] || v.category || "违规") : "未违规"}</span>` +
       (v.variant_hit ? ` <span class="tag" title="疑似变体写法（${esc((v.variant || {}).method || "")}）${v.variant_recalled ? "，已按变体撤回" : ""}">变体</span>` : "") + `</td>` +
       `<td>${v.confidence == null ? "-" : Number(v.confidence).toFixed(2)}</td>` +
-      `<td>${v.revoked ? '<span class="tag" title="' + esc((v.revoked.reason || "已撤销")) + '">已撤销</span> ' : ""}` +
-      `${v.executed ? "已禁言 " + fmtDur(v.ban_seconds) : esc(v.skipped_reason || (v.violation ? "未执行" : "-"))}</td>` +
+      `<td>${(() => {
+        if (v.revoked) return '<span class="tag" title="' + esc(v.revoked.reason || "已撤销") + '">已撤销</span>';
+        const act = v.action || (v.executed ? "mute" : "none");
+        if (act === "warn") return "警告";
+        if (act === "recall") return "已撤回";
+        if (act === "mute") return "已禁言 " + fmtDur(v.ban_seconds);
+        if (act === "todo") return "转人工待办";
+        return esc(v.skipped_reason || (v.violation ? "未执行" : "-"));
+      })()}</td>` +
       `<td>${v.from_cache ? "是" : "否"}</td>` +
       `<td style="white-space:nowrap"><button class="btn" data-fb="${v.id}">误判</button> ` +
       `<button class="btn" data-ok="${v.id}" title="判定正确，加入提示词正例">正确</button> ` +
@@ -1462,7 +1470,7 @@ async function loadRecords() {
     if (rv) rv.onclick = () => revokeVerdict(v);
     rows.appendChild(tr);
   });
-  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="9" style="color:var(--sub)">暂无记录</td></tr>';
+  if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="10" style="color:var(--sub)">暂无记录</td></tr>';
 }
 
 /* ---------------- 待办（半自动：机器筛、人确认） ---------------- */
