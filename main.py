@@ -6013,7 +6013,7 @@ class QQGroupManager(Star):
         dec = moderation.decide_action(
             verdict,
             rules=self.mod.get_rules(group),
-            max_seconds=int(st.get("max_mute_seconds") or 86400),
+            max_seconds=int(st.get("max_mute_seconds") or 604800),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
             smart=smart,
             high_conf=float(st.get("confidence_threshold") or 0.75),
@@ -6023,15 +6023,16 @@ class QQGroupManager(Star):
         )
         secs = int(dec.get("seconds") or 0)
         mult = 1.0
+        max_mult = float(st.get("smart_max_multiplier") or 3.0)
         if dec.get("action") == "mute" and smart and not st.get("escalate_enabled", False) and prior:
             try:
                 secs, mult = moderation.escalate_seconds(
-                    secs, prior, step=0.5, max_multiplier=3.0,
-                    cap=int(st.get("max_mute_seconds") or 86400),
+                    secs, prior, step=0.5, max_multiplier=max_mult,
+                    cap=int(st.get("max_mute_seconds") or 604800),
                 )
             except Exception:
                 pass
-        intended = min(1.0 + float(prior or 0) * 0.5, 3.0)
+        intended = min(1.0 + float(prior or 0) * 0.5, max_mult)
         capped = bool(secs == int(dec.get("seconds") or 0) and intended > 1.0)
         if capped:
             mult = intended
@@ -6166,7 +6167,7 @@ class QQGroupManager(Star):
         dec = moderation.decide_action(
             verdict,
             rules=self.mod.get_rules(group),
-            max_seconds=int(settings.get("max_mute_seconds") or 86400),
+            max_seconds=int(settings.get("max_mute_seconds") or 604800),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
             smart=smart_mode,
             high_conf=float(settings.get("confidence_threshold") or 0.75),
@@ -6199,11 +6200,12 @@ class QQGroupManager(Star):
             # 智能分级：前科只做温和加成（每次 +50%，上限 3×）
             try:
                 before = int(out["seconds"] or 0)
+                max_mult = float(settings.get("smart_max_multiplier") or 3.0)
                 secs, mult = moderation.escalate_seconds(
-                    before, prior, step=0.5, max_multiplier=3.0,
+                    before, prior, step=0.5, max_multiplier=max_mult,
                     cap=int(settings.get("max_mute_seconds") or 604800),
                 )
-                intended = min(1.0 + float(prior or 0) * 0.5, 3.0)
+                intended = min(1.0 + float(prior or 0) * 0.5, max_mult)
                 if secs != before:
                     self.logger.info(f"[审核] 智能分级加刑：前科 {prior} 次，{before}s → {secs}s（×{mult}）")
                     out["seconds"] = secs

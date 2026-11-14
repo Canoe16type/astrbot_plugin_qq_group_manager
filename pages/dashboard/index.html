@@ -407,6 +407,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field check"><input type="checkbox" id="s-smart_penalty" /><span><b>智能分级处罚</b>：轻微→警告、中度→撤回+警告、高危→禁言；高危但置信度不足→转人工待办（默认关，关闭时行为与旧版一致）</span></label>
  <label class="field"><span>智能分级：前科达到几次升一档</span><input type="number" id="s-smart_tier_bump_at" min="1" max="20" step="1" title="窗口复用「复犯累进」的天数；升档只改动作，时长按 +50%/次 温和加成，上限 3×" /></label>
  <label class="field"><span>智能分级：前科达到几次直接禁言（0=不启用）</span><input type="number" id="s-smart_force_mute_priors" min="0" max="99" step="1" title="到该次数后不看本次档位，一律按最高档处理；仍受置信度闸门约束（不足则转人工待办）" /></label>
+ <label class="field"><span>智能分级：累犯加刑倍率上限</span><input type="number" id="s-smart_max_multiplier" min="1" max="10" step="0.5" title="每次前科 +50%，到该倍率封顶；仍受单次禁言上限截断" /></label>
  <label class="field check"><input type="checkbox" id="s-escalate_enabled" /><span><b>复犯累进</b>：窗口内重复违规，禁言时长按倍数递增</span></label>
  <label class="field check"><input type="checkbox" id="s-todo_enabled" /><span><b>待办队列</b>：低置信未处理 / 变体疑似 / 变体累计达标 自动进待办，等人确认</span></label>
  </div>

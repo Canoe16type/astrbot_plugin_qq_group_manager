@@ -322,21 +322,24 @@ def decide_action(
     # ---- 智能分级（默认关闭）----
     # 原则仍然是「AI 只定性质，代码定罚」：这里只把 severity 映射成动作类型，
     # 时长依旧来自群规或 severity 阶梯，模型永远拿不到写秒数的权力。
-    if smart and matched_rule is None:
-        sev = str(verdict.get("severity") or "medium").lower()
+    rule_secs = _take(matched_rule) if matched_rule is not None else None
+    force_hit = False
+    if smart:
+        try:
+            force_at = int(force_mute_priors or 0)
+            if force_at > 0 and float(prior_offenses or 0) >= force_at:
+                force_hit = True
+        except (TypeError, ValueError):
+            force_hit = False
+
+    if smart and (matched_rule is None or force_hit):
+        sev = "high" if force_hit else str(verdict.get("severity") or "medium").lower()
         try:
             conf = float(verdict.get("confidence") or 0)
         except (TypeError, ValueError):
             conf = 0.0
         # 前科升档：同一人在窗口内重复违规，动作升一档（low→medium→high）。
         # 只升动作档位，不碰秒数；秒数由 _mod_execute 用 escalate_seconds 温和加成。
-        # 硬阈值：前科达到 N 次就不再看本次档位，一律按 high 处理（置信度不足时仍会转待办）
-        try:
-            force_at = int(force_mute_priors or 0)
-            if force_at > 0 and float(prior_offenses or 0) >= force_at:
-                sev = "high"
-        except (TypeError, ValueError):
-            pass
         tier_order = ["low", "medium", "high"]
         if sev not in tier_order:
             sev = "medium"
@@ -355,7 +358,10 @@ def decide_action(
                 return {"action": "todo", "seconds": 0, "rule_name": "",
                         "basis": verdict.get("basis") or DIM_SEMANTIC,
                         "skipped_reason": f"高危但置信度 {conf:.2f} < {high_conf:.2f}，转人工复核"}
-            secs = max(60, min(int(severity_to_seconds("high")), int(max_seconds)))
+            base_secs = int(severity_to_seconds("high"))
+            if rule_secs:
+                base_secs = max(base_secs, int(rule_secs))
+            secs = max(60, min(base_secs, int(max_seconds)))
             return {"action": "mute", "seconds": secs, "rule_name": "",
                     "basis": verdict.get("basis") or DIM_SEMANTIC}
         if sev == "medium":
@@ -737,21 +743,27 @@ class ModerationStore:
             pass
 
     def _iter_verdicts(self, reverse: bool = True):
-        """逐行读判定记录，不整体驻留内存。坏行跳过，不阻断其它记录。"""
+        """逐行读判定记录。正序流式读，倒序才整体读入再反向。
+
+        判定时走的统计用正序（流式，不占内存）；只有面板列表/最近 N 条需要倒序。
+        """
         try:
             with open(self._verdict_log, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                if reverse:
+                    lines = f.readlines()
+                    it = reversed(lines)
+                else:
+                    it = f
+                for line in it:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except Exception:
+                        continue
         except FileNotFoundError:
             return
-        it = reversed(lines) if reverse else lines
-        for line in it:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except Exception:
-                continue
 
     def _read_verdicts(self) -> list[dict]:
         return list(self._iter_verdicts(reverse=False))
@@ -951,6 +963,7 @@ class ModerationStore:
         "smart_penalty": False,
         "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
         "smart_force_mute_priors": 0,  # 前科达到 N 次直接禁言（0=不启用）
+        "smart_max_multiplier": 3.0,   # 智能分级：累犯加刑倍率上限（默认 3×）
         "whitelist": [],              # 豁免成员 openid（管理员自动豁免）
         "keywords": {},               # 群自定义关键词 {category: [pattern]}
         # ---- 变体检测（谐音/形近/插符号绕过）----
@@ -1049,9 +1062,12 @@ class ModerationStore:
             except Exception:
                 limit = int(self.verdict_max_records or 0)
         if limit > 0 and self._vcount > limit:
-            # 条数上限由管理员配置（0=不限）；只裁最旧的，且只在追加时触发
-            keep = list(self._iter_verdicts(reverse=False))[-limit:]
-            self._rewrite_verdicts(keep)
+            # 摊还裁剪：每多出 limit/10 条才整表重写一次。
+            # 否则记录一多，每来一条新判定都要把整份 JSONL 读+写一遍，I/O 成倍放大（小机器会卡）。
+            slack = max(1, limit // 10)
+            if self._vcount > limit + slack:
+                keep = list(self._iter_verdicts(reverse=False))[-limit:]
+                self._rewrite_verdicts(keep)
         return rec
 
     def feedback_samples(self, limit: int = 40) -> dict:
@@ -1350,7 +1366,7 @@ class ModerationStore:
         total = hit = cached = 0
         today_total = today_hit = today_llm = 0
         variant_hits = variant_today = strike_muted = 0
-        for v in self._iter_verdicts():
+        for v in self._iter_verdicts(reverse=False):
             if group and v.get("group") != group:
                 continue
             total += 1

@@ -248,6 +248,26 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertFalse(res.get("escalation_capped"))
 
 
+    def test_multiplier_cap_is_configurable(self):
+        cfg = dict(SETTINGS, max_mute_seconds=604800, smart_max_multiplier=1.5)
+        p = _plugin(_Api(), prior=5)
+        p._mod_settings = lambda g: dict(cfg)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.9), cfg))
+        self.assertEqual(res["seconds"], int(86400 * 1.5))
+
+    def test_force_threshold_overrides_rule_seconds(self):
+        """硬阈值命中时，即使匹配了群规（比如 10 分钟），也不能只罚 10 分钟。"""
+        p = _plugin(_Api(), prior=5)
+        p.mod.get_rules = lambda g: [{"id": "r1", "name": "广告", "enabled": True,
+                                      "category": "ad", "severity": "medium", "seconds": 600}]
+        cfg = dict(SETTINGS, max_mute_seconds=604800, smart_force_mute_priors=5)
+        p._mod_settings = lambda g: dict(cfg)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(),
+                                         _verdict("medium", 0.9, cat="ad", rid="r1"), cfg))
+        self.assertEqual(res["action"], "mute")
+        self.assertGreaterEqual(res["seconds"], 86400)
+
+
 if __name__ == "__main__":
     unittest.main()
 

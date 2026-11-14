@@ -172,5 +172,15 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertEqual(self.store.count_verdicts(), 5)
 
 
+    def test_trim_is_amortized(self):
+        """上限 10 时不会每加一条就重写：到 12 条才裁一次，裁完回到 10。"""
+        self.store.verdict_limit_provider = lambda: 10
+        for i in range(11):
+            self._add(f"t{i}")
+        self.assertEqual(self.store.count_verdicts(), 11)   # 超出 1 条，还没到富余量
+        self._add("t11")
+        self.assertEqual(self.store.count_verdicts(), 10)
+
+
 if __name__ == "__main__":
     unittest.main()
