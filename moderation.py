@@ -541,6 +541,7 @@ class ModerationStore:
         self._kw_cache: dict[str, Any] = {}   # 文本哈希 -> {"verdict":..., "ts":...}
         # 判定记录条数上限（0=不限）。由插件按配置注入；只在追加时裁最旧的。
         self.verdict_max_records: int = 5000
+        self._stats_cache: dict[str, tuple[float, dict]] = {}   # group -> (ts, 计数结果)
         self._seq: int = self._max_verdict_id()
 
     # ---------------- 审核提醒名单（管理员登记） ----------------
@@ -750,6 +751,7 @@ class ModerationStore:
         os.replace(tmp, self._verdict_log)
         self._vcount = len(records or [])
         self._save_vmeta()
+        self._invalidate_stats()
 
     def _load_vmeta(self) -> tuple[int, int]:
         meta = self._load(self._verdict_meta, {}) or {}
@@ -1022,6 +1024,7 @@ class ModerationStore:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         self._vcount += 1
         self._save_vmeta()
+        self._invalidate_stats()
         limit = int(max_records or self.verdict_max_records or 0)
         if limit > 0 and self._vcount > limit:
             # 条数上限由管理员配置（0=不限）；只裁最旧的，且只在追加时触发
@@ -1150,7 +1153,7 @@ class ModerationStore:
 
     # ---------------- 复犯累进：前科统计 ----------------
     def repeat_count(self, group: str, member: str, *, window_days: int = 30,
-                     category: Optional[str] = None, exclude_id: Optional[int] = None) -> int:
+                     category: Optional[str] = None, exclude_id: Optional[int] = None) -> float:
         """统计某成员在窗口内「已被实际处理」的前科次数。
 
         只认「判定为违规 + 真执行了（非试运行）」的记录，并且人工标注过误判（feedback=0 或
@@ -1180,7 +1183,8 @@ class ModerationStore:
                 continue
             if cat and str(v.get("category") or "") != cat:
                 continue
-            n += 1
+            # 警告只是提醒，按 0.5 次前科计；撤回/禁言各记 1 次
+            n += 0.5 if str(v.get("action") or "") == "warn" else 1.0
         return n
 
     def member_offense_summary(self, group: str, *, window_days: int = 30,
@@ -1305,8 +1309,21 @@ class ModerationStore:
             self._rewrite_verdicts(keep)
         return changed
 
+    _STATS_TTL = 5.0
+
+    def _invalidate_stats(self) -> None:
+        self._stats_cache.clear()
+
     def stats(self, group: str = "") -> dict:
-        """一次遍历算完全部计数（不把记录整体读进内存）。"""
+        """一次遍历算完全部计数（不把记录整体读进内存）。
+
+        计数结果缓存 5 秒：每条消息判定都要查「今日调用次数」，每次扫盘会随记录增长变慢。
+        代价是每日预算可能多放行几条、面板统计最多滞后 5 秒。
+        """
+        ts = time.time()
+        hit = self._stats_cache.get(group)
+        if hit and ts - hit[0] < self._STATS_TTL:
+            return dict(hit[1])
         today = int(time.time()) - 86400
         total = hit = cached = 0
         today_total = today_hit = today_llm = 0
@@ -1327,7 +1344,7 @@ class ModerationStore:
                 variant_today += 1 if is_variant else 0
                 if str(v.get("model") or "") not in ("", "keyword", "variant"):
                     today_llm += 1
-        return {
+        result = {
             "total": total,
             "hit": hit,
             "clean": total - hit,
@@ -1341,6 +1358,8 @@ class ModerationStore:
             "variant_strike_muted": strike_muted,
             "todo_open": self.todo_count(group),
         }
+        self._stats_cache[group] = (ts, dict(result))
+        return result
 
     def groups_overview(self) -> list[dict]:
         groups = set(self.rules.keys()) | set(self.settings.keys())

@@ -126,5 +126,39 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertFalse((self.dir / "mod_verdicts.json.migrated").exists())
 
 
+    def test_stats_cache_hits_and_invalidates(self):
+        """统计缓存 5 秒：连查两次只扫一遍盘；写入后必须立刻失效。"""
+        self._add("a")
+        calls = {"n": 0}
+        orig = self.store._iter_verdicts
+
+        def counting(*a, **k):
+            calls["n"] += 1
+            return orig(*a, **k)
+
+        self.store._iter_verdicts = counting
+        a = self.store.stats("g1")
+        after_first = calls["n"]
+        b = self.store.stats("g1")
+        self.assertEqual(calls["n"], after_first, "5 秒内应当命中缓存，不再扫盘")
+        self.assertEqual(a["total"], b["total"])
+        self._add("b")                       # 写入应立即使缓存失效
+        c = self.store.stats("g1")
+        self.assertGreater(calls["n"], after_first)
+        self.assertEqual(c["total"], 2)
+
+    def test_warn_counts_half_offense(self):
+        """警告只是提醒：0.5 次前科；撤回/禁言记 1 次。"""
+        self.store.add_verdict({"group": "g1", "target": "u1", "violation": True,
+                                "executed": True, "action": "warn", "created_at": int(time.time())})
+        self.assertEqual(self.store.repeat_count("g1", "u1"), 0.5)
+        self.store.add_verdict({"group": "g1", "target": "u1", "violation": True,
+                                "executed": True, "action": "warn", "created_at": int(time.time())})
+        self.assertEqual(self.store.repeat_count("g1", "u1"), 1.0)
+        self.store.add_verdict({"group": "g1", "target": "u1", "violation": True,
+                                "executed": True, "action": "mute", "created_at": int(time.time())})
+        self.assertEqual(self.store.repeat_count("g1", "u1"), 2.0)
+
+
 if __name__ == "__main__":
     unittest.main()
