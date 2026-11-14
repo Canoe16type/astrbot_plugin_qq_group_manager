@@ -987,6 +987,10 @@ class ModerationStore:
         "llm_timeout": 45,            # 单次模型调用超时（秒）；超时按失败处理，不无限占着队列
         # 智能分级（P2）：low→警告、medium→撤回+警告、high→禁言；高危且置信度不足→转人工待办。
         # 关闭时完全走原逻辑（degree→固定时长、只撤回+禁言）。
+        # 举报受理时先回一句「已收到，正在核对」，再给结果。
+        # 旧逻辑只在走模型时才回，关键词层瞬间出结果时用户会以为没反应。
+        "report_ack_enabled": True,
+        "recall_max_age_seconds": 110,   # 超过官方 2 分钟撤回时限就别白费力气（0=总是尝试）
         "smart_penalty": False,
         "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
         "smart_force_mute_priors": 0,  # 前科达到 N 次直接禁言（0=不启用）

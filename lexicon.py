@@ -755,6 +755,12 @@ class LexiconManager:
 
     # ---------------- 规则池 / 命中 ----------------
 
+    def signature(self) -> str:
+        """启用集合 + 各库 mtime/size + 白名单的签名；变了就说明词库配置变了。"""
+        entries = self.scan()
+        sig = "|".join(f"{e['id']}:{e['mtime']}:{e['size']}" for e in entries if self.is_enabled(e))
+        return sig + "#" + ",".join(sorted(str(w) for w in (self.state.get("allow") or [])))
+
     def _build_compiled(self) -> tuple[str, LiteralIndex, list[tuple], frozenset]:
         """把启用的词库编译成 (签名, 字面量索引, 正则规则表, 白名单)，词库没变就复用。"""
         entries = self.scan()

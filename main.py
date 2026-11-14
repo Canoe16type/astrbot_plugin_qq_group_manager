@@ -5505,7 +5505,13 @@ class QQGroupManager(Star):
 
         索引按签名复用：词库没变时只做一次签名比对，不会重复建表。
         """
-        if self._variant_words is None or force:
+        sig = ""
+        try:
+            sig = self.lexicons.signature()
+        except Exception:
+            sig = ""
+        if force or self._variant_words is None or getattr(self, "_variant_sig", "") != sig:
+            self._variant_sig = sig
             words: list[tuple[str, tuple]] = []
             try:
                 words.extend(self.lexicons.literal_words())
@@ -5523,7 +5529,7 @@ class QQGroupManager(Star):
             except Exception as e:
                 self.logger.debug(f"[变体] 内置正则片段提取失败：{e}")
             self._variant_words = words
-        self.variant.set_words(self._variant_words)
+            self.variant.set_words(self._variant_words)   # 只在真正重建时同步，避免每次扫描都重建索引
 
     @staticmethod
     def _mod_extra_variant_words(settings: dict) -> list[tuple[str, tuple]]:
@@ -6563,6 +6569,9 @@ class QQGroupManager(Star):
                 f"text={rep.get('text', '')[:60]!r} images={len(rep.get('images') or [])} "
                 f"resolved={bool(rep.get('resolved'))}"
             )
+            if settings.get("report_ack_enabled", True):
+                # 先回一句受理回执：关键词层可能瞬间出结果，旧逻辑只在走模型时才回，很容易看起来"没反应"
+                await self._reply(event, self._mod_tpl(g, "mod_receiving"))
             # 变体检测（疑似信号，与「是否违规」的判定并行、互不影响）：
             # 命中只做 撤回 + 记录 + 进待办，绝不自动禁言。
             variant = None if rep.get("unattributed") else self._mod_variant_scan(g, rep, settings)
@@ -6586,7 +6595,6 @@ class QQGroupManager(Star):
                 })
                 return
             if verdict is None:
-                await self._reply(event, self._mod_tpl(g, "mod_receiving"))
                 verdict = await self._mod_review_llm(event, g, rep, self._mod_context_lines(g, rep, settings), note)
             if verdict is None:
                 await self._reply(event, self._mod_tpl(g, "mod_failed", error="模型未返回结果"))
@@ -7949,6 +7957,7 @@ class QQGroupManager(Star):
         if not self.lexicons.get(lid):
             return json_response({"error": "词库不存在"})
         st = self.lexicons.set_enabled(lid, bool(p.get("enabled")))
+        self._variant_sync(force=True)     # 词库变了，变体索引必须跟着重建，否则停用形同虚设
         self.logger.info(f"[词库] {lid} -> {'启用' if p.get('enabled') else '停用'}")
         return json_response({"ok": True, "stats": st})
 
@@ -7957,7 +7966,9 @@ class QQGroupManager(Star):
         ids = p.get("ids")
         if not isinstance(ids, list):
             return json_response({"error": "ids 必须是数组"})
-        return json_response({"ok": True, "stats": self.lexicons.apply([str(x) for x in ids])})
+        stats = self.lexicons.apply([str(x) for x in ids])
+        self._variant_sync(force=True)
+        return json_response({"ok": True, "stats": stats})
 
     async def web_lexicon_upload(self):
         p = await request.json(default={})
