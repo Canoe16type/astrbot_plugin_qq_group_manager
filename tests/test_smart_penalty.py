@@ -63,6 +63,22 @@ class DecideActionSmartTest(unittest.TestCase):
         self.assertEqual(d["action"], "mute")
 
 
+class PriorTierTest(unittest.TestCase):
+    def test_low_with_prior_bumps_to_recall(self):
+        d = decide_action(_verdict("low", 0.9), rules=[], smart=True, prior_offenses=2)
+        self.assertEqual(d["action"], "warn")
+        self.assertTrue(d["recall"])
+
+    def test_medium_with_prior_bumps_to_mute(self):
+        d = decide_action(_verdict("medium", 0.9), rules=[], smart=True, prior_offenses=2)
+        self.assertEqual(d["action"], "mute")
+
+    def test_bump_can_be_disabled_by_threshold(self):
+        d = decide_action(_verdict("low", 0.9), rules=[], smart=True,
+                          prior_offenses=1, prior_bump_at=5)
+        self.assertFalse(d["recall"])
+
+
 class _Api:
     def __init__(self):
         self.calls = []
@@ -74,11 +90,11 @@ class _Api:
         self.calls.append(("mute", member))
 
 
-def _plugin(api):
+def _plugin(api, prior=0):
     p = object.__new__(QQGroupManager)
     p.logger = SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None,
                                warning=lambda *a, **k: None, error=lambda *a, **k: None)
-    p.mod = SimpleNamespace(get_rules=lambda g: [], repeat_count=lambda *a, **k: 0)
+    p.mod = SimpleNamespace(get_rules=lambda g: [], repeat_count=lambda *a, **k: prior)
     p._read_config_value = lambda keys, default="", legacy_keys=(): default
     p._api_for_group_or_default = lambda g, **k: api
     p._is_qq_admin_openid = lambda g, m: False
@@ -143,6 +159,17 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertFalse(res["executed"])
         self.assertEqual(api.calls, [])
         self.assertEqual(p.warnings, [])
+
+    def test_prior_escalates_duration(self):
+        cfg = dict(SETTINGS)
+        cfg["max_mute_seconds"] = 604800      # 放宽上限，否则两次都撞到 86400 上限看不出差别
+        p = _plugin(_Api(), prior=2)
+        base = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.9), cfg))
+        p2 = _plugin(_Api(), prior=0)
+        plain = asyncio.run(p2._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.9), cfg))
+        self.assertEqual(base["action"], "mute")
+        self.assertGreater(base["seconds"], plain["seconds"])
+        self.assertGreater(base["escalation"], 1.0)
 
     def test_smart_off_still_mutes(self):
         api = _Api()

@@ -434,6 +434,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field check"><input type="checkbox" id="s-todo_enabled" /><span><b>待办队列</b>：低置信未处理 / 变体疑似 / 变体累计达标 自动进待办，等人确认</span></label>
  <label class="field check"><input type="checkbox" id="s-escalate_enabled" /><span><b>复犯累进</b>：窗口内重复违规，禁言时长按倍数递增</span></label>
  <label class="field check"><input type="checkbox" id="s-smart_penalty" /><span><b>智能分级处罚</b>：轻微→警告、中度→撤回+警告、高危→禁言；高危但置信度不足→转人工待办（默认关，关闭时行为与旧版一致）</span></label>
+ <label class="field"><span>智能分级：前科达到几次升一档</span><input type="number" id="s-smart_tier_bump_at" min="1" max="20" step="1" title="窗口复用「复犯累进」的天数；升档只改动作，时长按 +50%/次 温和加成，上限 3×" /></label>
  </div>
  <div class="grid input-zone">
  <label class="field"><span>复犯：前科统计窗口（天）</span><input type="number" id="s-escalate_window_days" min="1" max="365" /></label>

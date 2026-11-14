@@ -124,6 +124,12 @@
         "description": "判定记录条数上限（0=不限）",
         "hint": "记录全在硬盘（mod_verdicts.jsonl），不常驻内存。超过上限时只在追加新记录时裁掉最旧的；想按「删除 N 天以前」请用面板记录页的清理按钮，插件不会自动按时间删",
         "default": 5000
+      },
+      "smart_tier_bump_at": {
+        "type": "int",
+        "description": "智能分级：前科达到几次升一档（默认 2）",
+        "hint": "窗口复用「复犯累进」的 escalate_window_days（默认 30 天）；升档只改动作（low→medium→high），不直接改秒数；时长按 +50%/次 温和加成，上限 3×",
+        "default": 2
       }
     },
     "hint": "留空模型＝用当前会话模型；群规、话术、开关按群在管理面板配置（变体检测、待办队列、复犯累进同样在面板「举报设置」里按群独立配置）"
@@ -668,6 +674,16 @@
         "description": "审核 · 警告提示（默认 markdown）",
         "type": "text",
         "default": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。"
+      },
+      "msg_mod_todo": {
+        "description": "审核 · 高危低置信转人工回执",
+        "type": "text",
+        "default": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。"
+      },
+      "msg_mod_revoke": {
+        "description": "审核 · 撤销处罚并致歉",
+        "type": "text",
+        "default": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

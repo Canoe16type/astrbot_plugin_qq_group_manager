@@ -1258,16 +1258,15 @@ class QQGroupManager(Star):
             )
         else:
             unmute_txt = "无需解除"
-        lines = [
-            f"✅ 已撤销处罚记录 #{vid}",
-            f"{self._at_tag(target) if target else ''} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。",
-            f"原处罚：{self._punish_text(rec)}",
-            f"禁言状态：{unmute_txt}" + (f"（{unmute.get('code')}）" if unmute.get("code") else ""),
-            f"撤销人：{event.get_sender_name() or event.get_sender_id()}",
-        ]
-        if reason:
-            lines.append(f"说明：{reason}")
-        await self._reply(event, "\n".join(x for x in lines if x))
+        await self._reply(event, self._render(
+            "msg_mod_revoke",
+            vid=vid,
+            at=self._at_tag(target) if target else "",
+            punish=self._punish_text(rec),
+            unmute=unmute_txt + (f"（{unmute.get('code')}）" if unmute.get("code") else ""),
+            operator=event.get_sender_name() or event.get_sender_id(),
+            reason_line=(f"\n说明：{reason}" if reason else ""),
+        ))
 
     def _punish_text(self, rec: dict) -> str:
         """把一条记录的原处罚描述成人话，供撤销回执使用。"""
@@ -1717,6 +1716,9 @@ class QQGroupManager(Star):
     # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
     # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
     TPL_FALLBACKS = {
+        "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
+        "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
+                          "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
         "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n"
                         "命中：{rule}\n判定：{severity}\n理由：{reason}\n"
                         "后续：再次出现将禁言 {next}\n有异议请联系群管理。",
@@ -6072,12 +6074,24 @@ class QQGroupManager(Star):
             out["skipped_reason"] = f"置信度 {out['confidence']:.2f} < 阈值 {thr:.2f}"
             return out
 
+        smart_mode = bool(settings.get("smart_penalty", False))
+        prior = 0
+        try:
+            if smart_mode or settings.get("escalate_enabled", False):
+                prior = self.mod.repeat_count(
+                    group, str(rep.get("sender") or ""),
+                    window_days=int(settings.get("escalate_window_days") or 30),
+                )
+        except Exception:
+            prior = 0
         dec = moderation.decide_action(
             verdict,
             rules=self.mod.get_rules(group),
             max_seconds=int(settings.get("max_mute_seconds") or 86400),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
-            smart=smart,
+            smart=smart_mode,
+            prior_offenses=prior,
+            prior_bump_at=int(settings.get("smart_tier_bump_at") or 2),
         )
         kind = str(dec.get("action") or "mute")
         out.update({
@@ -6098,8 +6112,22 @@ class QQGroupManager(Star):
             return out
         # 复犯累进（默认关）：按窗口内的前科次数把时长乘一个倍率。
         # 只延长时长、不改判定；没开启或没有前科时原样返回。
-        out["prior_offenses"] = 0
+        out["prior_offenses"] = prior
         out["escalation"] = 1.0
+        if smart_mode and not settings.get("escalate_enabled", False) and out.get("action") == "mute" and prior:
+            # 智能分级：前科只做温和加成（每次 +50%，上限 3×）
+            try:
+                secs, mult = moderation.escalate_seconds(
+                    int(out["seconds"] or 0), prior, step=0.5, max_multiplier=3.0,
+                    cap=int(settings.get("max_mute_seconds") or 86400),
+                )
+                if secs != out["seconds"]:
+                    self.logger.info(f"[审核] 智能分级加刑：前科 {prior} 次，{out['seconds']}s → {secs}s（×{mult}）")
+                    out["seconds"] = secs
+                    out["duration"] = fmt_duration(secs)
+                out["escalation"] = mult
+            except Exception as e:
+                self.logger.warning(f"[审核] 智能分级加刑计算失败，按原时长执行：{e}")
         if settings.get("escalate_enabled", False):
             try:
                 prior = self.mod.repeat_count(
@@ -6491,10 +6519,7 @@ class QQGroupManager(Star):
                 ))
                 return
             if result.get("pending_review"):
-                await self._reply(
-                    event,
-                    "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-                )
+                await self._reply(event, self._render("msg_mod_todo"))
                 return
             if not result["executed"]:
                 # 置信度不足 / 豁免成员 / 执行失败：宁可回复“未处理”也不误报“已禁言”
