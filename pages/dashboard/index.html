@@ -394,16 +394,33 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field check"><input type="checkbox" id="s-keep_context" /><span>静默留存最近消息（仅供审核取上下文，仅存本地）</span></label>
  <label class="field check"><input type="checkbox" id="s-reply_when_clean" /><span>未违规时也在群里回复一句</span></label>
  </div>
+ <p class="desc">基础参数（阈值、上限、时限）</p>
  <div class="grid input-zone">
  <label class="field"><span>上下文条数</span><input type="number" id="s-context_size" min="0" max="20" /></label>
  <label class="field"><span>置信度阈值（低于此值不自动执行）</span><input type="number" id="s-confidence_threshold" step="0.01" min="0" max="1" /></label>
  <label class="field"><span>单次禁言上限（秒）</span><input type="number" id="s-max_mute_seconds" min="60" /></label>
  <label class="field"><span>撤回尝试时限（秒，官方硬限 120；0=不限，总是尝试）</span><input type="number" id="s-recall_max_age_seconds" min="0" /></label>
  <label class="field"><span>每人每小时举报上限（0=不限）</span><input type="number" id="s-report_limit_per_hour" min="0" /></label>
- <label class="field"><span>每日模型调用上限（次，0=不限）</span><input type="number" id="s-daily_budget" step="1" min="0" /></label>
- <label class="field"><span>同群模型排队上限（条，0=不限）</span><input type="number" id="s-llm_queue_limit" step="1" min="0" title="同一群同时排队等待模型判定的消息数，超过的部分跳过模型层、只按关键词层处理" /></label>
- <label class="field"><span>单次模型超时（秒，0=不限）</span><input type="number" id="s-llm_timeout" step="1" min="0" title="provider 卡住超过该时长按失败处理，避免占住同群队列" /></label>
  </div>
+ <p class="desc">处罚策略（先定「怎么罚」，下面两组参数再定「罚多重」）</p>
+ <div class="grid switch-zone">
+ <label class="field check"><input type="checkbox" id="s-smart_penalty" /><span><b>智能分级处罚</b>：轻微→警告、中度→撤回+警告、高危→禁言；高危但置信度不足→转人工待办（默认关，关闭时行为与旧版一致）</span></label>
+ <label class="field"><span>智能分级：前科达到几次升一档</span><input type="number" id="s-smart_tier_bump_at" min="1" max="20" step="1" title="窗口复用「复犯累进」的天数；升档只改动作，时长按 +50%/次 温和加成，上限 3×" /></label>
+ <label class="field check"><input type="checkbox" id="s-escalate_enabled" /><span><b>复犯累进</b>：窗口内重复违规，禁言时长按倍数递增</span></label>
+ <label class="field check"><input type="checkbox" id="s-todo_enabled" /><span><b>待办队列</b>：低置信未处理 / 变体疑似 / 变体累计达标 自动进待办，等人确认</span></label>
+ </div>
+ <div class="grid input-zone">
+ <label class="field"><span>复犯：前科统计窗口（天）</span><input type="number" id="s-escalate_window_days" min="1" max="365" /></label>
+ <label class="field"><span>复犯：每次前科增加倍率（1＝每次翻倍）</span><input type="number" id="s-escalate_step" step="0.5" min="0" max="10" /></label>
+ <label class="field"><span>复犯：倍率上限</span><input type="number" id="s-escalate_max_multiplier" step="0.5" min="1" max="20" /></label>
+ </div>
+ <p class="desc">模型成本防护（防刷屏把额度烧完、防 provider 卡住堵队列）</p>
+ <div class="grid input-zone">
+  <label class="field"><span>每日模型调用上限（次，0=不限）</span><input type="number" id="s-daily_budget" step="1" min="0" /></label>
+  <label class="field"><span>同群模型排队上限（条，0=不限）</span><input type="number" id="s-llm_queue_limit" step="1" min="0" title="同一群同时排队等待模型判定的消息数，超过的部分跳过模型层、只按关键词层处理" /></label>
+  <label class="field"><span>单次模型超时（秒，0=不限）</span><input type="number" id="s-llm_timeout" step="1" min="0" title="provider 卡住超过该时长按失败处理，避免占住同群队列" /></label>
+ </div>
+
  <div class="beta-box">
   <div class="beta-head">
    <span class="beta-badge">测试中</span>
@@ -430,17 +447,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
   <label class="field"><span>自动禁言：冷却（小时，0＝不冷却）</span><input type="number" id="s-variant_strike_cooldown_hours" min="0" max="168" /></label>
   </div>
  </div>
- <div class="grid switch-zone">
- <label class="field check"><input type="checkbox" id="s-todo_enabled" /><span><b>待办队列</b>：低置信未处理 / 变体疑似 / 变体累计达标 自动进待办，等人确认</span></label>
- <label class="field check"><input type="checkbox" id="s-escalate_enabled" /><span><b>复犯累进</b>：窗口内重复违规，禁言时长按倍数递增</span></label>
- <label class="field check"><input type="checkbox" id="s-smart_penalty" /><span><b>智能分级处罚</b>：轻微→警告、中度→撤回+警告、高危→禁言；高危但置信度不足→转人工待办（默认关，关闭时行为与旧版一致）</span></label>
- <label class="field"><span>智能分级：前科达到几次升一档</span><input type="number" id="s-smart_tier_bump_at" min="1" max="20" step="1" title="窗口复用「复犯累进」的天数；升档只改动作，时长按 +50%/次 温和加成，上限 3×" /></label>
- </div>
- <div class="grid input-zone">
- <label class="field"><span>复犯：前科统计窗口（天）</span><input type="number" id="s-escalate_window_days" min="1" max="365" /></label>
- <label class="field"><span>复犯：每次前科增加倍率（1＝每次翻倍）</span><input type="number" id="s-escalate_step" step="0.5" min="0" max="10" /></label>
- <label class="field"><span>复犯：倍率上限</span><input type="number" id="s-escalate_max_multiplier" step="0.5" min="1" max="20" /></label>
- </div>
+ <p class="desc">名单与自定义规则</p>
  <label class="field block">
  <span>豁免成员（每行一个 openid，管理员自动豁免）</span>
  <textarea id="s-whitelist" rows="3" spellcheck="false"></textarea>
