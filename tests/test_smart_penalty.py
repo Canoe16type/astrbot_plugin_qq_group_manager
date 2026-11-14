@@ -210,6 +210,24 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertFalse(d["recall"])
 
 
+    def test_force_mute_threshold(self):
+        """前科达到硬阈值时，哪怕本次是轻微也直接禁言。"""
+        d = decide_action(_verdict("low", 0.9), rules=[], smart=True,
+                          prior_offenses=1, prior_bump_at=2, force_mute_priors=1)
+        self.assertEqual(d["action"], "mute")
+
+    def test_force_mute_disabled_by_default(self):
+        d = decide_action(_verdict("low", 0.9), rules=[], smart=True,
+                          prior_offenses=1, prior_bump_at=2, force_mute_priors=0)
+        self.assertEqual(d["action"], "warn")
+
+    def test_force_mute_still_respects_confidence(self):
+        """硬阈值也过不了置信度闸门：拿不准就转人工，不自动禁言。"""
+        d = decide_action(_verdict("low", 0.4), rules=[], smart=True,
+                          prior_offenses=9, prior_bump_at=2, force_mute_priors=5)
+        self.assertEqual(d["action"], "todo")
+
+
 if __name__ == "__main__":
     unittest.main()
 

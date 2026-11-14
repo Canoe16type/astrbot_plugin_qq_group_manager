@@ -6019,6 +6019,7 @@ class QQGroupManager(Star):
             high_conf=float(st.get("confidence_threshold") or 0.75),
             prior_offenses=prior,
             prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
+            force_mute_priors=int(st.get("smart_force_mute_priors") or 0),
         )
         secs = int(dec.get("seconds") or 0)
         mult = 1.0
@@ -6166,6 +6167,7 @@ class QQGroupManager(Star):
             high_conf=float(settings.get("confidence_threshold") or 0.75),
             prior_offenses=prior,
             prior_bump_at=int(settings.get("smart_tier_bump_at") or 2),
+            force_mute_priors=int(settings.get("smart_force_mute_priors") or 0),
         )
         kind = str(dec.get("action") or "mute")
         out.update({

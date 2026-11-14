@@ -271,6 +271,7 @@ def decide_action(
     high_conf: float = 0.6,
     prior_offenses: int = 0,
     prior_bump_at: int = 2,
+    force_mute_priors: int = 0,
 ) -> dict:
     """把 AI（或关键词层）的判定翻译成可执行动作 + 时长。
 
@@ -329,6 +330,13 @@ def decide_action(
             conf = 0.0
         # 前科升档：同一人在窗口内重复违规，动作升一档（low→medium→high）。
         # 只升动作档位，不碰秒数；秒数由 _mod_execute 用 escalate_seconds 温和加成。
+        # 硬阈值：前科达到 N 次就不再看本次档位，一律按 high 处理（置信度不足时仍会转待办）
+        try:
+            force_at = int(force_mute_priors or 0)
+            if force_at > 0 and float(prior_offenses or 0) >= force_at:
+                sev = "high"
+        except (TypeError, ValueError):
+            pass
         tier_order = ["low", "medium", "high"]
         if sev not in tier_order:
             sev = "medium"
@@ -939,7 +947,8 @@ class ModerationStore:
         # 智能分级（P2）：low→警告、medium→撤回+警告、high→禁言；高危且置信度不足→转人工待办。
         # 关闭时完全走原逻辑（degree→固定时长、只撤回+禁言）。
         "smart_penalty": False,
-        "smart_tier_bump_at": 2,      # 智能分级：窗口内前科达到几次，动作升一档
+        "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
+        "smart_force_mute_priors": 0,  # 前科达到 N 次直接禁言（0=不启用）
         "whitelist": [],              # 豁免成员 openid（管理员自动豁免）
         "keywords": {},               # 群自定义关键词 {category: [pattern]}
         # ---- 变体检测（谐音/形近/插符号绕过）----

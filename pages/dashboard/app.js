@@ -1294,7 +1294,7 @@ const S_KEYS = ["enabled", "dry_run", "auto_scan", "auto_scan_llm", "enable_keyw
   "variant_strike_enabled", "variant_strike_window_days", "variant_strike_threshold",
   "variant_strike_notify", "variant_strike_mute", "variant_strike_mute_threshold",
   "variant_strike_mute_seconds", "variant_strike_require_confirm", "variant_strike_cooldown_hours",
-  "todo_enabled", "smart_penalty", "smart_tier_bump_at",
+  "todo_enabled", "smart_penalty", "smart_tier_bump_at", "smart_force_mute_priors",
   "escalate_enabled", "escalate_window_days", "escalate_step", "escalate_max_multiplier"];
 
 function renderSettings() {
@@ -1345,6 +1345,7 @@ function collectSettings() {
   out.variant_strike_cooldown_hours = Math.max(0, Math.min(parseInt(out.variant_strike_cooldown_hours || 0, 10), 168));
   out.escalate_window_days = Math.max(1, Math.min(parseInt(out.escalate_window_days || 30, 10), 365));
   out.smart_tier_bump_at = Math.max(1, Math.min(parseInt(out.smart_tier_bump_at || 2, 10), 20));
+  out.smart_force_mute_priors = Math.max(0, Math.min(parseInt(out.smart_force_mute_priors || 0, 10), 99));
   return out;
 }
 
