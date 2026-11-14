@@ -107,6 +107,9 @@ def is_strike_muted(v: dict) -> bool:
 #: 注意：插件没有「人工审核」环节，话术不得承诺人工处理；记录位置=面板「记录 → 判定记录」
 DEFAULT_TEMPLATES: dict[str, str] = {
     "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。",
+    "msg_mod_unattributed": "⚠️ 已判定：{verdict}。\n"
+                            "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
+                            "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
     "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
     "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
                       "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",

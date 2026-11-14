@@ -687,6 +687,10 @@ class QQGroupManager(Star):
         # QQ 官方引用消息事件不提供被引用消息的 d.id（只有 REFIDX 引用索引，
         # 撤回 API 不认），因此引用撤回时用"原文匹配"找回真实消息 ID。
         self._recent_group_msgs: dict[str, list[dict]] = {}
+        # 最近消息缓存落盘：重载/重启后仍能定位「重载前发送的消息」，否则举报只能判不能罚
+        self._recent_cache_path = os.path.join(self._plugin_data_dir(), "recent_msgs.json")
+        self._recent_saved_at = 0.0
+        self._load_recent_msgs()
         self._poll_task: Optional[asyncio.Task] = None
         # 定时汇报（日报）后台任务与"今天已经发过"的日期标记
         self._report_task: Optional[asyncio.Task] = None
@@ -1724,6 +1728,9 @@ class QQGroupManager(Star):
     # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
     # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
     TPL_FALLBACKS = {
+        "msg_mod_unattributed": "⚠️ 已判定：{verdict}。\n"
+                               "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
+                               "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
         "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
         "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n"
                           "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
@@ -2068,6 +2075,46 @@ class QQGroupManager(Star):
         # 剥离所有 <@openid> 文本（QQ 官方消息中 @ 就是这种纯文本格式）
         return re.sub(r"<@!?[0-9A-Za-z_-]+>", " ", text).strip()
 
+    def _load_recent_msgs(self) -> None:
+        """启动时恢复最近消息缓存（只保留 10 分钟内），让重载前的消息也能被举报定位。"""
+        try:
+            with open(self._recent_cache_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            self.logger.debug(f"[审核] 最近消息缓存读取失败（忽略）：{e}")
+            return
+        now = time.time()
+        try:
+            for g, lst in (data or {}).items():
+                keep = [r for r in lst if isinstance(r, dict) and now - float(r.get("ts") or 0) <= 600]
+                if keep:
+                    self._recent_group_msgs[str(g)] = keep[-200:]
+            total = sum(len(v) for v in self._recent_group_msgs.values())
+            if total:
+                self.logger.debug(f"[审核] 最近消息缓存已恢复：{total} 条 / {len(self._recent_group_msgs)} 个群")
+        except Exception as e:
+            self.logger.debug(f"[审核] 最近消息缓存解析失败（忽略）：{e}")
+
+    def _save_recent_msgs(self, force: bool = False) -> None:
+        """节流落盘（默认 3 秒一次），避免每条消息都写文件。"""
+        now = time.time()
+        if not force and now - self._recent_saved_at < 3:
+            return
+        try:
+            data = {
+                g: [r for r in lst if now - float(r.get("ts") or 0) <= 600][-200:]
+                for g, lst in self._recent_group_msgs.items()
+            }
+            tmp = self._recent_cache_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+            os.replace(tmp, self._recent_cache_path)
+            self._recent_saved_at = now
+        except Exception as e:
+            self.logger.debug(f"[审核] 最近消息缓存写入失败（忽略）：{e}")
+
     def _record_recent_msg(self, event: AstrMessageEvent) -> None:
         """缓存当前群消息（原文 + 消息 ID + 时间），供引用撤回按原文匹配。
 
@@ -2094,7 +2141,7 @@ class QQGroupManager(Star):
                     return  # 引用消息自身不入缓存
             except (TypeError, ValueError):
                 pass
-            text = self._extract_text(event)
+            text = self._extract_text(event)[:500]   # 落盘缓存只留前 500 字
             images = self._extract_images(event)
             if not text and not images:
                 return
@@ -2112,6 +2159,7 @@ class QQGroupManager(Star):
             # 裁剪：最多 200 条，且丢弃超过 10 分钟的旧消息
             now = time.time()
             lst[:] = [r for r in lst if now - r["ts"] <= 600][-200:]
+            self._save_recent_msgs()
         except Exception:
             pass
 
@@ -6634,6 +6682,17 @@ class QQGroupManager(Star):
                 return
             if result.get("pending_review"):
                 await self._reply(event, self._mod_tpl(g, "msg_mod_todo"))
+                return
+            if rep.get("unattributed") and not result["executed"]:
+                verdict_txt = (
+                    self.mod.get_cat_names(g).get(str(result.get("category") or ""), "违规内容")
+                    if result.get("violation") else "未发现违规"
+                )
+                await self._reply(event, self._mod_tpl(
+                    g, "msg_mod_unattributed",
+                    verdict=verdict_txt,
+                    reason=str(result.get("skipped_reason") or "被举报消息不在缓存中"),
+                ))
                 return
             if not result["executed"]:
                 # 置信度不足 / 豁免成员 / 执行失败：宁可回复“未处理”也不误报“已禁言”

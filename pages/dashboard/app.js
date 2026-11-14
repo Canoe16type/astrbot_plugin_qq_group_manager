@@ -1013,6 +1013,7 @@ const TPL_FIELDS = [
   ["msg_mod_warn", "警告提示（智能分级：轻微/中度）"],
   ["msg_mod_todo", "转人工复核回执（高危但置信度不足）"],
   ["msg_mod_revoke", "撤销处罚并致歉"],
+  ["msg_mod_unattributed", "无法定位发送者时的回执"],
   ["mod_admin_list", "查看提醒名单"],
   ["mod_admin_list_empty", "提醒名单为空时的提示"],
   ["mod_admin_register_off", "登记成功但本群未开提醒"],

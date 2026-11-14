@@ -696,6 +696,11 @@
         "description": "审核 · 撤销处罚并致歉",
         "type": "text",
         "default": "✅ 已撤销处罚记录 #{vid}\n{at} 经复核，本条判定有误，已撤销对该成员的处罚并致歉。\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
+      },
+      "msg_mod_unattributed": {
+        "description": "审核 · 无法定位被举报发送者时的回执",
+        "type": "text",
+        "default": "⚠️ 已判定：{verdict}。\n但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"
