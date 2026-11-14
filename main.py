@@ -5971,6 +5971,55 @@ class QQGroupManager(Star):
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
+    def _mod_predict_action(self, group: str, verdict: dict, rep: dict) -> dict:
+        """只算「会怎么罚」，不执行任何动作——供试跑、/审核 测试、面板预览使用。
+
+        与 `_mod_execute` 使用同一套参数（smart / 前科 / 阈值 / 上限），
+        否则会出现「试跑显示警告、真实执行却禁言」这种不可解释的差异。
+        """
+        st = self._mod_settings(group)
+        smart = bool(st.get("smart_penalty", False))
+        prior = 0
+        try:
+            if smart or st.get("escalate_enabled", False):
+                prior = self.mod.repeat_count(
+                    group, str(rep.get("sender") or ""),
+                    window_days=int(st.get("escalate_window_days") or 30),
+                )
+        except Exception:
+            prior = 0
+        dec = moderation.decide_action(
+            verdict,
+            rules=self.mod.get_rules(group),
+            max_seconds=int(st.get("max_mute_seconds") or 86400),
+            default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
+            smart=smart,
+            high_conf=float(st.get("confidence_threshold") or 0.75),
+            prior_offenses=prior,
+            prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
+        )
+        secs = int(dec.get("seconds") or 0)
+        mult = 1.0
+        if dec.get("action") == "mute" and smart and not st.get("escalate_enabled", False) and prior:
+            try:
+                secs, mult = moderation.escalate_seconds(
+                    secs, prior, step=0.5, max_multiplier=3.0,
+                    cap=int(st.get("max_mute_seconds") or 86400),
+                )
+            except Exception:
+                pass
+        return {
+            "action": dec.get("action") or "none",
+            "recall": bool(dec.get("recall")),
+            "seconds": secs,
+            "duration": fmt_duration(secs) if secs else "",
+            "rule_name": dec.get("rule_name") or "",
+            "prior_offenses": prior,
+            "escalation": mult,
+            "smart": smart,
+            "reason": dec.get("skipped_reason") or "",
+        }
+
     async def _mod_try_recall(self, event: AstrMessageEvent, group: str, rep: dict,
                               settings: dict) -> str:
         """尽力撤回被处罚消息，返回一行说明（失败不影响后续动作）。"""
@@ -6092,6 +6141,7 @@ class QQGroupManager(Star):
             max_seconds=int(settings.get("max_mute_seconds") or 86400),
             default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
             smart=smart_mode,
+            high_conf=float(settings.get("confidence_threshold") or 0.75),
             prior_offenses=prior,
             prior_bump_at=int(settings.get("smart_tier_bump_at") or 2),
         )
@@ -6754,8 +6804,7 @@ class QQGroupManager(Star):
             if not v:
                 await self._reply(event, "测试失败：模型未返回结果。")
                 return
-            d = moderation.decide_action(v, rules=self.mod.get_rules(g),
-                                        max_seconds=int(st.get("max_mute_seconds") or 86400))
+            d = self._mod_predict_action(g, v, rep)
             try:
                 vh = self._mod_variant_scan(g, rep, {**st, "variant_check": True})
             except Exception:
@@ -6766,7 +6815,10 @@ class QQGroupManager(Star):
                 f"【测试判定】违规={v.get('violation')} 依据={self.mod.get_dim_names(g).get(str(v.get('basis')),'')} "
                 f"类型={v.get('category')} 严重度={v.get('severity')} 置信度={v.get('confidence')}" + chr(10) + ""
                 f"理由：{v.get('reason')}" + chr(10) +
-                f"拟执行：{d.get('action')} {fmt_duration(int(d.get('seconds') or 0))}" + chr(10) +
+                f"拟执行：{d['action']} {d['duration']}"
+                + (f"（前科 {d['prior_offenses']} 次，倍率 ×{d['escalation']}）" if d["escalation"] and d["escalation"] != 1.0 else "")
+                + ("（智能分级已开启）" if d["smart"] else "（智能分级未开启）")
+                + "（试跑不执行任何动作）" + chr(10) +
                 vh_text
             ))
             return
@@ -7482,8 +7534,7 @@ class QQGroupManager(Star):
             used_llm = True
         if not v:
             return json_response({"error": "判定失败：模型未返回结果"})
-        d = moderation.decide_action(v, rules=self.mod.get_rules(g),
-                                    max_seconds=int(self._mod_settings(g).get("max_mute_seconds") or 86400))
+        d = self._mod_predict_action(g, v, rep)
         # 变体层也一起试跑：不看本群开关（页面测试就是要看效果），只借本群的阈值配置
         try:
             vopts = {**self._mod_settings(g), "variant_check": True}
@@ -7493,7 +7544,7 @@ class QQGroupManager(Star):
         return json_response({
             "verdict": v,
             "action": d,
-            "duration": fmt_duration(int(d.get("seconds") or 0)),
+            "duration": d.get("duration") or "",
             "used_llm": used_llm,
             "provider": pinfo,
             "variant": variant,

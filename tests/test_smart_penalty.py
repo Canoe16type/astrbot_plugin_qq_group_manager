@@ -96,6 +96,7 @@ def _plugin(api, prior=0):
                                warning=lambda *a, **k: None, error=lambda *a, **k: None)
     p.mod = SimpleNamespace(get_rules=lambda g: [], repeat_count=lambda *a, **k: prior)
     p._read_config_value = lambda keys, default="", legacy_keys=(): default
+    p._mod_settings = lambda g: dict(SETTINGS)
     p._api_for_group_or_default = lambda g, **k: api
     p._is_qq_admin_openid = lambda g, m: False
     p._add_recall_record = lambda **k: None
@@ -206,6 +207,39 @@ class TemplateOverrideTest(unittest.TestCase):
         p.mod.get_templates = lambda g: {}
         text = p._mod_tpl("g1", "msg_mod_todo")
         self.assertIn("人工复核", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+class PredictActionTest(unittest.TestCase):
+    """试跑/审核测试用的无副作用预测：必须与真实执行同参同逻辑。"""
+
+    def test_low_warns_without_recall(self):
+        p = _plugin(_Api())
+        d = p._mod_predict_action("g1", _verdict("low", 0.9), _rep())
+        self.assertEqual(d["action"], "warn")
+        self.assertFalse(d["recall"])
+
+    def test_high_conf_below_threshold_is_todo(self):
+        p = _plugin(_Api())
+        d = p._mod_predict_action("g1", _verdict("high", 0.7), _rep())   # 阈值 0.75
+        self.assertEqual(d["action"], "todo")
+
+    def test_prior_bumps_tier_and_duration(self):
+        p = _plugin(_Api(), prior=2)
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True, max_mute_seconds=604800)
+        d = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep())
+        self.assertEqual(d["action"], "mute")          # 中度 + 前科 → 升档禁言
+        self.assertGreater(d["seconds"], 0)
+        self.assertGreater(d["escalation"], 1.0)
+
+    def test_smart_off_legacy_behavior(self):
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=False)
+        d = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep())
+        self.assertEqual(d["action"], "mute")
+        self.assertEqual(d["escalation"], 1.0)
 
 
 if __name__ == "__main__":
