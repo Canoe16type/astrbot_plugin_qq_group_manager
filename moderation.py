@@ -803,6 +803,9 @@ class ModerationStore:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         os.replace(tmp, self._verdict_log)
         self._vcount = len(records or [])
+        if self._vcount == 0:
+            # 记录全清后序号归零：没有历史 ID 需要保护，也没必要让新人从 #20 开始
+            self._seq = 0
         self._save_vmeta()
         self._invalidate_stats()
 

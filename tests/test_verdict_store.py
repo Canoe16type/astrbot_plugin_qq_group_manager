@@ -190,5 +190,25 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertTrue(st["report_ack_enabled"])
 
 
+    def test_seq_resets_after_all_deleted(self):
+        """记录全删光后，下一条从 #1 开始（保留空洞只针对仍有记录的情况）。"""
+        r1 = self._add("a")
+        r2 = self._add("b")
+        self.assertEqual(r2["id"], r1["id"] + 1)
+        self.store.delete_verdict(r1["id"])
+        self.store.delete_verdict(r2["id"])
+        self.assertEqual(self.store.count_verdicts(), 0)
+        again = self._add("c")
+        self.assertEqual(again["id"], 1, "全清后序号应归零")
+
+    def test_seq_keeps_monotonic_with_gaps(self):
+        """还有记录时序号不回收，避免旧 ID 指向另一条记录。"""
+        r1 = self._add("a")
+        r2 = self._add("b")
+        self.store.delete_verdict(r1["id"])
+        r3 = self._add("c")
+        self.assertEqual(r3["id"], r2["id"] + 1)
+
+
 if __name__ == "__main__":
     unittest.main()
