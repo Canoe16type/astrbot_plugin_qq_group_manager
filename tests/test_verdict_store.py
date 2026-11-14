@@ -104,5 +104,27 @@ class VerdictStoreTest(unittest.TestCase):
         self.assertIsNone(moderation.ModerationStore(str(self.dir), _Logger()).get_verdict(rec["id"]))
 
 
+    def test_setter_updates_seq_for_next_append(self):
+        """整表赋值后，meta 里的 seq 必须同步，否则重启后会复用 id。"""
+        self.store.verdicts = [
+            {"id": 5, "group": "g1", "created_at": int(time.time())},
+            {"id": 7, "group": "g1", "created_at": int(time.time())},
+        ]
+        rec = self.store.add_verdict({"group": "g1", "text": "new"})
+        self.assertEqual(rec["id"], 8)
+        reread = moderation.ModerationStore(str(self.dir), _Logger())
+        self.assertEqual(reread.add_verdict({"group": "g1", "text": "after restart"})["id"], 9)
+
+    def test_migration_does_not_touch_json_when_jsonl_has_data(self):
+        """JSONL 已有数据时，不能把用户恢复的旧 json 静默改名（那等于吞备份）。"""
+        log = self.dir / "mod_verdicts.jsonl"
+        log.write_text(json.dumps({"id": 1, "group": "g1", "text": "现有"}) + "\n", encoding="utf-8")
+        legacy = self.dir / "mod_verdicts.json"
+        legacy.write_text(json.dumps([{"id": 9, "group": "g1", "text": "备份"}]), encoding="utf-8")
+        moderation.ModerationStore(str(self.dir), _Logger())
+        self.assertTrue(legacy.exists(), "旧文件应保持原样")
+        self.assertFalse((self.dir / "mod_verdicts.json.migrated").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

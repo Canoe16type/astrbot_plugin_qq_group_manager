@@ -700,18 +700,22 @@ class ModerationStore:
                     existing = sum(1 for line in f if line.strip())
             except Exception:
                 existing = 0
+        migrated = False
         if existing == 0:
             try:
                 old = self._load(self._verdict_path, []) or []
                 with open(self._verdict_log, "w", encoding="utf-8") as f:
                     for rec in old:
                         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                migrated = True
                 if self.logger:
                     self.logger.info(f"[审核] 判定记录已迁移到 JSONL：{len(old)} 条")
             except Exception as e:
                 if self.logger:
                     self.logger.warning(f"[审核] 判定记录迁移失败（保留旧文件）：{e}")
                 return
+        if not migrated:
+            return          # JSONL 已有数据：保留旧文件不动，避免静默覆盖用户恢复的备份
         try:
             os.replace(self._verdict_path, self._verdict_path + ".migrated")
         except Exception:
@@ -776,11 +780,12 @@ class ModerationStore:
 
     @verdicts.setter
     def verdicts(self, records) -> None:
-        self._rewrite_verdicts(list(records or []))
+        records = list(records or [])
         try:
             self._seq = max([int(v.get("id") or 0) for v in records] or [0])
         except Exception:
             self._seq = 0
+        self._rewrite_verdicts(records)      # seq 必须先定好，否则 meta 里存的是旧值
 
     def _max_verdict_id(self) -> int:
         return int(self._seq or 0)
@@ -796,8 +801,11 @@ class ModerationStore:
         except (TypeError, ValueError):
             return None
         for v in self._iter_verdicts():
-            if int(v.get("id") or 0) == target:
-                return v
+            try:
+                if int(v.get("id") or 0) == target:
+                    return v
+            except (TypeError, ValueError):
+                continue
         return None
 
     def prune_older_than(self, days: int, group: str = "") -> int:

@@ -5988,6 +5988,20 @@ class QQGroupManager(Star):
                 )
         except Exception:
             prior = 0
+        try:
+            conf = float(verdict.get("confidence") or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        thr = float(st.get("confidence_threshold") or 0.75)
+        if conf < thr and not verdict.get("from_cache"):
+            sev = str(verdict.get("severity") or "").lower()
+            if smart and sev == "high":
+                return {"action": "todo", "recall": False, "seconds": 0, "duration": "",
+                        "rule_name": "", "prior_offenses": prior, "escalation": 1.0,
+                        "smart": smart, "reason": f"高危但置信度 {conf:.2f} < {thr:.2f}，转人工复核"}
+            return {"action": "none", "recall": False, "seconds": 0, "duration": "",
+                    "rule_name": "", "prior_offenses": prior, "escalation": 1.0,
+                    "smart": smart, "reason": f"置信度 {conf:.2f} < 阈值 {thr:.2f}"}
         dec = moderation.decide_action(
             verdict,
             rules=self.mod.get_rules(group),
@@ -6206,28 +6220,31 @@ class QQGroupManager(Star):
             out["skipped_reason"] = "试运行模式，未实际执行"
             return out
 
-        api = self._api_for_group_or_default(group, fallback_pid=event.get_platform_id())
-        if api is None:
-            out["skipped_reason"] = "无可用 API 客户端"
+        # 待办不需要任何 API：高危低置信时先收口，避免被下面「无 API」逻辑误判成执行失败
+        if kind == "todo":
+            out["pending_review"] = True
+            out["executed"] = False
+            out["skipped_reason"] = out.get("skipped_reason") or "转人工复核"
+            self.logger.info(f"[审核] {group} 判定转人工待办（reason={out['skipped_reason']}）")
             return out
 
-        # 1) 撤回
-        # 官方规则（bot.q.qq.com「撤回群聊消息」）：
-        #   a) 机器人是群管理员 -> 可撤回「普通群成员」的消息；
-        #      是普通成员 -> 只能撤回自己发的消息（无权限时返回 40062003）；
-        #   b) 无论是否管理员，「发送超过 2 分钟的消息不可撤回」（40064004），
-        #      这是与身份无关的硬限制。
-        # 所以默认只在 2 分钟内尝试；若想验证自己账号的实际权限，可把本群
-        # recall_max_age_seconds 设为 0（= 不限，总是尝试，失败会记录原因）。
+        # 1) 撤回：警告与禁言都可能用到；失败不影响后续动作。
+        # 官方限制：非管理员只能撤自己的消息（40062003）；超过 2 分钟不可撤回（40064004）。
         if kind in ("mute", "warn") and (kind == "mute" or dec.get("recall")):
             out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
 
         if kind == "warn":
+            # 警告靠消息通道，不需要 API 客户端；发完即收口
             out["executed"] = True
             await self._send_mod_warning(event, group, rep, out, dec)
             self.logger.info(
                 f"[审核] 已警告 {target[-6:]}（group={group}） severity={out.get('severity')} conf={out.get('confidence')}"
             )
+            return out
+
+        api = self._api_for_group_or_default(group, fallback_pid=event.get_platform_id())
+        if api is None:
+            out["skipped_reason"] = "无可用 API 客户端"
             return out
 
         # 2) 禁言
@@ -7209,12 +7226,13 @@ class QQGroupManager(Star):
         days = request.query.get("days", 0, type=int) or 0
         limit = min(5000, max(1, request.query.get("limit", 1000, type=int)))
         since = int(time.time()) - days * 86400 if days > 0 else 0
-        from collections import deque
-        items = deque(maxlen=limit)
-        for v in self.mod._iter_verdicts():
+        items: list[dict] = []
+        for v in self.mod._iter_verdicts():          # 新 → 旧
             if (not g or v.get("group") == g) and (not since or int(v.get("created_at") or 0) >= since):
                 items.append(v)
-        items = list(items)
+                if len(items) >= limit:
+                    break
+        items.reverse()                              # 与旧行为一致：按时间从旧到新
         return json_response({"items": items, "total": len(items)})
 
     async def web_mod_verdicts(self):

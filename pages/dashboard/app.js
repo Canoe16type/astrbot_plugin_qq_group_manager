@@ -1763,10 +1763,26 @@ async function runTest() {
       `置信度：${v.confidence == null ? "-" : v.confidence}　${r.used_llm ? "（调用了模型）" : "（零成本层命中）"}`,
       `判定模型：${r.provider && r.provider.id ? `${r.provider.display}（${PROVIDER_SOURCE_LABEL[r.provider.source] || r.provider.source}）` : "未调用模型"}`,
       `理由：${v.reason || "-"}`,
-      `拟执行：${r.action && r.action.action === "mute" ? "禁言 " + r.duration : "无动作"}`,
+      `拟执行：${(() => {
+        const a = (r.action && r.action.action) || "none";
+        const base = a === "mute" ? "禁言 " + (r.duration || "")
+          : a === "warn" ? (r.action.recall ? "撤回 + 警告" : "警告（不撤回）")
+          : a === "todo" ? "转人工待办（不自动处罚）" : "无动作";
+        const prior = r.action && r.action.prior_offenses
+          ? `｜前科 ${r.action.prior_offenses} 次` + (r.action.escalation && r.action.escalation !== 1 ? `，倍率 ×${r.action.escalation}` : "")
+          : "";
+        return base + prior + (r.action && r.action.smart ? "（智能分级已开启）" : "");
+      })()}` ,
       `变体层：${r.variant ? `疑似命中（${r.variant.hint}｜强度 ${r.variant.strength}｜${r.variant.count} 处）` : "未命中"}${r.variant && !(detail && detail.settings && detail.settings.variant_check) ? "（本群未开启变体检测，此处仅试跑）" : ""}`,
       "",
-      `群内会回复：${v.violation ? `根据${dim[v.basis] || "多重维度"}，符合${cats[v.category] || "违规"}，已被禁言${r.duration}` : "根据多重维度评判，此消息不涉嫌违规"}`,
+      `群内会回复：${(() => {
+        const a = (r.action && r.action.action) || "none";
+        if (!v.violation) return "根据多重维度评判，此消息不涉嫌违规";
+        if (a === "mute") return `根据${dim[v.basis] || "多重维度"}，符合${cats[v.category] || "违规"}，已被禁言${r.duration}`;
+        if (a === "warn") return "本消息已记录（警告），再次出现将按群规处理";
+        if (a === "todo") return "已转人工复核，暂不处罚";
+        return "未执行处罚（置信度不足或命中豁免）";
+      })()}` ,
     ].join("\n");
   } catch (e) {
     $("test-result").textContent = "❌ " + e.message;

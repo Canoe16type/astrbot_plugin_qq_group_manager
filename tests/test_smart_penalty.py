@@ -90,13 +90,15 @@ class _Api:
         self.calls.append(("mute", member))
 
 
-def _plugin(api, prior=0):
+def _plugin(api="default", prior=0):
     p = object.__new__(QQGroupManager)
     p.logger = SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None,
                                warning=lambda *a, **k: None, error=lambda *a, **k: None)
     p.mod = SimpleNamespace(get_rules=lambda g: [], repeat_count=lambda *a, **k: prior)
     p._read_config_value = lambda keys, default="", legacy_keys=(): default
     p._mod_settings = lambda g: dict(SETTINGS)
+    if api == "default":
+        api = _FakeApi()
     p._api_for_group_or_default = lambda g, **k: api
     p._is_qq_admin_openid = lambda g, m: False
     p._add_recall_record = lambda **k: None
@@ -240,6 +242,34 @@ class PredictActionTest(unittest.TestCase):
         d = p._mod_predict_action("g1", _verdict("medium", 0.9), _rep())
         self.assertEqual(d["action"], "mute")
         self.assertEqual(d["escalation"], 1.0)
+
+
+    def test_low_confidence_not_predicted_as_action(self):
+        """预测器必须复刻阈值闸门：低置信的中度违规，真实执行不会处罚。"""
+        p = _plugin(_Api())
+        d = p._mod_predict_action("g1", _verdict("medium", 0.5), _rep())
+        self.assertEqual(d["action"], "none")
+        self.assertIn("置信度", d["reason"])
+
+    def test_high_low_confidence_predicted_as_todo(self):
+        p = _plugin(_Api())
+        d = p._mod_predict_action("g1", _verdict("high", 0.5), _rep())
+        self.assertEqual(d["action"], "todo")
+
+
+    def test_todo_does_not_need_api_client(self):
+        """高危低置信转待办时，即使没有可用 API 也要能进待办，不能被判成执行失败。"""
+        p = _plugin(None)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.5), SETTINGS))
+        self.assertEqual(res["action"], "todo")
+        self.assertTrue(res["pending_review"])
+        self.assertNotIn("无可用 API", str(res.get("skipped_reason") or ""))
+
+    def test_warn_does_not_need_api_client(self):
+        p = _plugin(None)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("low", 0.9), SETTINGS))
+        self.assertEqual(res["action"], "warn")
+        self.assertTrue(res["executed"])
 
 
 if __name__ == "__main__":
