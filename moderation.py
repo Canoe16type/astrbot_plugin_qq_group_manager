@@ -334,8 +334,12 @@ def decide_action(
             sev = "medium"
         try:
             bump_at = max(1, int(prior_bump_at or 2))
-            if int(prior_offenses or 0) >= bump_at:
-                sev = tier_order[min(tier_order.index(sev) + 1, len(tier_order) - 1)]
+            # 每满 bump_at 次前科升一档，最多升两档（low→high）。
+            # 早先写死「只升一档」，导致前科 5 次和 2 次结果相同——屡犯永不禁言，明显不合理。
+            steps = int(float(prior_offenses or 0)) // bump_at
+            steps = max(0, min(steps, len(tier_order) - 1))
+            if steps:
+                sev = tier_order[min(tier_order.index(sev) + steps, len(tier_order) - 1)]
         except (TypeError, ValueError):
             pass
         if sev == "high":

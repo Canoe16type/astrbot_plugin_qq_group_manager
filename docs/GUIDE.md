@@ -372,7 +372,9 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 
 | 条件 | 效果 |
 | --- | --- |
-| 前科 ≥ `smart_tier_bump_at`（默认 2） | 动作**升一档**：low→medium（撤回+警告）、medium→high（禁言） |
+| 每满 `smart_tier_bump_at`（默认 2）次前科 | 动作**升一档**，最多升两档：
+  · 前科 2–3 次：low→medium（撤回+警告）、medium→high（禁言）
+  · 前科 4 次以上：low→**high（禁言）**、medium→high |
 | 判定为禁言时 | 时长按 **+50%/次** 温和加成，上限 **3×**（不会像旧 `escalate_enabled` 那样一次前科就翻倍） |
 
 **怎么验证升档**：面板「记录 → 判定记录 / 试跑」旁有「假设前科」输入框，填 0 / 2 / 4 分别试跑同一条内容，

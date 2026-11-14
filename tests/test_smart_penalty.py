@@ -196,6 +196,20 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertGreater(d2["escalation"], 1.0)
 
 
+    def test_many_priors_bump_two_tiers(self):
+        """前科足够多时必须能升到最高档：5 次前科 + 轻微辱骂 = 禁言，而非仅警告。"""
+        d = decide_action(_verdict("low", 0.85), rules=[], smart=True,
+                          prior_offenses=5, prior_bump_at=2)
+        self.assertEqual(d["action"], "mute")
+        self.assertGreater(d["seconds"], 0)
+
+    def test_priors_below_threshold_do_not_bump(self):
+        d = decide_action(_verdict("low", 0.85), rules=[], smart=True,
+                          prior_offenses=1, prior_bump_at=2)
+        self.assertEqual(d["action"], "warn")
+        self.assertFalse(d["recall"])
+
+
 if __name__ == "__main__":
     unittest.main()
 
