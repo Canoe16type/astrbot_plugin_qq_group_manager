@@ -2746,11 +2746,11 @@ async function loadLexicons(refresh) {
   try {
     r = await bridge.apiGet("lexicons", refresh ? { refresh: 1 } : {});
   } catch (e) {
-    $("lex-rows").innerHTML = `<tr><td colspan="6">${emptyBox("warn", "加载失败：" + esc(e.message))}</td></tr>`;
+    $("lex-rows").innerHTML = `<tr><td colspan="5">${emptyBox("warn", "加载失败：" + esc(e.message))}</td></tr>`;
     return;
   }
   if (!r || r.error) {
-    $("lex-rows").innerHTML = `<tr><td colspan="6">${emptyBox("warn", "加载失败：" + esc((r && r.error) || "未知错误"))}</td></tr>`;
+    $("lex-rows").innerHTML = `<tr><td colspan="5">${emptyBox("warn", "加载失败：" + esc((r && r.error) || "未知错误"))}</td></tr>`;
     return;
   }
   lexState.list = r.lexicons || [];
