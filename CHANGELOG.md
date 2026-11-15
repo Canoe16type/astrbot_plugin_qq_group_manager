@@ -127,6 +127,9 @@
 - **文档与测试自身**：两处新增用例误缩进进 `if __name__ == "__main__"` 块导致静默不执行，已修正。
 
 **调整**
+- **补齐仓库社区文件**：新增 `CODE_OF_CONDUCT.md`（行为准则）、`SUPPORT.md`（该查哪份文档 / 报障要素）、
+  `.github/release.yml`（Release 说明自动分类）；更新 `pull_request_template.md`（283 例测试、文档三处同步、
+  禁止把已移除的旧指令别名加回来），README「反馈与交流」补三份文档入口。
 - **`SECURITY.md` 适配本版**：支持范围标明 `1.5.0` 发布 / `1.6.0` 分支；敏感数据表补充
   `mod_verdicts.jsonl`（含原文）、`recent_msgs.json`（10 分钟缓存）、撤销审计与 `policy_trace`；
   边界说明加入「智能分级自动处罚的使用者责任」「撤销解禁依赖平台真值」「markdown 通道差异」；

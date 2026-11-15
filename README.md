@@ -272,6 +272,8 @@
 | 安全漏洞 | **不要开公开 Issue**：[私密报告](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/security/advisories/new) 或邮件 **oc16games@outlook.com**（见 [SECURITY.md](SECURITY.md)） |
 | 其他 / 单纯想聊 | 邮件 **oc16games@outlook.com** |
 | 更新记录 | [CHANGELOG.md](CHANGELOG.md) |
+| 求助前先看 | [SUPPORT.md](SUPPORT.md)（该查哪份文档、报障要带什么） |
+| 参与开发 | [CONTRIBUTING.md](CONTRIBUTING.md)（环境、测试、代码约定）· [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
 
 > 贴日志前请删掉 **AppID / AppSecret / openid / 群号 / 成员昵称**。
 > 日志位置：面板「日志」，或 `data/plugin_data/astrbot_plugin_qq_group_manager/*.log`；容器部署再加 `docker logs`。
