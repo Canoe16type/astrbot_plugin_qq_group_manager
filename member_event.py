@@ -168,14 +168,14 @@ def install_member_event_support(plugin, context) -> int:
         logger.info(f"[退群事件] 实例 {pid}: 已注册 GROUP_DEL_ROBOT handler")
 
         # 1) parser：GROUP_MEMBER_REMOVE 事件体 -> 派发给 client.on_group_member_remove
-        def parse_group_member_remove(self, payload):
+        def parse_group_member_remove(self, payload, _pid=pid):
             d = payload.get("d", {}) if isinstance(payload, dict) else {}
             # 事件最外层的 id 是 event_id（被动消息要用）；事件体里没有，这里补进去
             if isinstance(d, dict):
                 d = dict(d)
                 d.setdefault("_event_id", payload.get("id", "") if isinstance(payload, dict) else "")
             logger.info(
-                f"[成员事件] 收到 GROUP_MEMBER_REMOVE（实例 {pid}）"
+                f"[成员事件] 收到 GROUP_MEMBER_REMOVE（实例 {_pid}）"
                 f"group={str(d.get('group_openid') or '')[-6:]} "
                 f"member={str(d.get('member_openid') or '')[-6:]}"
             )
@@ -188,13 +188,13 @@ def install_member_event_support(plugin, context) -> int:
         # 1b) 同一位 intent 下的 GROUP_MEMBER_ADD（成员入群），一并接上：
         #     入群瞬间就发欢迎语（受 member_event.enable_member_add_welcome 控制），
         #     顺带建档案（只有 openid），退群时"在群多久"才有据可查。
-        def parse_group_member_add(self, payload):
+        def parse_group_member_add(self, payload, _pid=pid):
             d = payload.get("d", {}) if isinstance(payload, dict) else {}
             if isinstance(d, dict):
                 d = dict(d)
                 d.setdefault("_event_id", payload.get("id", "") if isinstance(payload, dict) else "")
             logger.info(
-                f"[成员事件] 收到 GROUP_MEMBER_ADD（实例 {pid}）"
+                f"[成员事件] 收到 GROUP_MEMBER_ADD（实例 {_pid}）"
                 f"group={str(d.get('group_openid') or '')[-6:]} "
                 f"member={str(d.get('member_openid') or '')[-6:]}"
             )
@@ -206,13 +206,13 @@ def install_member_event_support(plugin, context) -> int:
         #     这是 1.4.0 起入群审批通知的**主通道**（事件即时到达，比轮询快），
         #     轮询退化为兜底（见 main._poll_loop 的 join_event_mode）。
         #     官方前置条件：机器人必须是群管理员，否则平台不会推这个事件。
-        def parse_group_join_request(self, payload):
+        def parse_group_join_request(self, payload, _pid=pid):
             d = payload.get("d", {}) if isinstance(payload, dict) else {}
             if isinstance(d, dict):
                 d = dict(d)
                 d.setdefault("_event_id", payload.get("id", "") if isinstance(payload, dict) else "")
             logger.info(
-                f"[成员事件] 收到 GROUP_JOIN_REQUEST（实例 {pid}）"
+                f"[成员事件] 收到 GROUP_JOIN_REQUEST（实例 {_pid}）"
                 f"group={str(d.get('group_openid') or '')[-6:]} "
                 f"member={str(d.get('member_openid') or '')[-6:]} "
                 f"source={d.get('apply_source') or '?'}"
