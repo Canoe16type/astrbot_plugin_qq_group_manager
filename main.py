@@ -579,6 +579,11 @@ class QQGroupManager(Star):
             log_dir=self._plugin_data_dir(),
             plugin_name=PLUGIN_NAME,
         )
+        try:
+            self.logger.concise = bool(self._read_config_value(
+                ("log", "log_concise"), default=False, legacy_keys=("log_concise",)))
+        except Exception:
+            self.logger.concise = False
         self._check_plugin_set()
         self._schema_cache: dict | None = None  # _conf_schema.json 缓存（设置页用）
         self._apis: dict[str, QQApi] = {}
@@ -2304,7 +2309,7 @@ class QQGroupManager(Star):
                     return
             await self._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:
-            self.logger.error(f"处理群消息异常: {e}")
+            self.logger.error(f"{self._ctx(event.get_platform_id(), event.get_group_id())}处理群消息异常: {e}")
             import traceback
 
             self.logger.debug(traceback.format_exc())
@@ -2508,7 +2513,7 @@ class QQGroupManager(Star):
         g = str(data.get("group_openid") or "")
         member = str(data.get("member_openid") or "")
         if not g or not member:
-            self.logger.warning(f"[成员事件] 入群事件缺少必要字段: {data}")
+            self.logger.warning(f"{self._ctx(platform_id or '-', data.get('group_openid'), data.get('member_openid'))}[成员] 入群事件缺少必要字段")
             return
         if not self._group_in_scope(g, platform_id):
             return
@@ -2532,17 +2537,17 @@ class QQGroupManager(Star):
                     user_openid=str(data.get("user_openid") or ""),
                 )
                 self.logger.info(
-                    f"[成员档案] 群 {g} 成员入群: {member_registry_lib.short_id(member)}"
+                    f"{self._ctx(platform_id or '-', g, member)}[成员] 入群建档"
                     f"（{'已在档' if rec and rec.get('first_seen') else '新建'}）"
                 )
             except Exception as e:  # noqa: BLE001
-                self.logger.debug(f"[成员档案] 入群建档失败: {e}")
+                self.logger.debug(f"{self._ctx(platform_id or '-', g, member)}[成员] 入群建档失败: {e}")
 
         # 2) 欢迎语：不受「成员档案」开关影响，单独由 member_event 配置控制
         try:
             await self._welcome_member_on_join(g, member, platform_id)
         except Exception as e:  # noqa: BLE001
-            self.logger.exception(f"[入群欢迎] 处理异常: {e}")
+            self.logger.exception(f"{self._ctx(platform_id or '-', g, member)}[入群欢迎] 处理异常: {e}")
 
     async def _welcome_member_on_join(
         self, group_openid: str, member_openid: str, platform_id: str | None
@@ -2670,7 +2675,7 @@ class QQGroupManager(Star):
             g = str(data.get("group_openid") or "")
             member = str(data.get("member_openid") or "")
             if not g or not member:
-                self.logger.warning(f"[成员事件] 退群事件缺少必要字段: {data}")
+                self.logger.warning(f"{self._ctx(platform_id or '-', data.get('group_openid'), data.get('member_openid'))}[成员] 退群事件缺少必要字段")
                 return
             if not self._group_in_scope(g, platform_id):
                 return
@@ -2702,9 +2707,8 @@ class QQGroupManager(Star):
                 if got:
                     username = got
                     name_src = "cross"
-                    self.logger.info(
-                        f"[成员档案] 群 {g} 成员 {member_registry_lib.short_id(member)}"
-                        f" 借用「{from_group[-6:]}」群的名字: {got}"
+                    self.logger.debug(
+                        f"{self._ctx(platform_id or '-', g, member)}[成员] 借用群 {self._lb(from_group)} 的名字"
                     )
 
             # 2b) 还没有名字，再试一次接口（白名单机器人可用，普通机器人报 11253）
@@ -2729,7 +2733,7 @@ class QQGroupManager(Star):
                         if user_openid:
                             self.members.bind_user_openid(g, member, user_openid)
                 except Exception as e:  # noqa: BLE001
-                    self.logger.debug(f"[成员档案] 标记退群失败: {e}")
+                    self.logger.debug(f"{self._ctx(platform_id or '-', g, member)}[成员] 标记退群失败: {e}")
                 # 刚补到的名字（跨群借的 / 接口查的）写回本群档案
                 if username and name_src in ("cross", "api"):
                     try:
@@ -2737,7 +2741,7 @@ class QQGroupManager(Star):
                         if not str(cur.get("nickname") or "").strip():
                             self.members.set_name(g, member, username, source=name_src)
                     except Exception as e:  # noqa: BLE001
-                        self.logger.debug(f"[成员档案] 回写昵称失败: {e}")
+                        self.logger.debug(f"{self._ctx(platform_id or '-', g, member)}[成员] 回写昵称失败: {e}")
 
             auto_delete = bool(self._read_config_value(
                 ("member_event", "auto_delete_on_leave"), default=False,
@@ -2750,7 +2754,7 @@ class QQGroupManager(Star):
                         f"{ctx}[成员] 退群，档案已自动删除"
                     )
                 except Exception as e:  # noqa: BLE001
-                    self.logger.warning(f"[成员档案] 自动删除失败: {e}")
+                    self.logger.warning(f"{self._ctx(platform_id or '-', g, member)}[成员] 自动删除失败: {e}")
             elif self._members_on():
                 self.logger.info(
                     f"{ctx}[成员] 已标记「已退」（档案保留；清理用 /群管 成员 清理）"
@@ -2784,7 +2788,7 @@ class QQGroupManager(Star):
 
             api = self._api_for_group_or_default(g, fallback_pid=platform_id)
             if api is None:
-                self.logger.warning(f"[成员事件] 群 {g} 无可用 API 客户端，无法发送退群通知")
+                self.logger.warning(f"{self._ctx(platform_id or '-', g, member)}[成员] 无可用 API 客户端，无法发送退群通知")
                 return
 
             # 5) 发送。官方「支持 event_id 被动回复」的事件只有
@@ -2805,15 +2809,14 @@ class QQGroupManager(Star):
                 except Exception as e:  # noqa: BLE001
                     code = getattr(e, "code", None)
                     self.logger.info(
-                        f"[成员事件] 被动回复失败(code={code})，降级为主动消息: {e}"
+                        f"{self._ctx(platform_id or '-', g, member)}[成员] 被动回复失败(code={code})，降级为主动消息: {e}"
                     )
             if not sent:
                 try:
                     await api.send_group_message(g, text)
                     self._member_perm_blocked.discard(g)
                     self.logger.info(
-                        f"[成员事件] 群 {g} 成员 {member_registry_lib.short_id(member)}"
-                        f"({username or '无名'}) 退群，已发送主动消息通知"
+                        f"{self._ctx(platform_id or '-', g, member)}[成员] 退群，已发送主动消息通知"
                     )
                 except Exception as e:  # noqa: BLE001
                     code = getattr(e, "code", None)
@@ -5516,7 +5519,7 @@ class QQGroupManager(Star):
             rec = self._latest_image_msg(g)
             if rec is not None:
                 self.logger.info(
-                    "[审核] 引用的是纯图片消息，按最近缓存图片兜底："
+                    f"{self._ctx('', g)}[审核] 引用的是纯图片消息，按最近缓存图片兜底："
                     f"id={rec.get('id')} ts={rec.get('ts')}"
                 )
         if rec is None:
@@ -5530,7 +5533,7 @@ class QQGroupManager(Star):
             if out["text"].strip() or out["images"]:
                 out["unattributed"] = True
             self.logger.debug(
-                f"审核引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]} "
+                f"{self._ctx('', g)}[审核] 引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]} "
                 f"unattributed={bool(out.get('unattributed'))}"
             )
             return out
@@ -5547,7 +5550,7 @@ class QQGroupManager(Star):
             images = self._nearby_images(g, str(rec.get("sender") or ""), float(rec.get("ts") or 0))
             if images:
                 self.logger.info(
-                    f"[审核] 被举报消息本身无图，按相邻缓存补齐 {len(images)} 张（同发送者 ±3s）"
+                    f"{self._ctx('', g, str(rec.get('sender') or ''))}[审核] 被举报消息本身无图，按相邻缓存补齐 {len(images)} 张"
                 )
         out.update({
             "resolved": True,
@@ -6481,7 +6484,7 @@ class QQGroupManager(Star):
             out["pending_review"] = True
             out["executed"] = False
             out["skipped_reason"] = out.get("skipped_reason") or "转人工复核"
-            self.logger.info(f"[审核] {group} 判定转人工待办（reason={out['skipped_reason']}）")
+            self.logger.info(f"{self._ctx(event.get_platform_id(), group, str(rep.get('sender') or ''))}[审核] 转人工待办：{out['skipped_reason']}")
             return out
 
         # 1) 撤回：警告与禁言都可能用到；失败不影响后续动作。
@@ -6494,7 +6497,7 @@ class QQGroupManager(Star):
             out["executed"] = True
             await self._send_mod_warning(event, group, rep, out, plan)
             self.logger.info(
-                f"[审核] 已警告 {target[-6:]}（group={group}） severity={out.get('severity')} conf={out.get('confidence')}"
+                f"{self._ctx(event.get_platform_id(), group, target)}[审核] 已警告 severity={out.get('severity')} conf={out.get('confidence')}"
             )
             return out
 
@@ -6514,7 +6517,7 @@ class QQGroupManager(Star):
                 out["skipped_reason"] = err
                 return out
         except Exception as e:
-            self.logger.error(f"[审核] 禁言失败: {e}")
+            self.logger.error(f"{self._ctx(event.get_platform_id(), group, target)}[审核] 禁言失败: {e}")
             out["skipped_reason"] = f"禁言失败：{e}"
             return out
         out["executed"] = True
@@ -6531,7 +6534,7 @@ class QQGroupManager(Star):
                 operator_name=f"举报人:{event.get_sender_name() or ''}",
             )
         except Exception as e:
-            self.logger.debug(f"[审核] 写入禁言历史失败: {e}")
+            self.logger.debug(f"{self._ctx(event.get_platform_id(), group, target)}[审核] 写入禁言历史失败: {e}")
         return out
 
     def _is_qq_admin_openid(self, group: str, member: str) -> bool:

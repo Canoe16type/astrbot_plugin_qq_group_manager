@@ -744,6 +744,12 @@
         "type": "int",
         "default": 14,
         "hint": "按日期删除超过 N 天的日志文件（astrbot_plugin_qq_group_manager_日期.log）。0＝永久保留不自动删。改动即时生效，无需重启"
+      },
+      "log_concise": {
+        "type": "bool",
+        "description": "简洁日志模式（INFO 只留决策/处罚/失败类）",
+        "hint": "开启后：过程日志（收消息、轮询、注入、缓存命中等）降到 DEBUG，INFO 只保留「决策 / 已记录 / 撤销 / 处罚 / 失败 / 清理」这类后果信息。适合小机器与生产环境",
+        "default": false
       }
     },
     "hint": "排障时可临时调低级别；磁盘日志按「日志文件保留天数」自动清理，面板「清空」会连磁盘文件一起删"

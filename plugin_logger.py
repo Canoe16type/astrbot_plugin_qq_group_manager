@@ -58,6 +58,8 @@ class PluginLogger:
         self._pending_bytes = 0
         self._last_flush = time.time()
         self._closed = False
+        # 简洁模式：INFO 只保留"后果类"日志（决策/记录/处罚/失败/清理），过程日志一律压到 DEBUG
+        self.concise = False
         # 注意：后台落盘线程必须等下面所有属性（to_file / log_dir / file_path）
         # 初始化完再启动，否则它第一次 flush 会撞上还没赋值的属性。
         self._flusher: threading.Thread | None = None
@@ -320,8 +322,14 @@ class PluginLogger:
             with self._lock:
                 self._write(10, msg)
 
+    CONCISE_KEEP = ("决策", "已记录", "撤销", "处罚", "已警告", "已禁言", "已撤回",
+                    "失败", "异常", "错误", "超时", "熔断", "清理", "迁移", "未处罚",
+                    "转人工", "拦截", "已删除", "已标记")
+
     def info(self, msg: str) -> None:
         if self.level <= 20:
+            if getattr(self, "concise", False) and not any(k in msg for k in self.CONCISE_KEEP):
+                return
             with self._lock:
                 self._write(20, msg)
 
