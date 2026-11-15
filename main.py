@@ -257,8 +257,7 @@ DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\
 
 # 管理指令集合（需要管理员权限）
 # 管理员指令：新的「大类」+ 旧的独立写法都列在这里（旧写法会先被 _normalize_aliases 折进大类）
-ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/管理登记", "/成员", "/撤销",
-                  "/解禁", "/查禁言", "/禁言历史", "/通过", "/拒绝", "/群名", "/汇报", "/体检", "/自检")
+ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/撤销", "/管理登记", "/成员")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
 # 说明：这些名字现在挂在指令组「群管」下作为子指令（面板里是 1 条组 + 子指令），
@@ -1118,7 +1117,7 @@ class QQGroupManager(Star):
         if sub in ("", "日报", "汇报", "daily", "摘要", "summary"):
             await self._cmd_report(event)
         elif sub in ("群", "体检", "presence", "在群"):
-            await self._cmd_presence(event, ["/体检"] + args)
+            await self._cmd_presence(event, ["/状态"] + args)
         elif sub in ("自检", "诊断", "selfcheck", "diag"):
             await self._cmd_selfcheck(event)
         elif sub in ("群名", "名称", "name", "刷新群名"):
@@ -2255,45 +2254,6 @@ class QQGroupManager(Star):
         except Exception:
             return ""
 
-    # 旧独立指令 → 新大类 + 子命令。保留映射表，老写法永远不用改。
-    _LEGACY_ALIASES = {
-        "/解禁": ("/禁言", "解除"),
-        "/查禁言": ("/禁言", "名单"),
-        "/禁言历史": ("/禁言", "历史"),
-        "/通过": ("/审批", "通过"),
-        "/拒绝": ("/审批", "拒绝"),
-        "/汇报": ("/状态", "日报"),
-        "/体检": ("/状态", "群"),
-        "/自检": ("/状态", "自检"),
-        "/群名": ("/状态", "群名"),
-    }
-    _LEGACY_NAMES = tuple(k.lstrip("/") for k in _LEGACY_ALIASES)
-
-    def _cmd_alias_of(self, event: AstrMessageEvent, default: str) -> str:
-        """指令组别名命中后，还原用户实际敲的是哪个旧名字。
-
-        AstrBot 的 alias 只会把消息路由到同一个 handler，不会告诉我们是哪个别名；
-        所以回到消息原文的前两个 token 里找。找不到就用 default。
-        """
-        text = self._extract_text(event) or ""
-        for tok in text.split()[:2]:
-            name = tok.lstrip("/")
-            if name in self._LEGACY_NAMES:
-                return "/" + name
-        return default
-
-    def _normalize_aliases(self, cmd: str, parts: list[str]) -> tuple[str, list[str]]:
-        """把旧独立指令折成「大类 + 子命令」：/解禁 @x → /禁言 解除 @x。
-
-        这样只有一套处理逻辑，老写法、新写法、面板里改过别名后进来自定义名字，
-        最终都会收敛到同一个入口。
-        """
-        hit = self._LEGACY_ALIASES.get(cmd)
-        if not hit:
-            return cmd, parts
-        new_cmd, sub = hit
-        return new_cmd, [new_cmd, sub] + list(parts[1:])
-
     async def _run_command(
         self, event: AstrMessageEvent, forced_cmd: str | None = None, skip: int = 0
     ) -> None:
@@ -2340,9 +2300,7 @@ class QQGroupManager(Star):
                 if not self._is_mentioned_bot(event):
                     return
                 if first not in ("禁言", "审批", "状态", "撤回", "群管", "举报", "群规", "审核",
-                                 "管理登记", "成员", "帮助", "撤销",
-                                 "解禁", "查禁言", "禁言历史", "通过", "拒绝",
-                                 "汇报", "体检", "自检", "群名"):
+                                 "管理登记", "成员", "帮助", "撤销"):
                     return
             await self._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:
@@ -2878,30 +2836,30 @@ class QQGroupManager(Star):
         """查看本插件完整帮助（比自动指令树更详细）"""
         await self._run_command(event, forced_cmd="/群管", skip=1)
 
-    @qgm_group.command("禁言", alias={"解禁", "查禁言", "禁言历史"})
+    @qgm_group.command("禁言")
     async def g_mute(self, event: AstrMessageEvent):
         """禁言 @用户 时长 [理由]｜禁言 解除 @用户｜禁言 名单｜禁言 历史"""
-        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/禁言"), skip=1)
+        await self._run_command(event, forced_cmd="/禁言", skip=1)
 
     @qgm_group.command("撤回")
     async def g_recall(self, event: AstrMessageEvent):
         """撤回消息（先引用目标消息再发）"""
         await self._run_command(event, forced_cmd="/撤回", skip=1)
 
-    @qgm_group.command("审批", alias={"通过", "拒绝"})
+    @qgm_group.command("审批")
     async def g_list_requests(self, event: AstrMessageEvent):
         """待处理入群申请｜审批 通过 N｜审批 拒绝 N [理由]"""
-        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/审批"), skip=1)
+        await self._run_command(event, forced_cmd="/审批", skip=1)
 
     @qgm_group.command("撤销")
     async def g_revoke(self, event: AstrMessageEvent):
         """撤销一条处罚记录并致歉：/群管 撤销 <记录ID> [理由]"""
         await self._run_command(event, forced_cmd="/撤销", skip=1)
 
-    @qgm_group.command("状态", alias={"汇报", "体检", "自检", "群名"})
+    @qgm_group.command("状态")
     async def g_status(self, event: AstrMessageEvent):
         """日报（默认）｜状态 群｜状态 自检｜状态 群名"""
-        await self._run_command(event, forced_cmd=self._cmd_alias_of(event, "/状态"), skip=1)
+        await self._run_command(event, forced_cmd="/状态", skip=1)
 
     @qgm_group.command("审核")
     async def g_mod(self, event: AstrMessageEvent):
@@ -3357,8 +3315,6 @@ class QQGroupManager(Star):
                 # 兼容不带 / 的写法（"禁言" 与 "/禁言" 等价）
                 cmd = "/" + cmd
 
-        cmd, parts = self._normalize_aliases(cmd, parts)
-
         if cmd == "/群管":
             await self._reply(event, self._render("msg_help", bot_name=event.get_platform_id()))
             return
@@ -3403,11 +3359,11 @@ class QQGroupManager(Star):
         if cmd == "/禁言":
             sub = parts[1].lower() if len(parts) > 1 else ""
             if sub in ("解除", "解禁", "unmute"):
-                await self._cmd_unmute(event, ["/解禁"] + parts[2:])
+                await self._cmd_unmute(event, ["/禁言"] + parts[2:])
             elif sub in ("名单", "列表", "list", "查"):
                 await self._cmd_list_mutes(event)
             elif sub in ("历史", "history", "记录", "流水"):
-                await self._cmd_list_mute_history(event, ["/禁言历史"] + parts[2:])
+                await self._cmd_list_mute_history(event, ["/禁言"] + parts[2:])
             else:
                 await self._cmd_mute(event, parts)
         elif cmd == "/审批":

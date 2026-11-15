@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: 指令迁移对照表（1.5.0 新旧写法）
+  - name: 指令结构说明（1.6.0：旧写法已移除）
     url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#指令迁移说明重要
-    about: 不确定该用哪个写法？1.5.0 起新旧并存、优先用新写法，旧指令 1.6.0 移除，这里有一一对照。
+    about: 1.6.0 起旧写法（解禁 / 通过 / 汇报 等）已移除，这里有一一对照的新写法。
   - name: 更新日志（CHANGELOG）
     url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/blob/main/CHANGELOG.md
     about: 升级前先看这里：1.5.0 调整了默认每日预算、新增并发闸门与超时、判定记录开始留存原文。
