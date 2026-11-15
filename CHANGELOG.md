@@ -152,12 +152,6 @@
 - 自动化测试 **283 例**全绿（引用解析、图片维度、撤销、存储、智能分级、话术、回执、变体同步等）。
 - 真实群实测：markdown 警告中的 `@` 正常渲染；`/群管 撤销` 解禁与致歉流程可用。
 
-> **发版检查清单（打 tag / release 前执行）**
-> - [x] `metadata.yaml` 升到 1.6.0，README/GUIDE 徽章同步，`check_metadata.py` 全绿
-> - [x] 旧指令已移除，全量测试通过（原 `test_command_consolidation.py` 已替换为 `test_no_legacy_alias.py`）
-> - [x] 三处指令表只保留新写法；issue 模板已改为「1.6.0 已移除」措辞
-> - [ ] 打 tag `v1.6.0` + release 附件 zip（与 1.5.0 同结构：无目录条目）
-
 ## 1.5.0
 
 **本版概览**
