@@ -1211,7 +1211,7 @@ class QQGroupManager(Star):
         }
         self.mod.update_verdict(vid, revoked=info)
         self.logger.info(
-            f"[审核] 撤销处罚 id={vid} group={group} by={info['by_name'] or info['by']} "
+            f"{self._ctx('', group, record=vid)}[审核] 撤销处罚 by={info['by_name'] or info['by']} "
             f"reason={info['reason']!r} 解禁={unmute}"
         )
         return {"ok": True, "record": rec, "revoke": info, "unmute": unmute}
@@ -2516,9 +2516,10 @@ class QQGroupManager(Star):
             self.members.clear_tombstone(g, member)   # 重新入群：允许重建档案
         except Exception:
             pass
+        ctx = self._ctx(platform_id or "-", g, member)
         ev_id = self._member_event_key(g, member, data)
         if self._member_event_seen(ev_id):
-            self.logger.debug(f"[成员事件] 重复的入群事件，已忽略: {ev_id}")
+            self.logger.debug(f"{ctx}[成员] 重复的入群事件，已忽略: {ev_id}")
             return
 
         # 1) 档案：入群瞬间就能建（只有 openid），退群时「在群多久」才有据可查
@@ -2675,13 +2676,14 @@ class QQGroupManager(Star):
                 return
 
             ev_id = self._member_event_key(g, member, data)
+            ctx = self._ctx(platform_id or "-", g, member)
             if self._member_event_seen(ev_id):
-                self.logger.debug(f"[成员事件] 重复的退群事件，已忽略: {ev_id}")
+                self.logger.debug(f"{ctx}[成员] 重复的退群事件，已忽略: {ev_id}")
                 return
             ev_ts = float(data.get("timestamp") or time.time())
             if self.members.is_tombstoned(g, member, ev_ts):
                 # 档案已被管理员清理，这是重投/补发的旧事件：不再重建，也不再发通知
-                self.logger.info(f"[成员档案] 退群事件早于清理记录，跳过重建（群 {g[-6:]}）")
+                self.logger.info(f"{ctx}[成员] 退群事件早于清理记录，跳过重建")
                 return
 
             # 1) 先查档案（此时 status 还是 active，能算在群时长）
@@ -2745,15 +2747,13 @@ class QQGroupManager(Star):
                 try:
                     self.members.delete(g, member)          # 写墓碑，防止重投事件重建
                     self.logger.info(
-                        f"[成员档案] 群 {g[-6:]} 成员 {member_registry_lib.short_id(member)}"
-                        f" 退群，档案已自动删除"
+                        f"{ctx}[成员] 退群，档案已自动删除"
                     )
                 except Exception as e:  # noqa: BLE001
                     self.logger.warning(f"[成员档案] 自动删除失败: {e}")
             elif self._members_on():
                 self.logger.info(
-                    f"[成员档案] 群 {g[-6:]} 成员 {member_registry_lib.short_id(member)}"
-                    f" 已标记「已退」（档案保留；清理用 /群管 成员 清理）"
+                    f"{ctx}[成员] 已标记「已退」（档案保留；清理用 /群管 成员 清理）"
                 )
 
             if not bool(self._read_config_value(
@@ -2801,7 +2801,7 @@ class QQGroupManager(Star):
                 try:
                     await api.send_group_message(g, text, event_id=event_id)
                     sent = True
-                    self.logger.info(f"[成员事件] 群 {g} 退群通知已用 event_id 被动回复")
+                    self.logger.info(f"{ctx}[成员] 退群通知已用 event_id 被动回复")
                 except Exception as e:  # noqa: BLE001
                     code = getattr(e, "code", None)
                     self.logger.info(
@@ -2828,15 +2828,15 @@ class QQGroupManager(Star):
                     if blocked:
                         # 已经提示过该群没开主动消息权限，后续同类失败不再刷 ERROR
                         self.logger.debug(
-                            f"[成员事件] 群 {g[-6:]} 主动消息仍无权限(code={code})，跳过通知"
+                            f"{ctx}[成员] 主动消息仍无权限(code={code})，跳过通知"
                         )
                     else:
                         self.logger.warning(
-                            f"[成员事件] 群 {g[-6:]} 退群通知发送失败(code={code if code is not None else '未知'})："
+                            f"{ctx}[成员] 退群通知发送失败(code={code if code is not None else '未知'})："
                             f"{hint}（该群后续同类失败仅记 DEBUG，权限开通后自动恢复）"
                         )
         except Exception as e:  # noqa: BLE001
-            self.logger.exception(f"[成员事件] 处理退群事件异常: {e}")
+            self.logger.exception(f"{ctx if 'ctx' in locals() else self._ctx(platform_id or '-', data.get('group_openid') or '')}[成员] 处理退群事件异常: {e}")
 
     async def _resolve_member_name(self, group_openid: str, member_openid: str) -> str:
         """尽力获取成员昵称：档案 -> 内存缓存 -> 群成员接口。查不到返回空串。"""
@@ -5133,6 +5133,28 @@ class QQGroupManager(Star):
     def _mod_settings(self, group: str) -> dict:
         return self.mod.get_settings(group)
 
+    @staticmethod
+    def _lb(value, n: int = 6) -> str:
+        """短标识：日志里统一取后 6 位，完整值只在 DEBUG 出现。"""
+        text = str(value or "")
+        return text[-n:] if text else "-"
+
+    def _ctx(self, platform: str = "", group: str = "", member: str = "", record=None) -> str:
+        """日志上下文前缀：[实例 xxx|群 yyy|成员 zzz|记录 #id]。
+
+        统一格式，避免「这条日志是哪个机器人/哪个群」靠猜。
+        """
+        parts = []
+        if platform:
+            parts.append(f"实例 {platform}")
+        if group:
+            parts.append(f"群 {self._lb(group)}")
+        if member:
+            parts.append(f"成员 {self._lb(member)}")
+        if record is not None:
+            parts.append(f"记录 #{record}")
+        return ("[" + "|".join(parts) + "] ") if parts else ""
+
     # 判定记录里留存的原文上限（字）。旧版只留 200 字，复核时看不到全貌。
     _VERDICT_TEXT_CAP = 1000
 
@@ -5916,6 +5938,7 @@ class QQGroupManager(Star):
         """
         text = rep.get("text") or ""
         settings = self._mod_settings(group)
+        ctx = self._ctx("", group)
         hit = None
         if (not respect_switches) or settings.get("enable_keyword", True):
             hit = self._mod_keyword_hit(text, settings)
@@ -5923,7 +5946,7 @@ class QQGroupManager(Star):
             cat = hit["category"]
             src = str(hit.get("source") or "")
             self.logger.info(
-                f"[{scene}][零成本层] 关键词命中（类型={self.mod.get_cat_names(group).get(cat, cat)}"
+                f"{ctx}[{scene}][零成本层] 关键词命中（类型={self.mod.get_cat_names(group).get(cat, cat)}"
                 f"{'，来源=' + src if src else ''}），未调用模型"
             )
             return {
@@ -5940,7 +5963,7 @@ class QQGroupManager(Star):
         cached = self.mod.cache_get(text)
         if cached and cached.get("violation"):
             cached["from_cache"] = True
-            self.logger.info(f"[{scene}][零成本层] 判定缓存命中，未调用模型")
+            self.logger.info(f"{ctx}[{scene}][零成本层] 判定缓存命中，未调用模型")
             return cached
         return None
 
@@ -5956,8 +5979,9 @@ class QQGroupManager(Star):
         - DEBUG：提示词预览与模型原始返回（可能含群聊原文，默认级别下不落盘）。
         """
         settings = self._mod_settings(group)
+        ctx = self._ctx("", group)
         if respect_switches and not settings.get("enable_model", True):
-            self.logger.debug(f"[{scene}][模型] 模型层已关闭，不调用模型")
+            self.logger.debug(f"{ctx}[{scene}][模型] 模型层已关闭，不调用模型")
             return None  # 模型层已关闭：不发任何请求（省钱、降噪）
         # 次数熔断：当天模型判定次数达到上限后不再调模型（自动降级为仅关键词层）
         daily_limit = int(settings.get("daily_budget") or 0)
@@ -5965,7 +5989,7 @@ class QQGroupManager(Star):
             used_today = int(self.mod.stats(group).get("today_llm_calls", 0) or 0)
             if used_today >= daily_limit:
                 self.logger.warning(
-                    f"[{scene}][模型] 群 {group} 已达当日模型判定次数上限 "
+                    f"{ctx}[{scene}][模型] 群 {group} 已达当日模型判定次数上限 "
                     f"（今日 {used_today}/{daily_limit} 次），跳过模型判定"
                 )
                 return None
@@ -5974,7 +5998,7 @@ class QQGroupManager(Star):
         if respect_switches and not settings.get("enable_vision", True):
             images = []  # 图片层关闭：图片不进提示词，只判文字
         if not images and not (rep.get("text") or "").strip():
-            self.logger.debug(f"[{scene}][模型] 无可判定内容（文本为空且图片层关闭），跳过模型调用")
+            self.logger.debug(f"{ctx}[{scene}][模型] 无可判定内容（文本为空且图片层关闭），跳过模型调用")
             return None  # 没有任何可判定内容（例如关闭图片层后只剩图片）
 
         # 并发闸门：同群已在排队/执行中的模型调用达到上限时，本条消息不再排队，
@@ -5983,7 +6007,7 @@ class QQGroupManager(Star):
         pending_now = self._mod_llm_pending.get(group, 0)
         if queue_limit > 0 and pending_now >= queue_limit:
             self.logger.info(
-                f"[{scene}][模型] 同群模型调用排队已满（{pending_now}/{queue_limit}），"
+                f"{ctx}[{scene}][模型] 同群模型调用排队已满（{pending_now}/{queue_limit}），"
                 f"本条跳过模型层，仅按零成本层结果处理"
             )
             return None
@@ -6015,11 +6039,11 @@ class QQGroupManager(Star):
         async def _call(pid_used: str, with_images: list[str]):
             mode = f"多模态({len(with_images)} 张图)" if with_images else "纯文本"
             self.logger.info(
-                f"[{scene}][模型] 调用模型 provider={pid_used} 模式={mode} "
+                f"{ctx}[{scene}][模型] 调用模型 provider={pid_used} 模式={mode} "
                 f"提示词 {len(sysp) + len(up)} 字（system {len(sysp)} / user {len(up)}）"
             )
             self.logger.debug(
-                f"[{scene}][模型] 提示词预览 system={sysp[:200]!r} … user={up[:400]!r}"
+                f"{ctx}[{scene}][模型] 提示词预览 system={sysp[:200]!r} … user={up[:400]!r}"
             )
             t0 = time.perf_counter()
             sem = self._mod_llm_sem.get(group)
@@ -6043,7 +6067,7 @@ class QQGroupManager(Star):
             except asyncio.TimeoutError:
                 ms = (time.perf_counter() - t0) * 1000
                 self.logger.warning(
-                    f"[{scene}][模型] 调用超时 provider={pid_used} 模式={mode} "
+                    f"{ctx}[{scene}][模型] 调用超时 provider={pid_used} 模式={mode} "
                     f"耗时 {ms:.0f}ms（阈值 {timeout_s:.0f}s），本条按判定失败处理"
                 )
                 self._mod_last_llm = {"ts": int(time.time()), "ok": False, "ms": round(ms),
@@ -6052,7 +6076,7 @@ class QQGroupManager(Star):
             except Exception as e:
                 ms = (time.perf_counter() - t0) * 1000
                 self.logger.warning(
-                    f"[{scene}][模型] 调用异常 provider={pid_used} 模式={mode} "
+                    f"{ctx}[{scene}][模型] 调用异常 provider={pid_used} 模式={mode} "
                     f"耗时 {ms:.0f}ms: {e}"
                 )
                 self._mod_last_llm = {"ts": int(time.time()), "ok": False, "ms": round(ms),
@@ -6063,10 +6087,10 @@ class QQGroupManager(Star):
                 self._mod_llm_pending[group] = max(0, self._mod_llm_pending.get(group, 1) - 1)
             text = getattr(r, "completion_text", "") or ""
             self.logger.info(
-                f"[{scene}][模型] 调用完成 provider={pid_used} 耗时 "
+                f"{ctx}[{scene}][模型] 调用完成 provider={pid_used} 耗时 "
                 f"{(time.perf_counter() - t0) * 1000:.0f}ms{_usage_text(r)} 返回 {len(text)} 字"
             )
-            self.logger.debug(f"[{scene}][模型] 原始返回: {text[:800]!r}")
+            self.logger.debug(f"{ctx}[{scene}][模型] 原始返回: {text[:800]!r}")
             self._mod_last_llm = {"ts": int(time.time()), "ok": True,
                                   "ms": round((time.perf_counter() - t0) * 1000),
                                   "scene": scene, "provider": pid_used}
@@ -6075,7 +6099,7 @@ class QQGroupManager(Star):
         pid = pid_override or await self._mod_provider_id(event, vision=bool(images), group=group)
         if not pid:
             self.logger.warning(
-                f"[{scene}][模型] 找不到可用的对话模型"
+                f"{ctx}[{scene}][模型] 找不到可用的对话模型"
                 f"（未指定「审核模型」且取不到默认 Provider），跳过模型调用"
             )
             return None
@@ -6089,18 +6113,18 @@ class QQGroupManager(Star):
                 resp = await _call(vpid or pid, images)
                 used_images = images
             except Exception as e:
-                self.logger.warning(f"[{scene}][模型] 多模态判定失败，降级为纯文本: {e}")
+                self.logger.warning(f"{ctx}[{scene}][模型] 多模态判定失败，降级为纯文本: {e}")
         if resp is None:
             try:
                 resp = await _call(pid, [])
             except Exception as e:
-                self.logger.error(f"[{scene}][模型] 模型调用失败: {e}")
+                self.logger.error(f"{ctx}[{scene}][模型] 模型调用失败: {e}")
                 return None
 
         raw = getattr(resp, "completion_text", "") or ""
         verdict = moderation.parse_json_loose(raw)
         if not verdict:
-            self.logger.warning(f"[{scene}][模型] 模型未返回合法 JSON（{len(raw)} 字）: {raw[:200]!r}")
+            self.logger.warning(f"{ctx}[{scene}][模型] 模型未返回合法 JSON（{len(raw)} 字）: {raw[:200]!r}")
             return None
 
         # 归一化 + 回填模型信息（时长由代码决定，模型无权指定）
@@ -6121,12 +6145,12 @@ class QQGroupManager(Star):
             dim_name = self.mod.get_dim_names(group).get(basis, basis)
             cat_name = self.mod.get_cat_names(group).get(str(verdict.get("category") or ""), verdict.get("category") or "-")
             self.logger.info(
-                f"[{scene}][模型] 判定结论 违规={verdict['violation']} 依据={dim_name} 类型={cat_name} "
+                f"{ctx}[{scene}][模型] 判定结论 违规={verdict['violation']} 依据={dim_name} 类型={cat_name} "
                 f"严重度={verdict.get('severity') or '-'} 置信度={verdict['confidence']:.2f} "
                 f"理由={str(verdict.get('reason') or '')[:60]!r}"
             )
         except Exception as e:                                     # 仅日志，绝不因取名失败影响判定
-            self.logger.debug(f"[{scene}][模型] 判定结论日志输出失败: {e}")
+            self.logger.debug(f"{ctx}[{scene}][模型] 判定结论日志输出失败: {e}")
         return verdict
 
     # ---------------- 执行（撤回 + 禁言） ----------------
@@ -6426,6 +6450,9 @@ class QQGroupManager(Star):
         kind = plan["action"]
         if kind == "none":
             out["skipped_reason"] = plan.get("reason") or "未触发处罚"
+            self.logger.debug(
+                f"{self._ctx(event.get_platform_id(), group)}[审核] 未处罚：{out['skipped_reason']}"
+            )
             return out
 
         target = str(rep.get("sender") or "")
@@ -6437,6 +6464,11 @@ class QQGroupManager(Star):
         if target in wl or self._is_qq_admin_openid(group, target):
             out["skipped_reason"] = "该成员在豁免名单中"
             return out
+        self.logger.info(
+            f"{self._ctx(event.get_platform_id(), group, target)}[审核] 决策 action={kind} "
+            f"时长={out.get('duration') or '-'} 前科={plan.get('prior_offenses')} "
+            f"倍率×{plan.get('escalation')} 来源={plan.get('source')} 规则={plan.get('rule_name') or '-'}"
+        )
 
         if out["dry_run"]:
             out["skipped_reason"] = "试运行模式，未实际执行"
@@ -6702,7 +6734,7 @@ class QQGroupManager(Star):
         note = " ".join(parts[1:])[:200].strip() if len(parts) > 1 else ""
         try:
             self.logger.info(
-                f"[审核] 收到举报: group={g} reporter={reporter} "
+                f"{self._ctx(event.get_platform_id(), g)}[审核] 收到举报 reporter={self._lb(reporter)} "
                 f"text={rep.get('text', '')[:60]!r} images={len(rep.get('images') or [])} "
                 f"resolved={bool(rep.get('resolved'))}"
             )
@@ -6782,6 +6814,12 @@ class QQGroupManager(Star):
                 "todo_state": "" if settings.get("todo_enabled", True) else "disabled",
                 "model": verdict.get("model") or "keyword",
             })
+            self.logger.info(
+                f"{self._ctx(event.get_platform_id(), g, rep.get('sender'), rec.get('id'))}"
+                f"[审核] 已记录 动作={rec.get('action')} 违规={rec.get('violation')} "
+                f"档位={rec.get('severity') or '-'} 置信度={float(rec.get('confidence') or 0):.2f} "
+                f"执行={rec.get('executed')} 试运行={rec.get('dry_run')}"
+            )
             # 变体累计升级：窗口内同一人疑似变体累计到阈值 → 提醒（默认）/ 自动禁言（默认关）
             if variant:
                 await self._mod_variant_strike(event, g, rep, settings, variant, result, rec)
