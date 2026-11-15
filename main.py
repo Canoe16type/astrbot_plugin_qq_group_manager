@@ -2737,6 +2737,25 @@ class QQGroupManager(Star):
                     except Exception as e:  # noqa: BLE001
                         self.logger.debug(f"[成员档案] 回写昵称失败: {e}")
 
+            auto_delete = bool(self._read_config_value(
+                ("member_event", "auto_delete_on_leave"), default=False,
+                legacy_keys=("auto_delete_on_leave",),
+            ))
+            if auto_delete and self._members_on():
+                try:
+                    self.members.delete(g, member)          # 写墓碑，防止重投事件重建
+                    self.logger.info(
+                        f"[成员档案] 群 {g[-6:]} 成员 {member_registry_lib.short_id(member)}"
+                        f" 退群，档案已自动删除"
+                    )
+                except Exception as e:  # noqa: BLE001
+                    self.logger.warning(f"[成员档案] 自动删除失败: {e}")
+            elif self._members_on():
+                self.logger.info(
+                    f"[成员档案] 群 {g[-6:]} 成员 {member_registry_lib.short_id(member)}"
+                    f" 已标记「已退」（档案保留；清理用 /群管 成员 清理）"
+                )
+
             if not bool(self._read_config_value(
                 ("member_event", "enable_member_remove_notify"),
                 default=False,
@@ -2799,14 +2818,23 @@ class QQGroupManager(Star):
                 except Exception as e:  # noqa: BLE001
                     code = getattr(e, "code", None)
                     hint = self._explain_send_error(code)
+                    blocked = False
                     try:
+                        blocked = g in self._member_perm_blocked      # 先判断"之前是否已经提示过"
                         if int(code) == 40034105:
                             self._member_perm_blocked.add(g)
                     except (TypeError, ValueError):
                         pass
-                    self.logger.error(
-                        f"[成员事件] 退群通知发送失败(code={code if code is not None else '未知'}): {e}；{hint}"
-                    )
+                    if blocked:
+                        # 已经提示过该群没开主动消息权限，后续同类失败不再刷 ERROR
+                        self.logger.debug(
+                            f"[成员事件] 群 {g[-6:]} 主动消息仍无权限(code={code})，跳过通知"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"[成员事件] 群 {g[-6:]} 退群通知发送失败(code={code if code is not None else '未知'})："
+                            f"{hint}（该群后续同类失败仅记 DEBUG，权限开通后自动恢复）"
+                        )
         except Exception as e:  # noqa: BLE001
             self.logger.exception(f"[成员事件] 处理退群事件异常: {e}")
 

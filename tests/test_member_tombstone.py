@@ -118,5 +118,38 @@ class LeaveHandlerSkipTest(unittest.TestCase):
         self.assertTrue(p._member_event_seen(a))
 
 
+    def test_auto_delete_on_leave(self):
+        """开启 auto_delete_on_leave 后，退群即删档并写墓碑。"""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = reg.MemberRegistry(tmp.name, _Logger())
+        store.seen("g", "m", name="小明")
+
+        p = object.__new__(QQGroupManager)
+        p.logger = _Logger()
+        p.members = store
+        p._member_events_seen = {}
+        p._group_in_scope = lambda g, pid=None: True
+        p._members_on = lambda: True
+
+        def _cfg(keys, default="", legacy_keys=()):
+            k = keys[1] if isinstance(keys, tuple) and len(keys) > 1 else keys
+            if k == "auto_delete_on_leave":
+                return True
+            if k == "member_remove_try_fetch_name":
+                return False
+            if k == "enable_member_remove_notify":
+                return False
+            return default
+        p._read_config_value = _cfg
+
+        asyncio.run(p._on_group_member_remove({
+            "group_openid": "g", "member_openid": "m",
+            "timestamp": time.time(), "_event_id": "evt-auto",
+        }))
+        self.assertIsNone(store.get("g", "m"), "开启自动删档后档案应被删除")
+        self.assertTrue(store.is_tombstoned("g", "m", time.time() - 5))
+
+
 if __name__ == "__main__":
     unittest.main()

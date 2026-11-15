@@ -24,7 +24,7 @@ python3 tools/selftest_variant.py        # 变体检测（谐音 / 形近 / 插�
 python3 tools/selftest_mod_integration.py  # 审核链路（无 AstrBot 时自动跳过 B 层）
 python3 tools/selftest_admin_register.py   # /管理登记 指令链路
 python3 tools/selftest_rule_spec.py        # 群规文本解析（时长 / 阈值 / 规则字段）
-python -m unittest discover -s tests -v     # 当前 291 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
+python -m unittest discover -s tests -v     # 当前 292 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
 node --check pages/dashboard/app.js         # 动过面板必跑
 ```
 
@@ -80,7 +80,7 @@ node --check pages/dashboard/app.js         # 动过面板必跑
   带 `@` 的模板默认走 markdown，否则 `<qqbot-at-user>` 不会被解析。
 - **新增群级配置**要同时改四处：`moderation.DEFAULT_SETTINGS`、面板 `index.html` 的 `s-<key>`、
   `app.js` 的 `S_KEYS` 与数值裁剪、`docs/GUIDE.md` 配置说明；插件级配置改 `_conf_schema.json`。
-- 涉及审核判定 / 变体检测 / 撤销 / 存储的改动，**必须**补 `tests/` 用例（见上表），并跑全量 291 例。
+- 涉及审核判定 / 变体检测 / 撤销 / 存储的改动，**必须**补 `tests/` 用例（见上表），并跑全量 292 例。
 - 改存储层时注意：记录**不常驻内存**、写盘要节流/摊还、序号在「清空后归零、有记录时单调」。
 - 不引入构建步骤（面板保持单文件 HTML 可直接打开）。
 
