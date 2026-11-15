@@ -5181,6 +5181,17 @@ class QQGroupManager(Star):
     def _mod_settings(self, group: str) -> dict:
         return self.mod.get_settings(group)
 
+    def _bind_log_group(self, group: str) -> None:
+        """面板请求没有平台事件上下文，但可以从 payload 里拿到 group；绑定到日志上下文。
+
+        contextvars 按协程/任务隔离，请求结束自动失效，不需要手动 reset。
+        """
+        try:
+            if group:
+                LOG_CONTEXT.set(self._ctx("", str(group)))
+        except Exception:
+            pass
+
     @staticmethod
     def _lb(value, n: int = 6) -> str:
         """短标识：日志里统一取后 6 位，完整值只在 DEBUG 出现。"""
@@ -7284,6 +7295,7 @@ class QQGroupManager(Star):
         """POST {group, alias} 手动备注群名（仅面板显示，不改变 openid）。"""
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         self.mod.set_group_alias(g, str(payload.get("alias") or ""))
@@ -7299,6 +7311,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         one = str(payload.get("group") or "")
+        self._bind_log_group(one)
         if one:
             targets = [one]
         else:
@@ -7374,6 +7387,7 @@ class QQGroupManager(Star):
 
     async def web_mod_detail(self):
         g = request.query.get("group", "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         return json_response({
@@ -7396,6 +7410,7 @@ class QQGroupManager(Star):
     async def web_mod_rules_save(self):
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         rules = payload.get("rules")
         if not g or not isinstance(rules, list):
             return json_response({"error": "invalid payload"})
@@ -7449,6 +7464,7 @@ class QQGroupManager(Star):
     async def web_mod_settings_save(self):
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         allowed = set(moderation.ModerationStore.DEFAULT_SETTINGS.keys())
@@ -7537,6 +7553,7 @@ class QQGroupManager(Star):
         if rec is None:
             return json_response({"ok": False, "error": "not_found"})
         group = str(payload.get("group") or rec.get("group") or "")
+        self._bind_log_group(str(group or ""))
         # 面板登录者就是 AstrBot 管理员，按 bot admin 处理（不受「不能撤自己」限制）
         res = await self._revoke_verdict(
             group, vid, operator="panel", operator_name="面板管理员",
@@ -7553,6 +7570,7 @@ class QQGroupManager(Star):
         except (TypeError, ValueError):
             days = 0
         group = str(payload.get("group") or "")
+        self._bind_log_group(str(group or ""))
         if days <= 0:
             return json_response({"ok": False, "error": "days 必须大于 0"})
         removed = self.mod.prune_older_than(days, group)
@@ -7565,6 +7583,7 @@ class QQGroupManager(Star):
         服务端只做筛选与截断，CSV 交给面板前端拼（不依赖 AstrBot 版本的响应体能力）。
         """
         g = str(request.query.get("group", "") or "")
+        self._bind_log_group(str(g or ""))
         days = request.query.get("days", 0, type=int) or 0
         limit = min(5000, max(1, request.query.get("limit", 1000, type=int)))
         since = int(time.time()) - days * 86400 if days > 0 else 0
@@ -7579,6 +7598,7 @@ class QQGroupManager(Star):
 
     async def web_mod_verdicts(self):
         g = request.query.get("group", "")
+        self._bind_log_group(str(g or ""))
         limit = request.query.get("limit", 100, type=int)
         return json_response({"items": self.mod.list_verdicts(g, limit)})
 
@@ -7604,6 +7624,7 @@ class QQGroupManager(Star):
     async def web_members(self):
         """GET /members?group=xxx&status=&keyword=&sort=&page=&size= 成员档案列表。"""
         g = str(request.query.get("group", "") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         status = str(request.query.get("status", "all") or "all")
@@ -7631,6 +7652,7 @@ class QQGroupManager(Star):
     async def web_members_stats(self):
         """GET /members/stats?group=xxx 档案统计。"""
         g = str(request.query.get("group", "") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         return json_response(self.members.stats(g))
@@ -7639,6 +7661,7 @@ class QQGroupManager(Star):
         """POST /members/update body: {group, openid, nickname?, note?}"""
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         openid = str(payload.get("openid") or "")
         if not g or not openid:
             return json_response({"error": "invalid payload"})
@@ -7657,6 +7680,7 @@ class QQGroupManager(Star):
         """POST /members/delete body: {group, openid}"""
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         openid = str(payload.get("openid") or "")
         if not g or not openid:
             return json_response({"error": "invalid payload"})
@@ -7667,6 +7691,7 @@ class QQGroupManager(Star):
         """POST /members/clear_left body: {group}"""
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "invalid payload"})
         n = self.members.delete_left(g)
@@ -7680,6 +7705,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         text = str(payload.get("text") or "")
         if not g or not text.strip():
             return json_response({"error": "invalid payload"})
@@ -7712,6 +7738,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "invalid payload"})
         api = self._api_for_group_or_default(g)
@@ -7743,6 +7770,7 @@ class QQGroupManager(Star):
     async def web_mod_admins(self):
         """GET /mod/admins?group=xxx 变体提醒名单（群内管理员用 /管理登记 自助登记）。"""
         g = request.query.get("group", "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         items = self.mod.get_admins(g)
@@ -7757,6 +7785,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         openid = str(payload.get("openid") or "")
         if not g or not openid:
             return json_response({"error": "invalid payload"})
@@ -7767,6 +7796,7 @@ class QQGroupManager(Star):
     async def web_mod_todo(self):
         """GET /mod/todo?group=xxx 待办队列（低置信未处理 + 变体疑似，都没人工处理过的）。"""
         g = request.query.get("group", "")
+        self._bind_log_group(str(g or ""))
         if not g:
             return json_response({"error": "missing group"})
         limit = request.query.get("limit", 100, type=int)
@@ -7788,6 +7818,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         raw_ids = payload.get("ids") or ([payload.get("id")] if payload.get("id") else [])
         action = str(payload.get("action") or "ignore").lower()
         operator = str(payload.get("operator") or "面板")[:64]
@@ -7870,11 +7901,13 @@ class QQGroupManager(Star):
 
     async def web_mod_stats(self):
         g = request.query.get("group", "")
+        self._bind_log_group(str(g or ""))
         return json_response({"stats": self.mod.stats(g), "groups": len(self._all_known_group_list())})
 
     async def web_mod_test(self):
         payload = await request.json(default={})
         g = str(payload.get("group") or "")
+        self._bind_log_group(str(g or ""))
         text = str(payload.get("text") or "")
         try:
             prior_override = int(payload.get("prior")) if payload.get("prior") not in (None, "") else None
@@ -9129,6 +9162,7 @@ class QQGroupManager(Star):
         """
         payload = await request.json(default={})
         g = str(payload.get("group") or "").strip()
+        self._bind_log_group(str(g or ""))
         removed = self.mod.clear_verdicts(g)
         self.logger.info(f"WebUI 清空判定记录：{removed} 条（{'群 ' + g if g else '全部群'}）")
         return json_response({"ok": True, "cleared": removed, "group": g,
