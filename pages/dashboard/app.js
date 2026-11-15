@@ -1436,13 +1436,16 @@ async function loadRecords() {
   rows.innerHTML = "";
   (res.items || []).forEach((v) => {
     const tr = document.createElement("tr");
+    tr.style.cursor = "pointer";
+    tr.title = "点击查看完整判定详情";
+    tr.onclick = () => showVerdictDetail(v);
     const dim = (detail && detail.dim_names) || DIM_LABELS;
     const cats = (detail && detail.cat_names) || CAT_LABELS;
     tr.innerHTML =
       `<td>#${v.id == null ? "-" : v.id}</td>` +
       `<td>${ts2str(v.created_at)}</td>` +
       `<td>${esc((v.target_name || v.target || "-").slice(0, 12))}</td>` +
-      `<td class="vtext" data-vd="${v.id}" title="${esc(v.text || "")}">${esc((v.text || "—").slice(0, 24))}${(v.text || "").length > 24 ? "…" : ""}` +
+      `<td class="vtext" title="${esc(v.text || "")}">${esc((v.text || "—").slice(0, 24))}${(v.text || "").length > 24 ? "…" : ""}` +
       (v.images ? ` <span class="hint">🖼${v.images}</span>` : "") + `</td>` +
       `<td>${esc(dim[v.basis] || v.basis || "-")}</td>` +
       `<td><span class="tag ${v.violation ? "hit" : "clean"}">${v.violation ? esc(cats[v.category] || v.category || "违规") : "未违规"}</span>` +
@@ -1462,12 +1465,11 @@ async function loadRecords() {
       `<button class="btn" data-ok="${v.id}" title="判定正确，加入提示词正例">正确</button> ` +
       (v.executed && !v.revoked ? `<button class="btn" data-rv="${v.id}" title="撤销这条处罚并致歉">撤销</button> ` : "") +
       `<button class="btn danger" data-dv="${v.id}" title="删除这条本地记录">✕</button></td>`;
-    tr.querySelector("[data-fb]").onclick = () => markFeedback(v.id, "false_positive");
-    tr.querySelector("[data-ok]").onclick = () => markFeedback(v.id, "true_positive");
-    tr.querySelector("[data-vd]").onclick = () => showVerdictDetail(v);
-    tr.querySelector("[data-dv]").onclick = () => delVerdict(v.id);
+    tr.querySelector("[data-fb]").onclick = (e) => { e.stopPropagation(); markFeedback(v.id, "false_positive"); };
+    tr.querySelector("[data-ok]").onclick = (e) => { e.stopPropagation(); markFeedback(v.id, "true_positive"); };
+    tr.querySelector("[data-dv]").onclick = (e) => { e.stopPropagation(); delVerdict(v.id); };
     const rv = tr.querySelector("[data-rv]");
-    if (rv) rv.onclick = () => revokeVerdict(v);
+    if (rv) rv.onclick = (e) => { e.stopPropagation(); revokeVerdict(v); };
     rows.appendChild(tr);
   });
   if (!(res.items || []).length) rows.innerHTML = '<tr><td colspan="10" style="color:var(--sub)">暂无记录</td></tr>';

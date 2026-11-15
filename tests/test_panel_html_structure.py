@@ -42,5 +42,19 @@ class PanelHtmlStructureTest(unittest.TestCase):
         self.assertEqual(head.count("<th>"), 5)
 
 
+class PanelJsBehaviorTest(unittest.TestCase):
+    JS = (Path(__file__).resolve().parent.parent / "pages" / "dashboard" / "app.js").read_text(encoding="utf-8")
+
+    def test_verdict_row_is_fully_clickable(self):
+        self.assertIn("tr.onclick = () => showVerdictDetail(v);", self.JS)
+        self.assertNotIn('data-vd="${v.id}"', self.JS)
+
+    def test_row_buttons_stop_propagation(self):
+        for marker in ('[data-fb]', '[data-ok]', '[data-dv]', '[data-rv]'):
+            idx = self.JS.find(marker)
+            self.assertGreater(idx, 0, marker)
+            self.assertIn("stopPropagation", self.JS[idx:idx + 160], f"{marker} 未阻止冒泡")
+
+
 if __name__ == "__main__":
     unittest.main()
