@@ -100,6 +100,23 @@ class LeaveHandlerSkipTest(unittest.TestCase):
         }))
         self.assertIsNone(store.get("g", "m"), "迟到的退群事件不应把档案建回来")
 
+    def test_event_key_scoped_by_group_and_member(self):
+        """平台会跨群复用同一个 event_id：不同群/不同成员不能互相去重。"""
+        k1 = QQGroupManager._member_event_key("g1", "m1", {"_event_id": "same"})
+        k2 = QQGroupManager._member_event_key("g2", "m1", {"_event_id": "same"})
+        k3 = QQGroupManager._member_event_key("g1", "m2", {"_event_id": "same"})
+        self.assertNotEqual(k1, k2)
+        self.assertNotEqual(k1, k3)
+
+    def test_dedupe_allows_same_id_in_other_group(self):
+        p = object.__new__(QQGroupManager)
+        p._member_events_seen = {}
+        a = QQGroupManager._member_event_key("g1", "m", {"_event_id": "x"})
+        b = QQGroupManager._member_event_key("g2", "m", {"_event_id": "x"})
+        self.assertFalse(p._member_event_seen(a))
+        self.assertFalse(p._member_event_seen(b), "另一个群的同 id 事件不能被当成重复")
+        self.assertTrue(p._member_event_seen(a))
+
 
 if __name__ == "__main__":
     unittest.main()

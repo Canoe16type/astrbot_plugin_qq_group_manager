@@ -2471,6 +2471,16 @@ class QQGroupManager(Star):
     # 入群欢迎去重窗口（秒）：同一事件被重推、或审批通过时已经欢迎过，不再重复发。
     JOIN_WELCOME_DEDUPE_SECONDS = 600.0
 
+    @staticmethod
+    def _member_event_key(group: str, member: str, data: dict) -> str:
+        """事件去重键：群 + 成员 + 平台 event_id。
+
+        平台会**跨群复用同一个 event_id**（实测两个群的退群事件 id 完全相同），
+        只按 event_id 去重会把别的群的正常事件当重复丢掉。
+        """
+        base = str(data.get("_event_id") or data.get("timestamp") or "")
+        return f"{group}|{member}|{base}"
+
     def _member_event_seen(self, event_id: str) -> bool:
         """退群/入群事件去重：平台重投或重连补发时，同一事件只处理一次。"""
         cache = getattr(self, "_member_events_seen", None)
@@ -2506,6 +2516,10 @@ class QQGroupManager(Star):
             self.members.clear_tombstone(g, member)   # 重新入群：允许重建档案
         except Exception:
             pass
+        ev_id = self._member_event_key(g, member, data)
+        if self._member_event_seen(ev_id):
+            self.logger.debug(f"[成员事件] 重复的入群事件，已忽略: {ev_id}")
+            return
 
         # 1) 档案：入群瞬间就能建（只有 openid），退群时「在群多久」才有据可查
         if self._members_on():
@@ -2660,7 +2674,7 @@ class QQGroupManager(Star):
             if not self._group_in_scope(g, platform_id):
                 return
 
-            ev_id = str(data.get("_event_id") or f"{g}|{member}|{data.get('timestamp') or ''}")
+            ev_id = self._member_event_key(g, member, data)
             if self._member_event_seen(ev_id):
                 self.logger.debug(f"[成员事件] 重复的退群事件，已忽略: {ev_id}")
                 return
