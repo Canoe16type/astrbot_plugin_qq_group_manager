@@ -2471,6 +2471,23 @@ class QQGroupManager(Star):
     # 入群欢迎去重窗口（秒）：同一事件被重推、或审批通过时已经欢迎过，不再重复发。
     JOIN_WELCOME_DEDUPE_SECONDS = 600.0
 
+    def _member_event_seen(self, event_id: str) -> bool:
+        """退群/入群事件去重：平台重投或重连补发时，同一事件只处理一次。"""
+        cache = getattr(self, "_member_events_seen", None)
+        if cache is None:
+            cache = self._member_events_seen = {}
+        now = time.time()
+        for k, ts in list(cache.items()):
+            if now - ts > 300:          # 5 分钟窗口足够覆盖重投
+                cache.pop(k, None)
+        if event_id in cache:
+            return True
+        cache[event_id] = now
+        if len(cache) > 500:
+            for k, _ in sorted(cache.items(), key=lambda kv: kv[1])[: len(cache) - 500]:
+                cache.pop(k, None)
+        return False
+
     async def _on_group_member_add(self, data: dict, platform_id: str | None = None) -> None:
         """成员入群（GROUP_MEMBER_ADD）：建档案 + 发欢迎语。
 
@@ -2485,6 +2502,10 @@ class QQGroupManager(Star):
             return
         if not self._group_in_scope(g, platform_id):
             return
+        try:
+            self.members.clear_tombstone(g, member)   # 重新入群：允许重建档案
+        except Exception:
+            pass
 
         # 1) 档案：入群瞬间就能建（只有 openid），退群时「在群多久」才有据可查
         if self._members_on():
@@ -2637,6 +2658,16 @@ class QQGroupManager(Star):
                 self.logger.warning(f"[成员事件] 退群事件缺少必要字段: {data}")
                 return
             if not self._group_in_scope(g, platform_id):
+                return
+
+            ev_id = str(data.get("_event_id") or f"{g}|{member}|{data.get('timestamp') or ''}")
+            if self._member_event_seen(ev_id):
+                self.logger.debug(f"[成员事件] 重复的退群事件，已忽略: {ev_id}")
+                return
+            ev_ts = float(data.get("timestamp") or time.time())
+            if self.members.is_tombstoned(g, member, ev_ts):
+                # 档案已被管理员清理，这是重投/补发的旧事件：不再重建，也不再发通知
+                self.logger.info(f"[成员档案] 退群事件早于清理记录，跳过重建（群 {g[-6:]}）")
                 return
 
             # 1) 先查档案（此时 status 还是 active，能算在群时长）

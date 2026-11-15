@@ -55,10 +55,64 @@ class MemberRegistry:
         self.dir = data_dir
         self.logger = logger
         self.path = os.path.join(data_dir, "members.json")
+        # 墓碑：记录「某群某成员在何时被删除」。平台重投退群事件时，靠它阻止档案被重建。
+        self.tomb_path = os.path.join(data_dir, "member_tombstones.json")
+        self.tombstones: dict[str, float] = {}
         self.groups: dict[str, dict[str, dict]] = {}
         self._dirty = False
         self._last_flush = 0.0
         self._load()
+        self._load_tombstones()
+
+    # ------------------------------------------------------------------
+    # 墓碑（删除后防止被重复事件重建）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _tkey(group_openid: str, openid: str) -> str:
+        return f"{group_openid}|{openid}"
+
+    def _load_tombstones(self) -> None:
+        try:
+            with open(self.tomb_path, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            self.tombstones = {str(k): float(v) for k, v in data.items()}
+        except FileNotFoundError:
+            return
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"读取 member_tombstones.json 失败（忽略）: {e}")
+
+    def _save_tombstones(self) -> None:
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            tmp = self.tomb_path + ".tmp"
+            cutoff = _now() - 30 * 86400
+            self.tombstones = {k: v for k, v in self.tombstones.items() if v >= cutoff}
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self.tombstones, f, ensure_ascii=False)
+            os.replace(tmp, self.tomb_path)
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"写入 member_tombstones.json 失败: {e}")
+
+    def tombstone(self, group_openid: str, openid: str, ts: float | None = None) -> None:
+        self.tombstones[self._tkey(group_openid, openid)] = float(ts or _now())
+        self._save_tombstones()
+
+    def clear_tombstone(self, group_openid: str, openid: str) -> None:
+        if self.tombstones.pop(self._tkey(group_openid, openid), None) is not None:
+            self._save_tombstones()
+
+    def is_tombstoned(self, group_openid: str, openid: str, event_ts: float | None = None) -> bool:
+        """该成员是否在清理后又被「旧的」退群事件找上门。
+
+        - 有墓碑，且事件时间不晚于墓碑（允许 60s 时钟误差）→ 是重复投递，忽略；
+        - 事件时间明显晚于墓碑 → 说明是**又退了一次群**（期间入群过），应正常处理。
+        """
+        ts = self.tombstones.get(self._tkey(group_openid, openid))
+        if not ts:
+            return False
+        if event_ts is not None and float(event_ts) > float(ts) + 60:
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # 读写
@@ -381,6 +435,7 @@ class MemberRegistry:
         if str(openid or "") in rows:
             rows.pop(str(openid or ""), None)
             self.save()
+            self.tombstone(group_openid, openid)      # 防止重复的退群事件把档案建回来
             return True
         return False
 
@@ -391,6 +446,8 @@ class MemberRegistry:
             rows.pop(o, None)
         if gone:
             self.save()
+            for o in gone:
+                self.tombstone(group_openid, o)
         return len(gone)
 
     def purge_group(self, group_openid: str) -> int:
@@ -403,6 +460,12 @@ class MemberRegistry:
         count = len(rows or {})
         if count:
             self.save()
+        prefix = str(group_openid or "") + "|"
+        stale = [k for k in self.tombstones if k.startswith(prefix)]
+        for k in stale:
+            self.tombstones.pop(k, None)
+        if stale:
+            self._save_tombstones()
         return count
 
     def upsert_many(self, group_openid: str, rows: Iterable[dict]) -> tuple[int, int]:
