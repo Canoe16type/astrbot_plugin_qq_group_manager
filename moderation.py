@@ -275,6 +275,7 @@ def decide_action(
     prior_offenses: int = 0,
     prior_bump_at: int = 2,
     force_mute_priors: int = 0,
+    rule_floor_high: bool = True,
 ) -> dict:
     """把 AI（或关键词层）的判定翻译成可执行动作 + 时长。
 
@@ -345,6 +346,7 @@ def decide_action(
 
     if smart and (matched_rule is None or force_hit):
         sev = "high" if force_hit else str(verdict.get("severity") or "medium").lower()
+        orig_sev = sev          # 升档只改动作，时长仍按原始档位算
         try:
             conf = float(verdict.get("confidence") or 0)
         except (TypeError, ValueError):
@@ -372,9 +374,14 @@ def decide_action(
                         "match_by": match_by, "source": "smart", "severity": sev,
                         "basis": verdict.get("basis") or DIM_SEMANTIC,
                         "skipped_reason": f"高危但置信度 {conf:.2f} < {high_conf:.2f}，转人工复核"}
-            base_secs = int(severity_to_seconds("high"))
-            if rule_secs:
-                base_secs = max(base_secs, int(rule_secs))
+            if force_hit:
+                base_secs = int(severity_to_seconds("high"))
+                if rule_secs:
+                    base_secs = max(base_secs, int(rule_secs))
+            else:
+                # 例如「轻微 + 前科 4 次升到 high」：动作是禁言，但时长按 low 的基础算，
+                # 否则屡犯的轻微辱骂会比单次严重违规罚得还重。
+                base_secs = int(severity_to_seconds(orig_sev if orig_sev in tier_order else "medium"))
             secs = max(60, min(base_secs, int(max_seconds)))
             return {"action": "mute", "seconds": secs,
                     "rule_name": (matched_rule or {}).get("name") or "",
@@ -400,6 +407,19 @@ def decide_action(
     if seconds < 60:
         seconds = default_seconds
     seconds = max(60, min(int(seconds), int(max_seconds)))
+
+    # 规则时长地板：
+    # 1) 只靠 category 兜底命中的规则不够精确，不能把任意档位压到极短；
+    # 2) 判定为「严重」时，即使显式命中了一条短时长规则，也不能低于 high 档基础（可关）。
+    if smart and matched_rule is not None:
+        sev0 = str(verdict.get("severity") or "medium").lower()
+        floor = 0
+        if str(match_by).startswith("category"):
+            floor = int(severity_to_seconds(sev0))
+        if rule_floor_high and sev0 == "high":
+            floor = max(floor, int(severity_to_seconds("high")))
+        if floor:
+            seconds = max(seconds, min(floor, int(max_seconds)))
 
     return {
         "action": "mute",
@@ -1000,6 +1020,8 @@ class ModerationStore:
         "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
         "smart_force_mute_priors": 0,  # 前科达到 N 次直接禁言（0=不启用）
         "smart_max_multiplier": 3.0,   # 智能分级：累犯加刑倍率上限（默认 3×）
+        # 判为「严重」时，即使命中了一条短时长群规，也至少按 high 档基础时长处理
+        "rule_floor_high": True,
         "whitelist": [],              # 豁免成员 openid（管理员自动豁免）
         "keywords": {},               # 群自定义关键词 {category: [pattern]}
         # ---- 变体检测（谐音/形近/插符号绕过）----

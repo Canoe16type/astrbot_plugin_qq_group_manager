@@ -6146,10 +6146,12 @@ class QQGroupManager(Star):
         warn_thr = float(st.get("warn_confidence_threshold") or 0.6)
         if conf < thr and not verdict.get("from_cache"):
             if smart and sev0.lower() == "high":
-                plan.update(action="todo", reason=f"高危但置信度 {conf:.2f} < {thr:.2f}，转人工复核")
+                # 高危但拿不准：先把内容撤下来（可逆、无成员影响），处罚交人工决定
+                plan.update(action="todo", recall=True,
+                            reason=f"高危但置信度 {conf:.2f} < {thr:.2f}，已撤回并转人工复核")
             elif smart and warn_thr <= conf < thr:
-                # 拿不准但已经像违规：警告不改变成员状态，可以放行；不撤回、不禁言
-                plan.update(action="warn", recall=False, source="smart",
+                # 中度以上：撤回 + 警告（内容仍有风险）；轻微：只警告，不动消息
+                plan.update(action="warn", recall=sev0.lower() != "low", source="smart",
                             severity=sev0 or "medium",
                             reason=f"置信度 {conf:.2f} 低于阈值 {thr:.2f}，仅警告不处罚")
             else:
@@ -6167,6 +6169,7 @@ class QQGroupManager(Star):
             prior_offenses=prior,
             prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
             force_mute_priors=int(st.get("smart_force_mute_priors") or 0),
+            rule_floor_high=bool(st.get("rule_floor_high", True)),
         )
         kind = str(dec.get("action") or "mute")
         plan.update({
@@ -6410,8 +6413,10 @@ class QQGroupManager(Star):
             out["skipped_reason"] = "试运行模式，未实际执行"
             return out
 
-        # 待办不需要任何 API：高危低置信时先收口，避免被下面「无 API」逻辑误判成执行失败
+        # 待办不需要任何 API 客户端，但如果计划要求「先撤回」，这里顺手把内容撤下来
         if kind == "todo":
+            if plan.get("recall"):
+                out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
             out["pending_review"] = True
             out["executed"] = False
             out["skipped_reason"] = out.get("skipped_reason") or "转人工复核"

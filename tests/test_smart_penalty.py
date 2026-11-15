@@ -160,7 +160,8 @@ class ExecuteSmartTest(unittest.TestCase):
         self.assertEqual(res["action"], "todo")
         self.assertTrue(res["pending_review"])
         self.assertFalse(res["executed"])
-        self.assertEqual(api.calls, [])
+        self.assertIn(("recall", "m1"), api.calls)          # 高危低置信：先撤下内容
+        self.assertFalse(any(c[0] == "mute" for c in api.calls))
         self.assertEqual(p.warnings, [])
 
     def test_prior_escalates_duration(self):
@@ -314,6 +315,51 @@ class ExecuteSmartTest(unittest.TestCase):
                                          confidence_threshold=0.75, warn_confidence_threshold=0.6)
         plan = p._mod_plan("g1", _verdict("high", 0.62), _rep())
         self.assertEqual(plan["action"], "todo")
+
+
+    def test_high_low_conf_recalls_before_todo(self):
+        """高危低置信：先撤回内容（可逆），处罚交人工。"""
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True,
+                                         confidence_threshold=0.75, warn_confidence_threshold=0.6)
+        plan = p._mod_plan("g1", _verdict("high", 0.62), _rep())
+        self.assertEqual(plan["action"], "todo")
+        self.assertTrue(plan["recall"])
+
+    def test_medium_warn_band_recalls_but_low_does_not(self):
+        p = _plugin(_Api())
+        p._mod_settings = lambda g: dict(SETTINGS, smart_penalty=True,
+                                         confidence_threshold=0.75, warn_confidence_threshold=0.6)
+        mid = p._mod_plan("g1", _verdict("medium", 0.62), _rep())
+        low = p._mod_plan("g1", _verdict("low", 0.62), _rep())
+        self.assertEqual(mid["action"], "warn")
+        self.assertTrue(mid["recall"])
+        self.assertFalse(low["recall"])
+
+    def test_execute_todo_recalls_without_mute(self):
+        api = _Api()
+        p = _plugin(api)
+        res = asyncio.run(p._mod_execute(_event(), "g1", _rep(), _verdict("high", 0.62), SETTINGS))
+        self.assertEqual(res["action"], "todo")
+        self.assertTrue(res["pending_review"])
+        self.assertIn(("recall", "m1"), api.calls)
+        self.assertFalse(any(c[0] == "mute" for c in api.calls))
+
+
+    def test_high_rule_floor_on(self):
+        """严重违规命中 30 分钟规则时，默认按 high 基础（1 天）兜底。"""
+        rules = [{"id": "r1", "name": "广告", "enabled": True, "category": "ad",
+                  "severity": "medium", "seconds": 1800}]
+        d = decide_action(_verdict("high", 0.9, cat="ad", rid="r1"), rules=rules, smart=True)
+        self.assertEqual(d["action"], "mute")
+        self.assertGreaterEqual(d["seconds"], 86400)
+
+    def test_high_rule_floor_can_be_disabled(self):
+        rules = [{"id": "r1", "name": "广告", "enabled": True, "category": "ad",
+                  "severity": "medium", "seconds": 1800}]
+        d = decide_action(_verdict("high", 0.9, cat="ad", rid="r1"), rules=rules,
+                          smart=True, rule_floor_high=False)
+        self.assertEqual(d["seconds"], 1800)
 
 
 if __name__ == "__main__":
