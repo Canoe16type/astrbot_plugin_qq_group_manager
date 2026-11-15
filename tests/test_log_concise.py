@@ -41,6 +41,27 @@ class ConciseModeTest(unittest.TestCase):
         lg.info("收到群消息")
         self.assertEqual(len(lg.buffer), 1)
 
+    def test_contextvar_prefixes_automatically(self):
+        lg = self._logger(False)
+        token = pl.LOG_CONTEXT.set("[实例 default|群 123] ")
+        try:
+            lg.info("决策 action=warn")
+        finally:
+            pl.LOG_CONTEXT.reset(token)
+        line = str(lg.buffer[-1])
+        self.assertIn("[实例 default|群 123]", line)
+        self.assertIn("决策 action=warn", line)
+
+    def test_no_double_prefix(self):
+        lg = self._logger(False)
+        token = pl.LOG_CONTEXT.set("[实例 default|群 123] ")
+        try:
+            lg.info("[实例 default|群 123] 决策")
+        finally:
+            pl.LOG_CONTEXT.reset(token)
+        line = str(lg.buffer[-1])
+        self.assertEqual(line.count("实例 default"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

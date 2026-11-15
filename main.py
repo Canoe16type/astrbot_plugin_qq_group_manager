@@ -19,6 +19,7 @@
 """
 
 import asyncio
+import functools
 import ipaddress
 import json
 import os
@@ -43,7 +44,7 @@ from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import json_response, request, stream_response
 
-from .plugin_logger import PluginLogger
+from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qq_api import QQApi, QQApiError
 from . import button_kit
 from . import member_event
@@ -535,6 +536,33 @@ def _refresh_hint(updated: int, denied: int, no_bot: int, failed: list, first_er
     if failed:
         return f"更新 {updated} 个群名；{len(failed)} 个失败：{first_error[:120]}{tail}"
     return f"没有需要拉取的群{tail}"
+
+
+def _with_log_context(func):
+    """自动把「实例/群/成员」写入本协程内所有日志（contextvars 传播）。
+
+    这样不用逐个改 200+ 个 logger 调用点，也能保证日志都带上下文；
+    手动已经带了 `_ctx()` 的日志不会重复加前缀（PluginLogger 会判断）。
+    """
+    @functools.wraps(func)
+    async def wrapper(self, *args, **kwargs):
+        ctx = ""
+        try:
+            first = args[0] if args else (kwargs.get("event") or kwargs.get("data"))
+            if hasattr(first, "get_platform_id"):
+                ctx = self._ctx(first.get_platform_id() or "", first.get_group_id() or "",
+                                first.get_sender_id() or "")
+            elif isinstance(first, dict):
+                platform = args[1] if len(args) > 1 and isinstance(args[1], str) else ""
+                ctx = self._ctx(platform, first.get("group_openid") or "", first.get("member_openid") or "")
+        except Exception:
+            ctx = ""
+        token = LOG_CONTEXT.set(ctx)
+        try:
+            return await func(self, *args, **kwargs)
+        finally:
+            LOG_CONTEXT.reset(token)
+    return wrapper
 
 
 class QQGroupManager(Star):
@@ -1246,6 +1274,7 @@ class QQGroupManager(Star):
         return (f"#{v.get('id')} {ts} {v.get('target_name') or v.get('target') or '-'}｜{verdict}"
                 f"｜{act_txt}｜置信度 {float(v.get('confidence') or 0):.2f}")
 
+    @_with_log_context
     async def _cmd_revoke(self, event: AstrMessageEvent, parts: list[str]) -> None:
         """撤销处罚：/群管 撤销 @用户 [理由]｜/群管 撤销 <记录ID> [理由]｜/群管 撤销 列表 [@用户] [条数]"""
         g = event.get_group_id()
@@ -2320,11 +2349,13 @@ class QQGroupManager(Star):
     if _BUTTON_ACTION_SUPPORTED:
 
         @_BUTTON_ACTION_DECORATOR()
+        @_with_log_context
         async def on_button_action(self, event: AstrMessageEvent):
             """按钮点击：入群审批的「通过 / 拒绝」"""
             await self._consume_button_action(event)
 
     @filter.event_message_type(EventMessageType.GROUP_MESSAGE)
+    @_with_log_context
     async def on_group_message(self, event: AstrMessageEvent):
         """群消息：成员/消息缓存、巡检、新群欢迎（指令走 @filter.command）"""
         try:
@@ -2503,6 +2534,7 @@ class QQGroupManager(Star):
                 cache.pop(k, None)
         return False
 
+    @_with_log_context
     async def _on_group_member_add(self, data: dict, platform_id: str | None = None) -> None:
         """成员入群（GROUP_MEMBER_ADD）：建档案 + 发欢迎语。
 
@@ -2662,6 +2694,7 @@ class QQGroupManager(Star):
                 keep.pop(k, None)
         self._join_welcomed = keep
 
+    @_with_log_context
     async def _on_group_member_remove(self, data: dict, platform_id: str | None = None) -> None:
         """成员退群/被移出：先查档案，再按配置在群内发言通知。
 
@@ -2908,56 +2941,67 @@ class QQGroupManager(Star):
         """群管指令组：禁言 / 撤回 / 审批 / 群规审核 / 词库相关操作"""
 
     @qgm_group.command("帮助")
+    @_with_log_context
     async def g_help(self, event: AstrMessageEvent):
         """查看本插件完整帮助（比自动指令树更详细）"""
         await self._run_command(event, forced_cmd="/群管", skip=1)
 
     @qgm_group.command("禁言")
+    @_with_log_context
     async def g_mute(self, event: AstrMessageEvent):
         """禁言 @用户 时长 [理由]｜禁言 解除 @用户｜禁言 名单｜禁言 历史"""
         await self._run_command(event, forced_cmd="/禁言", skip=1)
 
     @qgm_group.command("撤回")
+    @_with_log_context
     async def g_recall(self, event: AstrMessageEvent):
         """撤回消息（先引用目标消息再发）"""
         await self._run_command(event, forced_cmd="/撤回", skip=1)
 
     @qgm_group.command("审批")
+    @_with_log_context
     async def g_list_requests(self, event: AstrMessageEvent):
         """待处理入群申请｜审批 通过 N｜审批 拒绝 N [理由]"""
         await self._run_command(event, forced_cmd="/审批", skip=1)
 
     @qgm_group.command("撤销")
+    @_with_log_context
     async def g_revoke(self, event: AstrMessageEvent):
         """撤销一条处罚记录并致歉：/群管 撤销 <记录ID> [理由]"""
         await self._run_command(event, forced_cmd="/撤销", skip=1)
 
     @qgm_group.command("状态")
+    @_with_log_context
     async def g_status(self, event: AstrMessageEvent):
         """日报（默认）｜状态 群｜状态 自检｜状态 群名"""
         await self._run_command(event, forced_cmd="/状态", skip=1)
 
     @qgm_group.command("审核")
+    @_with_log_context
     async def g_mod(self, event: AstrMessageEvent):
         """群规审核（状态 / 试运行 / 巡检 / 测试）"""
         await self._run_command(event, forced_cmd="/审核", skip=1)
 
     @qgm_group.command("管理登记")
+    @_with_log_context
     async def g_admin_register(self, event: AstrMessageEvent):
         """审核提醒名单（列表 / 取消）"""
         await self._run_command(event, forced_cmd="/管理登记", skip=1)
 
     @qgm_group.command("举报")
+    @_with_log_context
     async def g_report(self, event: AstrMessageEvent):
         """引用违规消息后举报（所有人可用）"""
         await self._run_command(event, forced_cmd="/举报", skip=1)
 
     @qgm_group.command("群规")
+    @_with_log_context
     async def g_rules(self, event: AstrMessageEvent):
         """查看 / 配置本群群规"""
         await self._run_command(event, forced_cmd="/群规", skip=1)
 
     @qgm_group.command("成员")
+    @_with_log_context
     async def g_members(self, event: AstrMessageEvent):
         """群成员档案（列表 / 改名 / 备注 / 删除 / 拉取昵称）"""
         await self._run_command(event, forced_cmd="/成员", skip=1)
@@ -4354,6 +4398,7 @@ class QQGroupManager(Star):
             body += f"\n下一页：/群管 审批 全部 {page + 1}"
         await self._reply(event, self._render("msg_requests_list", list=body))
 
+    @_with_log_context
     async def _cmd_report(self, event: AstrMessageEvent) -> None:
         """被动版日报：/群管 汇报 —— 立刻回一条，不等定时任务。
 
@@ -6688,6 +6733,7 @@ class QQGroupManager(Star):
             self.logger.debug(f"[审核] 自动巡检异常: {e}")
 
     # ---------------- /举报 ----------------
+    @_with_log_context
     async def _cmd_report_violation(
         self, event: AstrMessageEvent, parts: list[str]
     ) -> None:

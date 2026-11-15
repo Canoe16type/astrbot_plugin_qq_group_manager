@@ -2794,10 +2794,7 @@ function renderLexRows() {
     if (x.default_enabled === false) tags.push(`<span class="lex-tag warn">默认关</span>`);
     if (x.error_count) tags.push(`<span class="lex-tag bad">${x.error_count} 条解析失败</span>`);
     if (x.warning_count) tags.push(`<span class="lex-tag warn">${x.warning_count} 条风险提示</span>`);
-    const cats = Object.entries(x.cat_counts || {})
-      .map(([k, v]) => `<span class="lex-tag">${esc(lexCatName(k))} ${v}</span>`).join("") || `<span class="lex-tag">未分类</span>`;
     const ops = [
-      `<button class="btn small" data-act="view">查看</button>`,
       `<button class="btn small" data-act="export">导出</button>`,
     ];
     if (x.source === "custom") {
@@ -2814,13 +2811,12 @@ function renderLexRows() {
         <div class="lex-desc">${esc(x.description || "（无说明）")}</div>
         <div>${tags.join("")}</div>
       </td>
-      <td>${cats}</td>
       <td>${lexNum(x.count)}<div class="lex-desc">字面量 ${lexNum(x.literal_count)}${x.regex_count ? ` · 正则 ${x.regex_count}` : ""}</div></td>
       <td>${esc(x.author || "—")}<div class="lex-desc">${esc((x.sources || [])[0] || "")}</div></td>
       <td>${ops.join("")}</td>
     </tr>`;
   });
-  $("lex-rows").innerHTML = rows.join("") || `<tr><td colspan="6">${emptyBox("book", "还没有任何词库")}</td></tr>`;
+  $("lex-rows").innerHTML = rows.join("") || `<tr><td colspan="5">${emptyBox("book", "还没有任何词库")}</td></tr>`;
 }
 
 function renderLexAllow() {
@@ -2886,7 +2882,6 @@ $("lex-rows").addEventListener("click", async (e) => {
   const id = tr.dataset.id;
   const act = btn.dataset.act;
   const item = lexFind(id);
-  if (act === "view") return lexShowDetail(id);
   if (act === "export") return lexExport(id);
   if (act === "del") {
     if (!item) return;
@@ -2941,48 +2936,6 @@ $("btn-lex-off").addEventListener("click", async () => {
   if (r && r.ok) { loadLexicons(); showToast("已全部停用"); } else showToast("操作失败：" + ((r && r.error) || "未知"));
 });
 
-// —— 详情 / 预览 ——
-async function lexShowDetail(id) {
-  let r;
-  try {
-    r = await bridge.apiGet("lexicons/detail", { id, preview: 300 });
-  } catch (e) {
-    return showToast("打开失败：" + e.message);
-  }
-  if (!r || r.error) return showToast("打开失败：" + ((r && r.error) || "未知错误"));
-  const x = r.lexicon;
-  lexState.detailId = id;
-  lexState.detail = x;
-  $("lex-detail-title").textContent = `${x.name} · 词库统计（不展示词条内容）`;
-  const head = [
-    `<div class="lex-desc" style="max-width:none;margin-bottom:8px">${esc(x.description || "（无说明）")}</div>`,
-    `<div><span class="lex-tag">共 ${lexNum(x.count)} 条</span><span class="lex-tag">字面量 ${lexNum(x.literal_count)}</span>`,
-    `<span class="lex-tag">正则 ${lexNum(x.regex_count)}</span>`,
-    x.source === "builtin" ? `<span class="lex-tag">内置（不可删/改名）</span>` : `<span class="lex-tag ok">本地上传</span>`,
-    `<span class="lex-tag">${x.enabled ? "当前启用" : "当前停用"}</span></div>`,
-    (x.errors || []).map((e2) => `<div class="lex-tag bad">${esc(e2)}</div>`).join(""),
-    (x.warnings || []).map((w) => `<div class="lex-tag warn">${esc(w)}</div>`).join(""),
-  ].join("");
-  // 词条内容一律不下发也不渲染：只按「类型 + 条数 + 词长分布」给统计，
-  // 需要逐条核对时用「导出」把词库文件下载到本地查看。
-  const catHtml = Object.entries(x.cat_counts || {}).map(([cat, n]) => `<div class="lex-detail-cat">
-      <h4>${esc(lexCatName(cat))}（${lexNum(n)} 条）</h4>
-      <div class="lex-desc">词条内容已隐藏，不在面板展示。</div>
-    </div>`).join("");
-  const dist = Object.entries(x.length_dist || {});
-  const distHtml = dist.length ? `<div class="lex-detail-cat">
-      <h4>词长分布（只给长度，不列词条）</h4>
-      <div class="lex-words">${dist.map(([len, n]) => `<span class="lex-word">${esc(len)} 字 · ${lexNum(n)} 条</span>`).join("")}</div>
-    </div>` : "";
-  $("lex-detail-body").innerHTML = head
-    + (x.notice ? `<div class="lex-hint" style="margin:8px 0">📄 用途声明：${esc(x.notice)}</div>` : "")
-    + `<div class="lex-hint" style="margin:8px 0">🔒 为避免在界面上摊开敏感词，面板不展示任何词条内容；需要逐条核对请点「导出」下载文件后本地查看。</div>`
-    + catHtml + distHtml;
-  $("lex-detail-card").hidden = false;
-  $("lex-detail-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
-}
-$("btn-lex-detail-close").addEventListener("click", () => { $("lex-detail-card").hidden = true; });
-$("btn-lex-detail-export").addEventListener("click", () => lexState.detailId && lexExport(lexState.detailId));
 
 async function lexExport(id) {
   const r = await bridge.apiGet("lexicons/export", { id });

@@ -9,6 +9,7 @@
 清理时机＝插件启动 + 运行中每小时最多一次 + 配置热更新时（force）。
 """
 
+import contextvars
 import json
 import os
 import re
@@ -17,6 +18,8 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+
+LOG_CONTEXT = contextvars.ContextVar("qgm_log_context", default="")
 
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
 LEVEL_NAMES = {10: "DEBUG", 20: "INFO", 30: "WARNING", 40: "ERROR"}
@@ -317,10 +320,19 @@ class PluginLogger:
                 else:
                     pending.append(line)
 
+    @staticmethod
+    def _with_context(msg: str) -> str:
+        """自动给日志加 [实例|群|成员|记录] 前缀（调用点无需逐个传参）。"""
+        ctx = LOG_CONTEXT.get()
+        text = str(msg)
+        if ctx and "实例 " not in text and "群 " not in text:
+            return ctx + text
+        return text
+
     def debug(self, msg: str) -> None:
         if self.level <= 10:
             with self._lock:
-                self._write(10, msg)
+                self._write(10, self._with_context(msg))
 
     CONCISE_KEEP = ("决策", "已记录", "撤销", "处罚", "已警告", "已禁言", "已撤回",
                     "失败", "异常", "错误", "超时", "熔断", "清理", "迁移", "未处罚",
@@ -331,17 +343,17 @@ class PluginLogger:
             if getattr(self, "concise", False) and not any(k in msg for k in self.CONCISE_KEEP):
                 return
             with self._lock:
-                self._write(20, msg)
+                self._write(20, self._with_context(msg))
 
     def warning(self, msg: str) -> None:
         if self.level <= 30:
             with self._lock:
-                self._write(30, msg)
+                self._write(30, self._with_context(msg))
 
     def error(self, msg: str) -> None:
         if self.level <= 40:
             with self._lock:
-                self._write(40, msg)
+                self._write(40, self._with_context(msg))
 
     def exception(self, msg: str) -> None:
         """等价于 Logger.exception：ERROR 级 + 完整 traceback。
