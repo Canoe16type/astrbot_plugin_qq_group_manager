@@ -3595,7 +3595,7 @@ class QQGroupManager(Star):
             self.logger.debug(f"解析引用消息原始结构失败: {e}")
         return mid, content
 
-    async def _cmd_list_mutes(self, event: AstrMessageEvent) -> None:
+    async def _cmd_list_mutes(self, event: AstrMessageEvent, parts: list[str] | None = None) -> None:
         api = self._get_api(event.get_platform_id())
         g = event.get_group_id()
         try:
@@ -3922,7 +3922,8 @@ class QQGroupManager(Star):
         text = await self._build_report_text(g, event.get_platform_id())
         await self._reply(event, text)
 
-    async def _cmd_review(self, event: AstrMessageEvent, cmd: str, parts: list[str]) -> None:
+    async def _cmd_review(self, event: AstrMessageEvent, parts: list[str]) -> None:
+        cmd = parts[0] if parts else "/通过"
         g = event.get_group_id()
         pending = self._pending_list(g)
         if not pending:
