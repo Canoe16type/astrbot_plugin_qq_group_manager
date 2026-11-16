@@ -413,9 +413,9 @@ class QQGroupManager(Star):
         except Exception:
             pass
 
-    def __init__(self, context) -> None:
+    def __init__(self, context, config=None) -> None:
         """装配：见 qgm/setup.py。"""
-        return init_plugin(self, context)
+        return init_plugin(self, context, config)
 
     # ------------------------------------------------------------------
     # 路径 / 持久化

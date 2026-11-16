@@ -12,7 +12,7 @@ from .. import lexicon as lexicon_lib, member_registry as member_registry_lib, m
 from .kernel.constants import PLUGIN_NAME
 
 
-def init_plugin(host, context, config):
+def init_plugin(host, context, config=None):
         super().__init__(context)
         host.config = config
         host.logger = PluginLogger(
