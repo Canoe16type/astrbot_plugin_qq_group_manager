@@ -53,6 +53,10 @@ from .qgm.features.audit import service as audit_service
 from .qgm.features.audit import review as audit_review
 from .qgm.features.audit import revoke as audit_revoke
 from .qgm.features.lexicon import web as lexicon_web
+from .qgm.features.status import web as status_web
+from .qgm.features.members import web as members_web
+from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
+from .qgm.kernel.timefmt import fmt_duration, fmt_ts
 from .qgm.features.members import events as member_events
 from .qq_api import QQApi, QQApiError
 from . import button_kit
@@ -130,7 +134,6 @@ LEXICON_UPSTREAM_NAME = "上游词库（一键获取）"
 LEXICON_UPSTREAM_URL = ""
 LEXICON_UPSTREAM_MAX_BYTES = 2 * 1024 * 1024      # 单次下载上限 2 MB
 LEXICON_UPSTREAM_TIMEOUT = 15.0                   # 下载超时（秒）
-LOG_SSE_HEARTBEAT_SEC = 15                         # 日志 SSE 空闲保活间隔（秒）；不发心跳会被反代按空闲超时掐断
 LEXICON_UPSTREAM_FAST_TIMEOUT = 8.0               # 配了加速地址时，直连只等这么久
 
 
@@ -317,14 +320,6 @@ def _recall_hint(err: object) -> str:
     return s or "撤回失败"
 
 
-def fmt_ts(ts: float, fmt: str = "%Y-%m-%d %H:%M") -> str:
-    """unix 时间戳 -> 本地可读时间。"""
-    try:
-        return datetime.fromtimestamp(ts).strftime(fmt)
-    except Exception:
-        return str(ts)
-
-
 # 中文数字映射（"一分钟" -> 1）
 _CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
@@ -407,16 +402,6 @@ RULE_USAGE_SET = (
     "示例：/群管 群规 设置 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
     "多条用「;」隔开，规则会追加到本群群规里。"
 )
-
-
-def fmt_duration(seconds: int) -> str:
-    if seconds < 60:
-        return f"{seconds}秒"
-    if seconds < 3600:
-        return f"{seconds // 60}分钟"
-    if seconds < 86400:
-        return f"{seconds // 3600}小时"
-    return f"{seconds // 86400}天"
 
 
 # 面板与消息里的时间统一按 AstrBot 全局配置 timezone 渲染（默认 Asia/Shanghai / UTC+8），
@@ -6675,150 +6660,32 @@ class QQGroupManager(Star):
     # 成员档案 Web API
     # ------------------------------------------------------------------
     async def web_members(self):
-        """GET /members?group=xxx&status=&keyword=&sort=&page=&size= 成员档案列表。"""
-        g = str(request.query.get("group", "") or "")
-        self._bind_log_group(str(g or ""))
-        if not g:
-            return json_response({"error": "missing group"})
-        status = str(request.query.get("status", "all") or "all")
-        keyword = str(request.query.get("keyword", "") or "")
-        sort = str(request.query.get("sort", "last_seen") or "last_seen")
-        page = max(1, request.query.get("page", 1, type=int))
-        size = min(200, max(5, request.query.get("size", 30, type=int)))
-        rows, total = self.members.list_members(
-            g, status=status, keyword=keyword, sort=sort,
-            offset=(page - 1) * size, limit=size,
-        )
-        items = []
-        for r in rows:
-            item = dict(r)
-            item["short"] = member_registry_lib.short_id(r.get("openid"))
-            item["last_seen_text"] = fmt_ts(r.get("last_seen") or 0)
-            item["first_seen_text"] = fmt_ts(r.get("first_seen") or 0)
-            item["left_at_text"] = fmt_ts(r.get("left_at") or 0) if r.get("left_at") else ""
-            items.append(item)
-        return json_response({
-            "items": items, "total": total, "page": page, "size": size,
-            "stats": self.members.stats(g),
-        })
+        """薄壳：members_web。"""
+        return await members_web.web_members(self)
 
     async def web_members_stats(self):
-        """GET /members/stats?group=xxx 档案统计。"""
-        g = str(request.query.get("group", "") or "")
-        self._bind_log_group(str(g or ""))
-        if not g:
-            return json_response({"error": "missing group"})
-        return json_response(self.members.stats(g))
+        """薄壳：members_web。"""
+        return await members_web.web_members_stats(self)
 
     async def web_members_update(self):
-        """POST /members/update body: {group, openid, nickname?, note?}"""
-        payload = await request.json(default={})
-        g = str(payload.get("group") or "")
-        self._bind_log_group(str(g or ""))
-        openid = str(payload.get("openid") or "")
-        if not g or not openid:
-            return json_response({"error": "invalid payload"})
-        if not self.members.has(g, openid):
-            return json_response({"error": "member not found"})
-        if "nickname" in payload:
-            self.members.set_name(g, openid, str(payload.get("nickname") or ""), source="manual")
-        if "note" in payload:
-            self.members.set_note(g, openid, str(payload.get("note") or ""))
-        rec = self.members.get(g, openid) or {}
-        rec = dict(rec)
-        rec["short"] = member_registry_lib.short_id(openid)
-        return json_response({"ok": True, "item": rec})
+        """薄壳：members_web。"""
+        return await members_web.web_members_update(self)
 
     async def web_members_delete(self):
-        """POST /members/delete body: {group, openid}"""
-        payload = await request.json(default={})
-        g = str(payload.get("group") or "")
-        self._bind_log_group(str(g or ""))
-        openid = str(payload.get("openid") or "")
-        if not g or not openid:
-            return json_response({"error": "invalid payload"})
-        ok = self.members.delete(g, openid)
-        return json_response({"ok": ok, "stats": self.members.stats(g)})
+        """薄壳：members_web。"""
+        return await members_web.web_members_delete(self)
 
     async def web_members_clear_left(self):
-        """POST /members/clear_left body: {group}"""
-        payload = await request.json(default={})
-        g = str(payload.get("group") or "")
-        self._bind_log_group(str(g or ""))
-        if not g:
-            return json_response({"error": "invalid payload"})
-        n = self.members.delete_left(g)
-        return json_response({"removed": n, "stats": self.members.stats(g)})
+        """薄壳：members_web。"""
+        return await members_web.web_members_clear_left(self)
 
     async def web_members_import(self):
-        """POST /members/import body: {group, text}
-
-        每行一条：`openid,昵称,备注`（逗号/制表符/全角逗号都行），
-        最少只需 openid。给"从别处导出一批名字"用。
-        """
-        payload = await request.json(default={})
-        g = str(payload.get("group") or "")
-        self._bind_log_group(str(g or ""))
-        text = str(payload.get("text") or "")
-        if not g or not text.strip():
-            return json_response({"error": "invalid payload"})
-        rows = []
-        for raw in text.splitlines():
-            line = raw.strip()
-            if not line:
-                continue
-            parts = [p.strip() for p in re.split(r"[,，\t]+", line)]
-            oid = parts[0] if parts else ""
-            if not oid:
-                continue
-            row = {"openid": oid}
-            if len(parts) > 1 and parts[1]:
-                row["nickname"] = parts[1]
-            if len(parts) > 2 and parts[2]:
-                row["note"] = parts[2]
-            rows.append(row)
-        added, updated = self.members.upsert_many(g, rows)
-        return json_response({
-            "added": added, "updated": updated,
-            "parsed": len(rows), "stats": self.members.stats(g),
-        })
+        """薄壳：members_web。"""
+        return await members_web.web_members_import(self)
 
     async def web_members_sync(self):
-        """POST /members/sync body: {group} 用官方群成员列表接口补昵称。
-
-        该接口目前是内邀白名单能力（11253），失败时如实返回错误码，
-        前端按 code 给提示，不做"看起来成功了"的假象。
-        """
-        payload = await request.json(default={})
-        g = str(payload.get("group") or "")
-        self._bind_log_group(str(g or ""))
-        if not g:
-            return json_response({"error": "invalid payload"})
-        api = self._api_for_group_or_default(g)
-        if api is None:
-            return json_response({"error": "no_api", "message": "没有可用的机器人实例"})
-        try:
-            members = await api.list_group_members(g)
-        except QQApiError as e:
-            return json_response({
-                "error": "api_error", "code": e.code,
-                "message": "官方群成员列表接口是内邀能力（11253），本机器人暂无权限"
-                if e.code == 11253 else str(e),
-            })
-        except Exception as e:  # noqa: BLE001
-            return json_response({"error": "api_error", "message": str(e)})
-        rows = [{
-            "openid": m.get("member_openid") or "",
-            "nickname": m.get("username") or "",
-            "role": m.get("member_role") or "",
-            "user_openid": m.get("union_openid") or m.get("user_openid") or "",
-            "joined_at": m.get("joined_at") or "",
-        } for m in members if m.get("member_openid")]
-        added, updated = self.members.upsert_many(g, rows)
-        return json_response({
-            "ok": True, "added": added, "updated": updated,
-            "count": len(rows), "stats": self.members.stats(g),
-        })
+        """薄壳：members_web。"""
+        return await members_web.web_members_sync(self)
 
     async def web_mod_admins(self):
         """GET /mod/admins?group=xxx 变体提醒名单（群内管理员用 /管理登记 自助登记）。"""
@@ -8013,46 +7880,16 @@ class QQGroupManager(Star):
         })
 
     async def web_logs(self):
-        level = request.query.get("level", type=str) or "ALL"
-        keyword = request.query.get("keyword", type=str) or ""
-        limit = request.query.get("limit", 200, type=int)
-        return json_response({"logs": self.logger.search(level, keyword, limit),
-                              **self.logger.log_status()})
+        """薄壳：status_web。"""
+        return await status_web.web_logs(self)
 
     async def web_logs_stream(self):
-        """SSE 日志流。
-
-        没有新日志时必须定期发一行 SSE 注释（`: keepalive`）保活：
-        否则连接会长时间零字节，被 Nginx / WebUI 反代按空闲超时断开，
-        前端就表现为「断开几十秒」。注释行会被 EventSource 忽略，不影响数据。
-        """
-        async def gen():
-            idx = self.logger.last_index
-            idle = 0
-            try:
-                while True:
-                    entries = self.logger.get_since(idx)
-                    for e in entries:
-                        yield f"data: {json.dumps(e, ensure_ascii=False)}\n\n"
-                        idx = e["index"]
-                    if entries:
-                        idle = 0
-                    else:
-                        idle += 1
-                        if idle >= LOG_SSE_HEARTBEAT_SEC:
-                            idle = 0
-                            yield ": keepalive\n\n"
-                    await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                pass
-
-        return stream_response(gen())
+        """薄壳：status_web。"""
+        return await status_web.web_logs_stream(self)
 
     async def web_logs_clear(self):
-        """清空内存日志，并删除磁盘上的日志文件（真正释放空间）。"""
-        n = self.logger.clear(remove_files=True)
-        self.logger.info(f"WebUI 清空日志：内存 {n} 条 + 磁盘文件已删除")
-        return json_response({"cleared": n, **self.logger.log_status()})
+        """薄壳：status_web。"""
+        return await status_web.web_logs_clear(self)
 
     async def web_poll_now(self):
         groups = self._managed_groups()
