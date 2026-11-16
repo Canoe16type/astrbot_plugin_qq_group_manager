@@ -45,7 +45,7 @@ class ArchitectureGuardTest(unittest.TestCase):
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
-        for name in ("qq_api.py", "plugin_logger.py"):
+        for name in ("qq_api.py", "plugin_logger.py", "lexicon.py", "variant.py", "button_kit.py"):
             src = (ROOT / name).read_text(encoding="utf-8")
             self.assertLessEqual(len(src.splitlines()), 20, f"{name} 已不再是薄 shim")
             self.assertIn("sys.modules", src)

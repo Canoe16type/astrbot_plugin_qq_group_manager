@@ -39,7 +39,7 @@ qgm/
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
 | **P0（已完成）** | 基线、ARCHITECTURE、架构守卫、kernel 初建（storage/text） | 测试 311+ 绿，main.py 不再被本地实现占用 |
-| **P1（进行中）** | 叶子模块下沉：`qq_api` / `lexicon` / `variant` / `plugin_logger` / `button_kit` → `qgm/integrations`、`qgm/features/lexicon`，保留根目录兼容 shim（qq_api / plugin_logger 已完成） | 测试绿；import 路径不变 |
+| **P1（进行中）** | 叶子模块下沉：`qq_api` / `lexicon` / `variant` / `plugin_logger` / `button_kit` → `qgm/integrations`、`qgm/features/lexicon`，保留根目录兼容 shim（qq_api / plugin_logger / lexicon / variant / button_kit 已完成） | 测试绿；import 路径不变 |
 | **P2** | `audit` 切片：举报 → 决策 → 记录 → 撤销整链迁入 `qgm/features/audit/` | `main.py` < 5000 行；决策矩阵测试不变 |
 | **P3** | 其余切片 + 指令路由表 + Web router + 配置单一来源 | `main.py` < 100 行；加指令改 2 个文件 |
 | **P4（1.8.0）** | 前端 ES module 拆分、扩展点（Detector/Action 协议） | 面板冒烟 + 文档示例 |
