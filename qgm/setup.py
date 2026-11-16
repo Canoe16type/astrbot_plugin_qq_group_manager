@@ -6,6 +6,7 @@ import asyncio
 import os
 from pathlib import Path
 
+from astrbot.api.star import Star
 from ..qq_api import QQApi
 from ..plugin_logger import PluginLogger
 from .. import lexicon as lexicon_lib, member_registry as member_registry_lib, moderation, variant as variant_lib
@@ -13,7 +14,7 @@ from .kernel.constants import PLUGIN_NAME
 
 
 def init_plugin(host, context, config=None):
-        super().__init__(context)
+        Star.__init__(host, context)
         host.config = config
         host.logger = PluginLogger(
             max_entries=int(host._read_config_value(("log", "log_max_entries"), default=300, legacy_keys=("log_max_entries",))),

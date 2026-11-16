@@ -135,6 +135,12 @@ class ArchitectureGuardTest(unittest.TestCase):
         self.assertLessEqual(src.count("elif cmd =="), 2)
 
 
+    def test_moved_modules_avoid_zero_arg_super(self):
+        """零参 super() 依赖 __class__ 闭包，搬到模块函数会 RuntimeError。"""
+        for rel in ("qgm/setup.py",):
+            src = (ROOT / rel).read_text(encoding="utf-8")
+            self.assertNotIn("super()", src, f"{rel} 里不能用零参 super()")
+
 
 if __name__ == "__main__":
     unittest.main()
