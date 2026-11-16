@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import platform
+
+from ...kernel.constants import PLUGIN_VERSION
+
 
 async def _cmd_status(host, event, parts=None):
         """/群管 状态 [日报|群|自检|群名]：所有「看一眼现状」的指令收在这一个入口。
@@ -73,6 +77,7 @@ async def _cmd_selfcheck(host, event, parts=None):
             f"并发闸门：排队 {host._mod_llm_pending.get(g, 0)}/{queue or '不限'}"
             f"｜单次超时 {timeout or '不限'}s",
             last_line,
+            f"运行环境：Python {platform.python_version()}｜插件 {PLUGIN_VERSION}",
             "提示：不做主动探活（会真花钱）；想看调用细节，把日志级别调到 DEBUG 看 [模型] 行。",
         ]
         await host._reply(event, "\n".join(lines))
