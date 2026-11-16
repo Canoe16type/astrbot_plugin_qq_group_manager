@@ -64,6 +64,8 @@ from .qgm.commands import parse as command_parse
 from .qgm.features.mute import commands as mute_commands
 from .qgm.features.status import commands as status_commands
 from .qgm.features.members import commands as members_commands
+from .qgm.features.members import cache as members_cache
+from .qgm.features.members import names as members_names
 from .qgm.features.audit import commands as audit_commands
 from .qgm.features.audit import engine as audit_engine
 from .qgm.features.audit import quotes as audit_quotes
@@ -517,24 +519,9 @@ class QQGroupManager(Star):
         self._intro_pending.pop(group, None)
         self._save_intro_state()
 
-    async def _try_fetch_group_name(self, group: str, pid: str) -> str:
-        """入群时顺手拉一次群名。失败不抛异常、不重试（面板「拉取群名」可兜底）。"""
-        try:
-            api = self._get_api(pid)
-            data, err = await api.fetch_group_info(group)
-        except Exception as e:                                   # noqa: BLE001
-            self.logger.debug(f"[入群事件] 拉群名异常: {e}")
-            return ""
-        if data and data.get("group_name"):
-            name = str(data["group_name"])[:60]
-            self.mod.set_group_meta(group, name=name, platform_id=pid,
-                                    name_state="ok", name_error="")
-            return name
-        code = getattr(err, "code", None)
-        self.mod.set_group_meta(group, platform_id=pid,
-                                name_state="denied" if code == 11253 else "error",
-                                name_error=str(err or "未知错误")[:200])
-        return ""
+    async def _try_fetch_group_name(self, group: str, pid: str):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return await members_names._try_fetch_group_name(self, group, pid)
 
     async def _send_group_intro(self, group: str, pid: str, event_id: str = "") -> bool:
         """发送群管功能介绍。带 event_id 时走被动消息（入群事件专用，不受 11251 限制）。"""
@@ -655,74 +642,9 @@ class QQGroupManager(Star):
             )
         )
 
-    async def _check_group_presence(
-        self, group: str, pid: str = ""
-    ) -> tuple[str, str]:
-        """用 bot_state 接口确认机器人还在不在这个群。
-
-        Returns:
-            (state, detail)，state 取值：
-
-            - ``in``      —— 接口正常返回了机器人在群的信息；
-            - ``absent``  —— 接口明确报「查不到这个群／不在群里」（404、
-              `11293 鉴权失败，机器人非群成员`，或文案含「非群成员」等）；
-            - ``unknown`` —— 没权限（11253，该接口仅白名单机器人可用）、
-              网络失败、频控等，**一律不当作离群**，避免误删用户数据。
-        """
-        group = str(group or "")
-        if not group:
-            return "unknown", "群 openid 为空，无法查询"
-        try:
-            api = self._get_api(pid) if pid else self._api_for_group_or_default(group, "")
-        except Exception as e:                       # noqa: BLE001
-            return "unknown", f"拿不到 API 客户端: {e}"
-        if api is None:
-            return "unknown", "没有可用的机器人实例"
-        try:
-            info, err = await api.get_group_bot_state(group)
-        except Exception as e:                       # noqa: BLE001
-            return "unknown", f"调用 bot_state 异常: {e}"
-
-        if err is None:
-            if not info:
-                return "in", "接口无错误但返回空对象（视为在群）"
-            role = str(info.get("member_role") or "?")
-            joined = str(info.get("joined_at") or "?")
-            proactive = info.get("allow_proactive_msg")
-            return "in", f"在群（role={role}，入群时间={joined}，主动消息={proactive}）"
-
-        code = getattr(err, "code", None)
-        status = getattr(err, "status", None)
-        text = str(err)
-        if code == 11253:
-            return (
-                "unknown",
-                "bot_state 接口无权限（11253：仅白名单机器人可用），无法确认，按事件为准",
-            )
-        # 11293 = 「鉴权失败，机器人非群成员」：这是**明确离群**，不是无权限。
-        # 平台用 400 而非 404 返回它，且文案里没有「不存在」，早期只看关键词会误判成 unknown。
-        if code == 11293:
-            return "absent", f"机器人非群成员（{text}）"
-        lowered = text.lower()
-        absent_hint = (
-            status == 404
-            or any(
-                k in text
-                for k in (
-                    "不在群", "未在群", "非群成员", "不是群成员", "群不存在", "不存在",
-                )
-            )
-            or any(
-                k in lowered
-                for k in (
-                    "not found", "not in group", "not a member",
-                    "not a group member", "invalid group",
-                )
-            )
-        )
-        if absent_hint:
-            return "absent", f"不在群（{text}）"
-        return "unknown", f"查询失败，无法确认（{text}）"
+    async def _check_group_presence(self, group: str, pid: str=''):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return await members_names._check_group_presence(self, group, pid)
 
     def _purge_group_data(self, group, pid='', reason='') -> dict:
         """薄壳：见 qgm/features/admin/purge.py。"""
@@ -1391,116 +1313,21 @@ class QQGroupManager(Star):
         # 剥离所有 <@openid> 文本（QQ 官方消息中 @ 就是这种纯文本格式）
         return re.sub(r"<@!?[0-9A-Za-z_-]+>", " ", text).strip()
 
-    def _load_recent_msgs(self) -> None:
-        """启动时恢复最近消息缓存（只保留 10 分钟内），让重载前的消息也能被举报定位。"""
-        try:
-            with open(self._recent_cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            return
-        except Exception as e:
-            self.logger.debug(f"[审核] 最近消息缓存读取失败（忽略）：{e}")
-            return
-        now = time.time()
-        try:
-            for g, lst in (data or {}).items():
-                keep = [r for r in lst if isinstance(r, dict) and now - float(r.get("ts") or 0) <= 600]
-                if keep:
-                    self._recent_group_msgs[str(g)] = keep[-200:]
-            total = sum(len(v) for v in self._recent_group_msgs.values())
-            if total:
-                self.logger.debug(f"[审核] 最近消息缓存已恢复：{total} 条 / {len(self._recent_group_msgs)} 个群")
-        except Exception as e:
-            self.logger.debug(f"[审核] 最近消息缓存解析失败（忽略）：{e}")
+    def _load_recent_msgs(self):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._load_recent_msgs(self)
 
-    def _save_recent_msgs(self, force: bool = False) -> None:
-        """节流落盘（默认 3 秒一次），避免每条消息都写文件。"""
-        now = time.time()
-        if not force and now - self._recent_saved_at < 3:
-            return
-        try:
-            data = {
-                g: [r for r in lst if now - float(r.get("ts") or 0) <= 600][-200:]
-                for g, lst in self._recent_group_msgs.items()
-            }
-            tmp = self._recent_cache_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-            os.replace(tmp, self._recent_cache_path)
-            self._recent_saved_at = now
-        except Exception as e:
-            self.logger.debug(f"[审核] 最近消息缓存写入失败（忽略）：{e}")
+    def _save_recent_msgs(self, force: bool=False):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._save_recent_msgs(self, force)
 
-    def _record_recent_msg(self, event: AstrMessageEvent) -> None:
-        """缓存当前群消息（原文 + 消息 ID + 时间），供引用撤回按原文匹配。
+    def _record_recent_msg(self, event: AstrMessageEvent):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._record_recent_msg(self, event)
 
-        只缓存普通消息（message_type != 103）；引用消息（103）自身不缓存，
-        避免干扰匹配。每群最多保留 200 条 / 10 分钟内的消息。
-        """
-        try:
-            g = event.get_group_id()
-            if not g:
-                return
-            self._last_active_group = g
-            msg_id = str(getattr(event.message_obj, "message_id", "") or "")
-            if not msg_id:
-                return
-            raw = getattr(event.message_obj, "raw_message", None)
-            mt = None
-            if raw is not None:
-                if isinstance(raw, dict):
-                    mt = raw.get("message_type")
-                else:
-                    mt = getattr(raw, "message_type", None)
-            try:
-                if mt is not None and int(mt) == 103:
-                    return  # 引用消息自身不入缓存
-            except (TypeError, ValueError):
-                pass
-            text = self._extract_text(event)[:500]   # 落盘缓存只留前 500 字
-            images = self._extract_images(event)
-            if not text and not images:
-                return
-            lst = self._recent_group_msgs.setdefault(g, [])
-            lst.append({
-                "id": msg_id,
-                "text": text,
-                "ts": time.time(),
-                "sender": event.get_sender_id() or "",
-                "sender_name": event.get_sender_name() or "",
-                # 图片地址：仅本地留存，供 /举报 的多模态审核取用（QQ 图片
-                # URL 会过期，举报稍晚就可能取不到，所以必须提前存下来）。
-                "images": images,
-            })
-            # 裁剪：最多 200 条，且丢弃超过 10 分钟的旧消息
-            now = time.time()
-            lst[:] = [r for r in lst if now - r["ts"] <= 600][-200:]
-            self._save_recent_msgs()
-        except Exception:
-            pass
-
-    def _match_recent_msg_id(self, group_openid: str, text: str,
-                             max_age: float = 150.0) -> str:
-        """在消息缓存中按原文查找最近的消息 ID（用于引用撤回）。
-
-        撤回时限 2 分钟，默认只匹配 150 秒内、原文完全一致的最近一条。
-        返回消息 ID，未命中返回空串。
-        """
-        try:
-            lst = self._recent_group_msgs.get(group_openid) or []
-            now = time.time()
-            best = ""
-            best_ts = 0.0
-            for r in lst:
-                if now - r["ts"] > max_age:
-                    continue
-                if (r.get("text") or "").strip() == (text or "").strip():
-                    if r["ts"] >= best_ts:
-                        best_ts = r["ts"]
-                        best = str(r.get("id") or "")
-            return best
-        except Exception:
-            return ""
+    def _match_recent_msg_id(self, group_openid: str, text: str, max_age: float=150.0):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._match_recent_msg_id(self, group_openid, text, max_age)
 
     async def _run_command(self, event, forced_cmd=None, skip=0):
         """薄壳：见 qgm/commands/runtime.py。"""
@@ -1646,26 +1473,9 @@ class QQGroupManager(Star):
     def _group_in_scope(self, group_openid: str, platform_id: str | None = None) -> bool:
         return self._target_group_allowed(group_openid, platform_id)
 
-    def _record_member_seen(self, event: AstrMessageEvent) -> None:
-        """普通群消息：把发言人记进档案。
-
-        官方群消息事件的 author 里只有 member_openid，昵称通常是空的；
-        这里只有在适配器真给了昵称时才顺手填（source=msg，人工昵称不会被覆盖）。
-        """
-        try:
-            if not self._members_on():
-                return
-            if not bool(self._read_config_value(("member_registry", "record_on_message"), default=True)):
-                return
-            g = event.get_group_id()
-            sid = str(event.get_sender_id() or "")
-            if not g or not sid or not self._group_in_scope(g, event.get_platform_id()):
-                return
-            sname = str(event.get_sender_name() or "").strip()
-            name = sname if (sname and sname != sid) else ""
-            self.members.seen(g, sid, name=name)
-        except Exception as e:  # noqa: BLE001
-            self.logger.debug(f"[成员档案] 记录发言失败: {e}")
+    def _record_member_seen(self, event: AstrMessageEvent):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._record_member_seen(self, event)
 
     # 入群欢迎去重窗口（秒）：同一事件被重推、或审批通过时已经欢迎过，不再重复发。
     JOIN_WELCOME_DEDUPE_SECONDS = 600.0
@@ -1680,22 +1490,9 @@ class QQGroupManager(Star):
         base = str(data.get("_event_id") or data.get("timestamp") or "")
         return f"{group}|{member}|{base}"
 
-    def _member_event_seen(self, event_id: str) -> bool:
-        """退群/入群事件去重：平台重投或重连补发时，同一事件只处理一次。"""
-        cache = getattr(self, "_member_events_seen", None)
-        if cache is None:
-            cache = self._member_events_seen = {}
-        now = time.time()
-        for k, ts in list(cache.items()):
-            if now - ts > 300:          # 5 分钟窗口足够覆盖重投
-                cache.pop(k, None)
-        if event_id in cache:
-            return True
-        cache[event_id] = now
-        if len(cache) > 500:
-            for k, _ in sorted(cache.items(), key=lambda kv: kv[1])[: len(cache) - 500]:
-                cache.pop(k, None)
-        return False
+    def _member_event_seen(self, event_id: str):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._member_event_seen(self, event_id)
 
     @_with_log_context
     async def _on_group_member_add(self, data: dict, platform_id: str | None = None) -> None:
@@ -1755,36 +1552,9 @@ class QQGroupManager(Star):
         """薄壳：成员事件见 qgm.features.members.events。"""
         return await member_events.on_member_remove(self, data, platform_id)
 
-    async def _resolve_member_name(self, group_openid: str, member_openid: str) -> str:
-        """尽力获取成员昵称：档案 -> 内存缓存 -> 群成员接口。查不到返回空串。"""
-        try:
-            rec = self.members.get(group_openid, member_openid) or {}
-            if str(rec.get("nickname") or "").strip():
-                return str(rec["nickname"]).strip()
-        except Exception:  # noqa: BLE001
-            pass
-        cached = (self._nick_cache.get(group_openid) or {}).get(member_openid)
-        if cached:
-            return cached
-        api = self._api_for_group_or_default(group_openid)
-        if api is not None:
-            try:
-                info = await api.get_group_member(group_openid, member_openid)
-                name = (info or {}).get("nickname") or (info or {}).get("username") or ""
-                if name:
-                    self._nick_cache.setdefault(group_openid, {})[member_openid] = name
-                    # 接口给了名字就顺手回填档案（人工昵称不会被覆盖）
-                    if self._members_on():
-                        try:
-                            rec = self.members.get(group_openid, member_openid)
-                            if rec is not None and rec.get("name_source") != "manual":
-                                self.members.set_name(group_openid, member_openid, name, source="api")
-                        except Exception:  # noqa: BLE001
-                            pass
-                    return name
-            except Exception:
-                pass
-        return ""
+    async def _resolve_member_name(self, group_openid: str, member_openid: str):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return await members_names._resolve_member_name(self, group_openid, member_openid)
 
     def _api_for_group_or_default(
         self, group_openid: str, fallback_pid: str | None = None
@@ -1887,29 +1657,9 @@ class QQGroupManager(Star):
         """群成员档案（列表 / 改名 / 备注 / 删除 / 拉取昵称）"""
         await self._run_command(event, forced_cmd="/成员", skip=1)
 
-    def _ensure_member_event_injected(self) -> None:
-        """确保群成员事件注入完成；失败时延迟重试。
-
-        解决两个问题：
-        1. 插件 initialize 时平台实例可能尚未就绪（AstrBot 启动顺序），
-           此时注入会失败，等第一条群消息进来时平台必然已就绪，可重试；
-        2. 多实例配置下 get_platform_inst("qq_official") 按实例 ID 匹配
-           必然返回 None（"qq_official" 只是平台名），必须遍历平台实例注入。
-        重试间隔 300 秒，避免反复触发 websocket 重连。
-        """
-        if self._member_event_ok:
-            return
-        now = time.time()
-        if now - self._last_inject_attempt < 300:
-            return
-        self._last_inject_attempt = now
-        try:
-            n = member_event.install_member_event_support(self, self.context)
-            if n > 0:
-                self._member_event_ok = True
-                self.logger.info(f"群成员事件注入成功（{n} 个 qq_official 实例）")
-        except Exception as e:
-            self.logger.warning(f"群成员事件注入失败（不影响其他功能）: {e}")
+    def _ensure_member_event_injected(self):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return members_cache._ensure_member_event_injected(self)
 
     async def initialize(self) -> None:
         """插件激活时立即启动轮询任务。
@@ -2240,66 +1990,13 @@ class QQGroupManager(Star):
         """薄壳：见 members_commands。"""
         return await members_commands._cmd_member(self, event, parts)
 
-    def _member_ref(self, group_openid: str, token: str) -> str:
-        """把「序号」或「openid / openid 尾段」解析成完整 openid。"""
-        tok = str(token or "").strip()
-        if not tok:
-            return ""
-        if tok.isdigit() and len(tok) <= 4:
-            rows, _ = self.members.list_members(group_openid, limit=200)
-            idx = int(tok)
-            if 1 <= idx <= len(rows):
-                return str(rows[idx - 1].get("openid") or "")
-            # 超出范围就不要再当序号了，下面继续按 openid / 尾段找
-        if self.members.has(group_openid, tok):
-            return tok
-        rows, _ = self.members.list_members(group_openid, keyword=tok, limit=5)
-        if len(rows) == 1:
-            return str(rows[0].get("openid") or "")
-        return ""
+    def _member_ref(self, group_openid: str, token: str):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return members_names._member_ref(self, group_openid, token)
 
-    def _render_member_list(self, group_openid: str, *, status: str = "all",
-                            keyword: str = "", page: int = 1, title: str = "") -> str:
-        """档案列表文本（每页 15 条）。"""
-        per = 15
-        rows, total = self.members.list_members(
-            group_openid, status=status, keyword=keyword,
-            offset=(page - 1) * per, limit=per,
-        )
-        st = self.members.stats(group_openid)
-        head = title or {
-            "active": "在群成员",
-            "left": "已退群成员",
-            "unnamed": "还没名字的成员",
-            "named": "已命名成员",
-        }.get(status, "全部成员")
-        lines = [
-            f"📇 {head}（共 {st['total']} 人：在群 {st['active']} / 已退 {st['left']}；"
-            f"有名字 {st['named']}，累计发言 {st['messages']} 条）"
-        ]
-        if not rows:
-            lines.append("这一页没有记录。档案是随着群消息自动攒的，机器人没收到过消息就不会有记录。")
-            return "\n".join(lines)
-        base = (page - 1) * per
-        for i, r in enumerate(rows, start=1):
-            name = str(r.get("nickname") or "").strip()
-            label = name or f"（未命名 {member_registry_lib.short_id(r.get('openid'))}）"
-            note = str(r.get("note") or "").strip()
-            last = float(r.get("last_seen") or 0)
-            when = (
-                datetime.fromtimestamp(last, _active_tz()).strftime("%m-%d %H:%M")
-                if last else "-"
-            )
-            flag = " · 已退群" if r.get("status") == "left" else ""
-            extra = f" · 备注：{note}" if note else ""
-            lines.append(
-                f"{base + i}. {label} · 发言 {int(r.get('msg_count') or 0)} · 末次 {when}{flag}{extra}"
-            )
-        pages = max(1, (total + per - 1) // per)
-        if pages > 1:
-            lines.append(f"—— 第 {page}/{pages} 页 · 下一页：/群管 成员 列表 {page + 1}")
-        lines.append("改名：/群管 成员 改名 <序号> <昵称>")
-        return "\n".join(lines)
+    def _render_member_list(self, group_openid: str, *, status: str='all', keyword: str='', page: int=1, title: str=''):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return members_names._render_member_list(self, group_openid, status=status, keyword=keyword, page=page, title=title)
 
     async def _cmd_member_sync(self, event: AstrMessageEvent, parts: list[str] | None = None):
         """薄壳：见 members_commands。"""
@@ -2370,24 +2067,9 @@ class QQGroupManager(Star):
     def _mute_status_text(status: str) -> str:
         return {"active": "禁言中", "unmuted": "已解禁", "expired": "已到期"}.get(status, "")
 
-    def _aggregate_member_stats(self, records: list[dict]) -> list[dict]:
-        """按成员聚合禁言记录：次数、最近时间/状态/理由。禁言中优先、次数倒序。"""
-        stats: dict[str, dict] = {}
-        for r in records:
-            oid = r.get("member_openid") or "?"
-            st = stats.setdefault(
-                oid,
-                {"openid": oid, "count": 0, "last": 0, "status": "", "last_reason": ""},
-            )
-            st["count"] += 1
-            ts = r.get("mute_at") or 0
-            if ts >= st["last"]:
-                st["last"] = ts
-                st["status"] = self._effective_mute_status(r)
-                st["last_reason"] = r.get("reason") or ""
-        out = list(stats.values())
-        out.sort(key=lambda s: (s["status"] != "active", -s["count"]))
-        return out
+    def _aggregate_member_stats(self, records: list[dict]):
+        """薄壳：见 qgm/features/members/names.py。"""
+        return members_names._aggregate_member_stats(self, records)
 
     def _render_mute_summary(self, records: list[dict]) -> str:
         """按成员聚合 -> 多行文本块。"""
@@ -3845,29 +3527,9 @@ class QQGroupManager(Star):
             "name_error": str(meta.get("name_error") or ""),
         }
 
-    async def _refresh_bot_name(self, platform_id: str, ttl: float = 120.0) -> str:
-        """拉机器人自己的昵称（GET /users/@me，普通接口），失败返回空串。
-
-        - 异常一律吞掉：昵称只是显示用，不能因为它把「策略列表」整页搞崩。
-        - 带 TTL 节流：拉不到时别把每个列表请求都拖成两次 API 往返。
-        """
-        tried = getattr(self, "_bot_name_tried", None)
-        if tried is None:
-            tried = self._bot_name_tried = {}
-        now = time.monotonic()
-        if now - tried.get(platform_id, 0.0) < ttl:
-            return str((self.mod.get_bot_meta(platform_id) or {}).get("name") or "")
-        tried[platform_id] = now
-        try:
-            api = self._get_api(platform_id)
-            info = await api.get_bot_info()
-            name = str((info or {}).get("username") or "").strip()
-            if name:
-                self.mod.set_bot_meta(platform_id, name=name[:40])
-            return name
-        except Exception as e:  # noqa: BLE001 昵称拿不到不影响主流程
-            self.logger.debug(f"[入群审批] 拉取机器人昵称失败 {platform_id}: {e}")
-            return ""
+    async def _refresh_bot_name(self, platform_id: str, ttl: float=120.0):
+        """薄壳：见 qgm/features/members/cache.py。"""
+        return await members_cache._refresh_bot_name(self, platform_id, ttl)
 
     async def web_mod_groups(self):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""

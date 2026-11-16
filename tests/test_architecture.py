@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 4700, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 4300, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -122,6 +122,10 @@ class ArchitectureGuardTest(unittest.TestCase):
             "_maybe_auto_scan", "_on_group_join_request", "_notify_join_requests",
             "_welcome_member_on_join", "_mod_resolve_reported", "_extract_quote_from_raw",
             "_purge_group_data", "_handle_button_interaction", "_register_web_apis",
+            "_load_recent_msgs", "_save_recent_msgs", "_record_recent_msg", "_match_recent_msg_id",
+            "_record_member_seen", "_member_event_seen", "_ensure_member_event_injected",
+            "_refresh_bot_name", "_resolve_member_name", "_member_ref", "_render_member_list",
+            "_aggregate_member_stats", "_try_fetch_group_name", "_check_group_presence",
         }
         tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
