@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 5000, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 300, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -53,7 +53,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_report_handler_is_thin(self):
         """举报编排已迁到 service；入口方法超过 12 行说明逻辑又搬回来了。"""
         import ast as _ast
-        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        tree = _ast.parse((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == "_cmd_report_violation":
                 self.assertLessEqual(node.end_lineno - node.lineno + 1, 12)
@@ -63,7 +63,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_member_handlers_are_thin(self):
         """成员事件已迁到 features/members；入口方法超过 12 行说明逻辑又搬回来了。"""
         import ast as _ast
-        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        tree = _ast.parse((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in (
                     "_on_group_member_add", "_on_group_member_remove"):
@@ -72,7 +72,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_review_handlers_are_thin(self):
         """判定层已迁到 features/audit/review；入口超过 12 行说明逻辑又搬回来了。"""
         import ast as _ast
-        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        tree = _ast.parse((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in (
                     "_mod_review_llm", "_mod_review_fast"):
@@ -81,7 +81,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_revoke_handlers_are_thin(self):
         """撤销逻辑已迁到 features/audit/revoke；入口超过 12 行说明逻辑又搬回来了。"""
         import ast as _ast
-        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        tree = _ast.parse((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in (
                     "_cmd_revoke", "_revoke_verdict"):
@@ -123,16 +123,21 @@ class ArchitectureGuardTest(unittest.TestCase):
             "_welcome_member_on_join", "_mod_resolve_reported", "_extract_quote_from_raw",
             "_purge_group_data", "_handle_button_interaction", "_register_web_apis",
         }
-        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        tree = _ast.parse((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8"))
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in moved:
                 self.assertLessEqual(node.end_lineno - node.lineno + 1, 12, node.name)
 
     def test_command_dispatch_is_table_driven(self):
         """指令分发应走路由表；_handle_command 出现大段 if/elif 说明又退回旧写法。"""
-        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        src = (ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8")
         self.assertIn("command_router.resolve_admin", src)
         self.assertLessEqual(src.count("elif cmd =="), 2)
+
+    def test_plugin_module_budget(self):
+        """qgm/plugin.py 承接原 main 的类实现；只许变短（后续按切片继续拆）。"""
+        lines = len((ROOT / "qgm" / "plugin.py").read_text(encoding="utf-8").splitlines())
+        self.assertLessEqual(lines, 5000, f"qgm/plugin.py 已 {lines} 行，请继续拆切片")
 
 
 if __name__ == "__main__":
