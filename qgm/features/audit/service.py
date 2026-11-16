@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+from . import actions as audit_actions
+from . import detectors as audit_detectors
+
 try:
     from .... import moderation
 except ImportError:  # 测试把插件目录直接加入 sys.path 时
@@ -97,10 +100,22 @@ async def report_violation(host, event, parts):
             })
             return
 
+        # 扩展检测：注册表为空时零开销；只增强、不削弱
+        if audit_detectors.count():
+            evidences = await audit_detectors.collect(
+                host, {"group": g, "rep": rep, "settings": settings, "verdict": verdict})
+            verdict = audit_detectors.merge(verdict, evidences)
+
         result = await host._mod_execute(event, g, rep, verdict, settings)
         # 变体疑似：没被禁言路径处理掉的话，这里按群配置决定是否撤回（只撤回，不禁言）
         if variant and not result["executed"]:
             await host._mod_variant_action(event, g, rep, settings, variant, result)
+        # 扩展动作：默认空；失败不影响主处罚
+        if audit_actions.count():
+            extra = await audit_actions.run(host, {
+                "group": g, "rep": rep, "verdict": verdict, "result": result, "settings": settings})
+            if extra:
+                result["extra_actions"] = extra
         rec = host.mod.add_verdict({
             "group": g,
             "msg_id": mid,

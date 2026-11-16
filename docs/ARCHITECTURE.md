@@ -76,6 +76,48 @@ qgm/
 - 指令与 Web API 各有一张显式注册表（路径/权限/帮助/处理函数），帮助文案由表生成；
 - 新切片模板：`features/<name>/{__init__,service,command,web}.py` + 自有测试。
 
+## 扩展点（Detector / Action）
+
+**新增检测维度**（不改 pipeline）：
+
+```python
+from qgm.features.audit import detectors
+
+class SpamScore:
+    name = "spamscore"
+    async def detect(self, ctx):
+        # ctx: group / rep / settings / verdict / host
+        score = await some_check(ctx["rep"])
+        if score > 0.8:
+            return detectors.Evidence(name=self.name, violation=True,
+                                      severity="medium", confidence=score,
+                                      category="spam", detail="外部风控打分")
+        return None
+
+detectors.register(SpamScore())   # 注册即生效
+```
+
+规则：
+- 注册表默认空 → 零开销、零行为变化；
+- 合并**只增强不削弱**（不能把已有违规判成无违规）；
+- 单个 detector 异常只记 warning，不影响本次判定。
+
+**追加处置动作**（例如记分、外部审计工单）：
+
+```python
+from qgm.features.audit import actions
+
+class AuditTicket:
+    name = "ticket"
+    async def apply(self, ctx):      # ctx: group / rep / verdict / result / settings / host
+        await create_ticket(ctx["result"])
+        return {"ok": True}
+
+actions.register(AuditTicket())
+```
+
+动作在处罚执行后、落记录前运行；异常隔离，不影响主处罚。
+
 ## 六、不做的事
 
 - 不引入 DI 框架 / ORM / 事件总线 / 微服务；
