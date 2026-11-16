@@ -456,7 +456,8 @@ class WebRequestsToleranceTest(unittest.IsolatedAsyncioTestCase):
     """/requests 出了任何意外都要返回可读信息，不能 500。"""
 
     async def test_unexpected_error_returns_payload_not_500(self):
-        mod = sys.modules[QQGroupManager.__module__]
+        mod = importlib.import_module(
+            "plugins.astrbot_plugin_qq_group_manager.qgm.features.status.web")
         origin = mod.json_response
         mod.json_response = lambda d: d
         try:

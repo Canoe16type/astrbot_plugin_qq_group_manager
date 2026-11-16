@@ -15,3 +15,20 @@ def plugin_name() -> str:
 
 
 PLUGIN_NAME = plugin_name()
+
+
+def _read_version() -> str:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        meta = parent / "metadata.yaml"
+        if meta.exists():
+            try:
+                for line in meta.read_text(encoding="utf-8").splitlines():
+                    if line.strip().startswith("version:"):
+                        return line.split(":", 1)[1].strip().strip('"\'')
+            except OSError:
+                pass
+    return "0.0.0"
+
+
+PLUGIN_VERSION = _read_version()

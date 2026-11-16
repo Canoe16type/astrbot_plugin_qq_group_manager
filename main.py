@@ -57,8 +57,12 @@ from .qgm.features.lexicon import web as lexicon_web
 from .qgm.features.status import web as status_web
 from .qgm.features.members import web as members_web
 from .qgm.features.config import web as config_web
+from .qgm.features.approval import web as approval_web
+from .qgm.features.mute import web as mute_web
 from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
-from .qgm.kernel.timefmt import fmt_duration, fmt_ts
+from .qgm.kernel.timefmt import fmt_duration, fmt_rfc3339, fmt_ts, set_active_timezone
+from .qgm.kernel.constants import PLUGIN_NAME, PLUGIN_VERSION
+from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.features.members import events as member_events
 from .qq_api import QQApi, QQApiError
@@ -163,7 +167,6 @@ def _read_plugin_version() -> str:
     return ""
 
 
-PLUGIN_VERSION = _read_plugin_version()
 
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
@@ -404,36 +407,7 @@ def active_timezone_name() -> str:
     return _ACTIVE_TZ_NAME
 
 
-def _active_tz():
-    try:
-        return ZoneInfo(_ACTIVE_TZ_NAME)
-    except Exception:
-        return None
 
-
-def set_active_timezone(name: str) -> str:
-    """写入生效时区；非法时区名回退 Asia/Shanghai。"""
-    global _ACTIVE_TZ_NAME
-    name = str(name or "").strip() or "Asia/Shanghai"
-    try:
-        ZoneInfo(name)
-    except Exception:
-        name = "Asia/Shanghai"
-    _ACTIVE_TZ_NAME = name
-    return name
-
-
-def fmt_rfc3339(rfc: str) -> str:
-    """RFC3339 -> 按 AstrBot 配置时区渲染的可读时间。"""
-    try:
-        # 兼容 Z / +08:00 结尾
-        s = rfc.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(s)
-        tz = _active_tz()
-        dt = dt.astimezone(tz) if tz is not None else dt.astimezone()
-        return dt.strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return rfc
 
 
 def _mute_rule_live(mode: str, windows: list) -> bool:
@@ -6711,169 +6685,28 @@ class QQGroupManager(Star):
         return [x.strip() for x in raw.split(",") if x.strip()]
 
     async def web_join_approval_list(self):
-        """GET 策略列表。策略按机器人维度，platform_id 可选。"""
-        try:
-            pid, perr = self._pick_bot_pid(request.query.get("platform_id", type=str) or "")
-            if perr:
-                return json_response({"error": perr})
-            # 昵称是懒加载的，进审批页时顺手补一次，下拉里就能显示机器人名称而不是 AppID
-            if not (self.mod.get_bot_meta(pid) or {}).get("name"):
-                await self._refresh_bot_name(pid)
-            api = self._get_api(pid)
-            data = await api.list_join_approval_strategies(
-                cursor=request.query.get("cursor", type=str) or "",
-                limit=request.query.get("limit", type=int) or 20,
-            )
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        rows = []
-        for s in data.get("strategies") or []:
-            gids = [str(x) for x in (s.get("group_ids") or [])]
-            gopens = [str(x) for x in (s.get("group_openids") or [])]
-            expire_at = s.get("expire_at") or ""
-            left_days = None
-            try:
-                if expire_at:
-                    left_days = (datetime.fromisoformat(expire_at.replace("Z", "+00:00"))
-                                 - datetime.now(timezone.utc)).days
-            except Exception:
-                left_days = None
-            rows.append({
-                "strategy_id": s.get("strategy_id") or "",
-                "group_ids": gids,
-                "group_openids": gopens,
-                "group_mode": "id" if gids else "openid",
-                "group_count": len(gids) + len(gopens),
-                "whitelist_user_count": s.get("whitelist_user_count") or 0,
-                "is_enable": (s.get("is_enable") or "").lower() == "on",
-                "expire_at": fmt_rfc3339(expire_at),
-                "expire_in_days": left_days,
-                "created_at": fmt_rfc3339(s.get("created_at") or ""),
-                "updated_at": fmt_rfc3339(s.get("updated_at") or ""),
-                "remark": s.get("remark") or "",
-            })
-        return json_response({
-            "platform_id": pid,
-            "platforms": self._platform_list(),
-            "strategies": rows,
-            "next_cursor": data.get("next_cursor") or "",
-        })
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_list(self)
 
     async def web_join_approval_save(self):
-        """POST 创建或修改策略。带 strategy_id＝修改，不带＝创建。"""
-        p = await request.json(default={})
-        sid = str(p.get("strategy_id") or "").strip()
-        raw_groups = str(p.get("groups") or "")
-        groups = self._parse_group_input(raw_groups)
-        mode = str(p.get("group_mode") or "id")
-        is_enable = "on" if p.get("is_enable", True) else "off"
-        expire_at = str(p.get("expire_at") or "").strip()
-        remark = str(p.get("remark") or "").strip()
-        try:
-            api = self._approval_api(str(p.get("platform_id") or ""))
-            if sid:
-                kw: dict = {"is_enable": is_enable}
-                if expire_at:
-                    kw["expire_at"] = expire_at
-                kw["remark"] = remark
-                r = await api.update_join_approval_strategy(sid, **kw)
-                action = "已更新策略"
-                op = str(p.get("group_op") or "").strip()
-                if op in ("add", "del") and groups:
-                    if mode == "id":
-                        try:
-                            act: dict = {"op": op, "group_ids": [int(x) for x in groups]}
-                        except ValueError:
-                            return json_response({"error": "群号必须是纯数字"})
-                    else:
-                        act = {"op": op, "group_openids": groups}
-                    r = await api.update_join_approval_strategy(sid, group_action=act)
-                    action = f"已更新策略，并{'新增' if op == 'add' else '移除'} {len(groups)} 个群"
-            else:
-                if not groups:
-                    return json_response({"error": "至少要指定一个群"})
-                if mode == "id":
-                    try:
-                        gids = [int(x) for x in groups]
-                    except ValueError:
-                        return json_response({"error": "群号必须是纯数字"})
-                    r = await api.create_join_approval_strategy(
-                        group_ids=gids, is_enable=is_enable,
-                        expire_at=expire_at or None, remark=remark or None)
-                else:
-                    r = await api.create_join_approval_strategy(
-                        group_openids=groups, is_enable=is_enable,
-                        expire_at=expire_at or None, remark=remark or None)
-                action = "已创建策略"
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        self.logger.info(f"[入群审批] {action} {r.get('strategy_id') or sid}（{len(groups)} 群）")
-        return json_response({"ok": True, "result": r, "message": action})
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_save(self)
 
     async def web_join_approval_toggle(self):
-        """POST 启停策略。"""
-        p = await request.json(default={})
-        sid = str(p.get("strategy_id") or "").strip()
-        if not sid:
-            return json_response({"error": "缺少 strategy_id"})
-        on = bool(p.get("enabled"))
-        try:
-            api = self._approval_api(str(p.get("platform_id") or ""))
-            r = await api.update_join_approval_strategy(sid, is_enable="on" if on else "off")
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        self.logger.info(f"[入群审批] 策略 {sid} -> {'启用' if on else '停用'}")
-        return json_response({"ok": True, "result": r})
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_toggle(self)
 
     async def web_join_approval_delete(self):
-        """POST 删除策略。"""
-        p = await request.json(default={})
-        sid = str(p.get("strategy_id") or "").strip()
-        if not sid:
-            return json_response({"error": "缺少 strategy_id"})
-        try:
-            api = self._approval_api(str(p.get("platform_id") or ""))
-            await api.delete_join_approval_strategy(sid)
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        self.logger.info(f"[入群审批] 已删除策略 {sid}")
-        return json_response({"ok": True})
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_delete(self)
 
     async def web_join_approval_execute(self):
-        """POST 立即全量扫描（异步，官方称约 10 分钟）。"""
-        p = await request.json(default={})
-        sid = str(p.get("strategy_id") or "").strip()
-        if not sid:
-            return json_response({"error": "缺少 strategy_id"})
-        try:
-            api = self._approval_api(str(p.get("platform_id") or ""))
-            await api.execute_join_approval_strategy(sid)
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        self.logger.info(f"[入群审批] 已触发全量扫描 {sid}")
-        return json_response({"ok": True, "message": "已提交，官方异步执行，约 10 分钟完成"})
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_execute(self)
 
     async def web_join_approval_whitelist(self):
-        """POST 增删白名单号码。body: strategy_id / op(add|del) / users(文本)"""
-        p = await request.json(default={})
-        sid = str(p.get("strategy_id") or "").strip()
-        op = str(p.get("op") or "add")
-        users = self._parse_group_input(str(p.get("users") or ""))
-        if not sid:
-            return json_response({"error": "缺少 strategy_id"})
-        if not users:
-            return json_response({"error": "白名单号码不能为空"})
-        bad = [u for u in users if not u.isdigit()]
-        if bad:
-            return json_response({"error": f"以下不是纯数字 QQ 号：{', '.join(bad[:5])}"})
-        try:
-            api = self._approval_api(str(p.get("platform_id") or ""))
-            r = await api.update_join_approval_whitelist(sid, op, users)
-        except QQApiError as e:
-            return json_response({"error": str(e)})
-        self.logger.info(f"[入群审批] 白名单 {op} {len(users)} 个 -> {sid}")
-        return json_response({"ok": True, "result": r,
-                              "message": f"已{'添加' if op == 'add' else '移除'} {len(users)} 个号码"})
+        """薄壳：见 approval_web。"""
+        return await approval_web.web_join_approval_whitelist(self)
 
     def _register_web_apis(self) -> None:
         ctx = self.context
@@ -6968,69 +6801,8 @@ class QQGroupManager(Star):
         return out
 
     async def web_status(self):
-        # 面板上所有时间都按这个时区渲染（前端 chip / 脚注直接用这个值）
-        timezone_name = self._refresh_timezone()
-        groups = self._group_entries()
-        return json_response({
-            "plugin": PLUGIN_NAME,
-            "version": PLUGIN_VERSION,
-            "timezone": timezone_name,
-            "platforms": self._platform_list(),
-            "features": {
-                "enable_mute": bool(self._read_config_value(("basic", "enable_mute"), default=True, legacy_keys=("enable_mute",))),
-                "enable_approval": bool(self._read_config_value(("approval", "enable_approval"), default=True, legacy_keys=("enable_approval",))),
-                "enable_join_request_notify": bool(self._read_config_value(("approval", "enable_join_request_notify"), default=True, legacy_keys=("enable_join_request_notify",))),
-                "enable_welcome": bool(self._read_config_value(("basic", "enable_welcome"), default=True, legacy_keys=("enable_welcome",))),
-                "enable_group_add_intro": bool(self._read_config_value(("basic", "enable_group_add_intro"), default=True, legacy_keys=("enable_group_add_intro",))),
-                "enable_new_group_welcome": bool(self._read_config_value(("basic", "enable_new_group_welcome"), default=True, legacy_keys=("enable_new_group_welcome",))),
-                "enable_review": bool(self._read_config_value(("moderation", "enable"), default=True, legacy_keys=("moderation_enable",))),
-                "enable_recall": bool(self._read_config_value(("recall", "enable_recall"), default=True, legacy_keys=("enable_recall",))),
-                "enable_member_remove_notify": bool(self._read_config_value(("member_event", "enable_member_remove_notify"), default=False, legacy_keys=("enable_member_remove_notify",))),
-                "enable_member_registry": bool(self._read_config_value(("member_registry", "enabled"), default=True, legacy_keys=("member_registry_enabled",))),
-            },
-            "admin": {
-                "mode": str(self._read_config_value(("admin", "admin_mode"), default="any", legacy_keys=("admin_mode",))),
-                "use_astrbot_admin": bool(self._read_config_value(("admin", "admin_use_astrbot_admin"), default=True, legacy_keys=("admin_use_astrbot_admin",))),
-                "use_qq_role": bool(self._read_config_value(("admin", "admin_use_qq_role"), default=True, legacy_keys=("admin_use_qq_role",))),
-                "extra_openids": self._read_config_value(("admin", "admin_openids"), default=[], legacy_keys=("admin_openids",)) or [],
-            },
-            "target_groups": self._read_config_value(("basic", "target_group_openids"), default=[], legacy_keys=("target_group_openids",)) or [],
-            "known_groups": groups,
-            "pending_count": sum(len(v) for v in self._pending.values()),
-            "poll_interval": int(self._read_config_value(("approval", "poll_interval"), default=30, legacy_keys=("poll_interval",)) or 30),
-            "poll_running": bool(self._poll_task and not self._poll_task.done()),
-            # 1.4.0：申请获取方式（事件为主 / 纯轮询 / 仅事件）与按钮通道状态
-            "approval": {
-                "join_event_mode": self._join_event_mode(),
-                "poll_interval_effective": self._poll_interval_seconds(),
-                "poll_interval_fallback": int(self._read_config_value(("approval", "poll_interval_fallback"), default=300, legacy_keys=("poll_interval_fallback",)) or 300),
-                "buttons": {
-                    "enabled": bool(self._join_button_options()[0]),
-                    "channel_ready": self._button_channel_ready(),
-                    "permission": self._join_button_options()[1],
-                    "max_requests": self._join_button_options()[2],
-                },
-                "join_event": {
-                    "total": self._join_event_total,
-                    "last_at": self._join_event_last,
-                    "last_text": fmt_ts(self._join_event_last) if self._join_event_last else "",
-                    # 有群收到过事件 = 事件通道确实在推；一个都没收到多半是
-                    # 机器人不是群管理员（平台不推），或者注入后还没重连完成
-                    "groups_seen": len(self._join_event_at),
-                },
-                "interaction": {
-                    "total": self._interaction_total,
-                    "last_at": self._interaction_last,
-                    "last_text": fmt_ts(self._interaction_last) if self._interaction_last else "",
-                    "last_result": self._interaction_last_result,
-                },
-            },
-            "log": {
-                "level": str(self._read_config_value(("log", "log_level"), default="DEBUG", legacy_keys=("log_level",))),
-                "entries": self.logger.last_index + 1,
-                "file": self.logger.file_path,
-            },
-        })
+        """薄壳：见 status_web。"""
+        return await status_web.web_status(self)
 
     def _resolve_group(self) -> tuple[str, str] | None:
         """从 query 解析 group_openid 与 platform_id。"""
@@ -7155,213 +6927,36 @@ class QQGroupManager(Star):
                 "live": _mute_rule_live(mode, windows), "windows": windows}
 
     async def web_mutes(self):
-        """GET /mutes?group_openid=xxx 当前禁言状态（实时查 QQ）。
-
-        不传 group_openid（或传 all）＝把每个已知群都查一遍并带群名汇总；传具体群
-        就只看那个群。多群 / 多机器人时前端靠 group_display / bot 字段区分。
-        """
-        sel, err = self._pick_groups(request.query.get("group_openid", type=str) or "")
-        if err:
-            return json_response(err)
-        members: list[dict] = []
-        errors: list[dict] = []
-        group_rules: list[dict] = []
-        for e in sel:
-            g, pid = e["group_openid"], e["platform_id"]
-            label = e.get("display") or g[:12]
-            try:
-                data = await self._get_api(pid).get_mute_state(g)
-            except QQApiError as ex:
-                errors.append({"group_openid": g, "group_display": label, "error": str(ex)})
-                continue
-            rule = data.get("global_rule") or {}
-            summary = self._mute_rule_summary(rule)
-            if summary["mode"] not in ("", "none"):
-                group_rules.append({"group_openid": g, "group_display": label, **summary})
-            for m in data.get("members") or []:
-                row = dict(m)
-                row["group_openid"] = g
-                row["group_display"] = label
-                row["bot"] = e.get("bot") or ""
-                members.append(row)
-        single = len(sel) == 1
-        return json_response({
-            "scope": "group" if single else "all",
-            "group_openid": sel[0]["group_openid"] if single else "",
-            "platform_id": sel[0]["platform_id"] if single else "",
-            "group_display": (sel[0].get("display") or "") if single else "",
-            "global_rule": group_rules[0] if (single and group_rules) else None,
-            "groups": self._group_entries(),
-            "selected": [e["group_openid"] for e in sel],
-            "members": members,
-            "group_rules": group_rules,
-            "errors": errors,
-        })
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_mutes(self)
 
     async def web_mute_history(self):
-        """GET /history?group_openid=xxx&limit=50 查询禁言历史（倒序，最新在前）。"""
-        self._sweep_expired_mutes()  # 顺手把到期的 active 更新成 expired
-        limit = request.query.get("limit", 50, type=int)
-        limit = max(1, min(limit, 200))
-        g = request.query.get("group_openid", type=str) or ""
-        records: list[dict] = []
-        groups = [g] if g else list(self._mute_history.keys())
-        for gg in groups:
-            records.extend(self._mute_history.get(gg, []))
-        records.sort(key=lambda r: r.get("mute_at", 0), reverse=True)
-        out = []
-        for r in records[:limit]:
-            out.append({
-                "id": r.get("id"),
-                "group_openid": r.get("group_openid"),
-                "platform_id": r.get("platform_id"),
-                "member_openid": r.get("member_openid"),
-                "username": r.get("username", "未知成员"),
-                "reason": r.get("reason", ""),
-                "duration_text": r.get("duration_text", ""),
-                "seconds": r.get("seconds", 0),
-                "mute_at": r.get("mute_at", 0),
-                "mute_at_text": fmt_ts(r.get("mute_at", 0)),
-                "expire_at": r.get("expire_at", 0),
-                "expire_at_text": fmt_ts(r.get("expire_at", 0)),
-                "operator": r.get("operator", ""),
-                "operator_name": r.get("operator_name", ""),
-                "status": self._effective_mute_status(r),
-                "unmute_at": r.get("unmute_at"),
-                "unmute_at_text": fmt_ts(r.get("unmute_at", 0)) if r.get("unmute_at") else "",
-            })
-        return json_response({
-            "total": len(records),
-            "returned": len(out),
-            "records": out,
-        })
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_mute_history(self)
 
     async def web_mute_history_clear(self):
-        """POST /history/clear body={'group_openid': 'xxx'} 清空历史（不传群则清空全部）。"""
-        payload = await request.json(default={})
-        g = payload.get("group_openid") or request.query.get("group_openid", type=str) or ""
-        n = 0
-        if g:
-            n = len(self._mute_history.pop(g, []))
-        else:
-            n = sum(len(v) for v in self._mute_history.values())
-            self._mute_history.clear()
-        self._save_mute_history()
-        self.logger.info(f"WebUI 清空禁言历史: {n} 条")
-        return json_response({"cleared": n})
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_mute_history_clear(self)
 
     async def web_mute_history_delete(self):
-        """POST /history/delete body={'id': 123} 删除单条记录。"""
-        payload = await request.json(default={})
-        rid = payload.get("id")
-        deleted = 0
-        for g, lst in self._mute_history.items():
-            for i, r in enumerate(lst):
-                if r.get("id") == rid:
-                    del lst[i]
-                    deleted = 1
-                    break
-            if deleted:
-                break
-        if deleted:
-            self._save_mute_history()
-            self.logger.info(f"WebUI 删除禁言历史记录: id={rid}")
-        return json_response({"deleted": deleted})
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_mute_history_delete(self)
 
     async def web_recalls(self):
-        """GET /recalls?group_openid=xxx&limit=50 撤回历史（不传群则全部群）。"""
-        limit = request.query.get("limit", 100, type=int)
-        limit = max(1, min(limit, 200))
-        g = request.query.get("group_openid", type=str) or ""
-        records: list[dict] = []
-        if g:
-            records = list(self._recall_history.get(g, []))
-        else:
-            for lst in self._recall_history.values():
-                records.extend(lst)
-        records.sort(key=lambda r: r.get("recalled_at", 0), reverse=True)
-        out = []
-        for r in records[:limit]:
-            out.append({
-                "id": r.get("id"),
-                "group_openid": r.get("group_openid"),
-                "platform_id": r.get("platform_id"),
-                "message_id": r.get("message_id"),
-                "content": r.get("content", ""),
-                "source": r.get("source", ""),
-                "recalled_at": r.get("recalled_at", 0),
-                "recalled_at_text": fmt_ts(r.get("recalled_at", 0)),
-                "operator": r.get("operator", ""),
-                "operator_name": r.get("operator_name", ""),
-            })
-        return json_response({
-            "total": len(records),
-            "returned": len(out),
-            "records": out,
-        })
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_recalls(self)
 
     async def web_recalls_clear(self):
-        """POST /recalls/clear body={'group_openid': 'xxx'} 清空撤回历史（不传群则清空全部）。"""
-        payload = await request.json(default={})
-        g = payload.get("group_openid") or request.query.get("group_openid", type=str) or ""
-        n = 0
-        if g:
-            n = len(self._recall_history.pop(g, []))
-        else:
-            n = sum(len(v) for v in self._recall_history.values())
-            self._recall_history.clear()
-        self._save_recall_history()
-        self.logger.info(f"WebUI 清空撤回历史: {n} 条")
-        return json_response({"cleared": n})
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_recalls_clear(self)
 
     async def web_recalls_delete(self):
-        """POST /recalls/delete body={'id': 123} 删除单条撤回记录。"""
-        payload = await request.json(default={})
-        rid = payload.get("id")
-        deleted = 0
-        for g, lst in self._recall_history.items():
-            for i, r in enumerate(lst):
-                if r.get("id") == rid:
-                    del lst[i]
-                    deleted = 1
-                    break
-            if deleted:
-                break
-        if deleted:
-            self._save_recall_history()
-            self.logger.info(f"WebUI 删除撤回历史记录: id={rid}")
-        return json_response({"deleted": deleted})
+        """薄壳：见 mute_web。"""
+        return await mute_web.web_recalls_delete(self)
 
     async def web_requests(self):
-        """GET /requests?group_openid=xxx 待处理入群申请。
-
-        不传（或传 all）＝汇总全部已知群的申请（每条带所属群，便于分群查看）；
-        传具体群＝只刷新并展示那一个群。_refresh_requests 内部失败会退回本地缓存。
-
-        最外层再包一层兜底：面板这一块宁可显示「哪一步挂了」，也不要整块
-        「加载失败: Internal server error」——500 一到前端就只剩一句通用报错，
-        排查时完全看不出是哪一步炸的（历史现象：群选择器/群名元数据坏掉也会 500）。
-        """
-        try:
-            return await self._web_requests_impl()
-        except Exception as ex:  # noqa: BLE001
-            import traceback
-
-            tb = traceback.format_exc()
-            self.logger.error(f"[/requests] 查询待审批列表失败: {ex}\n{tb}")
-            return json_response({
-                "error": "requests_failed",
-                "message": str(ex) or ex.__class__.__name__,
-                "scope": "all",
-                "group_openid": "",
-                "platform_id": "",
-                "group_display": "",
-                "groups": [],
-                "selected": [],
-                "requests": [],
-                "errors": [{"group_openid": "", "group_display": "全部", "bot": "",
-                            "error": str(ex) or ex.__class__.__name__}],
-            })
+        """薄壳：见 status_web。"""
+        return await status_web.web_requests(self)
 
     async def _web_requests_impl(self):
         sel, err = self._pick_groups(request.query.get("group_openid", type=str) or "")
@@ -7423,15 +7018,8 @@ class QQGroupManager(Star):
         return await status_web.web_logs_clear(self)
 
     async def web_poll_now(self):
-        groups = self._managed_groups()
-        results = {}
-        for g, pid in groups.items():
-            try:
-                await self._poll_group(g, pid)
-                results[g] = "ok"
-            except Exception as e:
-                results[g] = str(e)
-        return json_response({"groups": results})
+        """薄壳：见 status_web。"""
+        return await status_web.web_poll_now(self)
 
     async def web_config_save(self):
         """薄壳：配置 API 见 qgm.features.config.web。"""
