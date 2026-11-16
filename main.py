@@ -60,6 +60,8 @@ from .qgm.features.config import web as config_web
 from .qgm.commands import router as command_router
 from .qgm.commands import parse as command_parse
 from .qgm.features.mute import commands as mute_commands
+from .qgm.features.status import commands as status_commands
+from .qgm.features.admin import commands as admin_commands
 from .qgm.features.approval import commands as approval_commands
 from .qgm.features.approval import web as approval_web
 from .qgm.features.mute import web as mute_web
@@ -1034,33 +1036,9 @@ class QQGroupManager(Star):
         self.logger.info(f"[清理] 群 {group} 数据已清理（{reason}）：{_purge_summary_text(out)}")
         return out
 
-    async def _cmd_status(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """/群管 状态 [日报|群|自检|群名]：所有「看一眼现状」的指令收在这一个入口。
-
-        - 日报（默认，原 /群管 汇报）：待处理申请 + 当前禁言人数
-        - 群（原 /群管 体检 [清理]）：机器人还在不在已记录的群里
-        - 自检（原 /群管 自检）：审核链路配置与今日用量
-        - 群名（原 /群管 群名）：刷新本群群名（面板群列表用）
-        """
-        sub = parts[1].lower() if len(parts) > 1 else ""
-        args = parts[2:]
-        if sub in ("", "日报", "汇报", "daily", "摘要", "summary"):
-            await self._cmd_report(event)
-        elif sub in ("群", "体检", "presence", "在群"):
-            await self._cmd_presence(event, ["/状态"] + args)
-        elif sub in ("自检", "诊断", "selfcheck", "diag"):
-            await self._cmd_selfcheck(event)
-        elif sub in ("群名", "名称", "name", "刷新群名"):
-            await self._cmd_group_name(event)
-        else:
-            await self._reply(
-                event,
-                "用法：/群管 状态 [日报 | 群 [清理] | 自检 | 群名]\n"
-                "· 日报＝待处理申请 + 禁言人数\n"
-                "· 群＝机器人还在不在已记录的群里\n"
-                "· 自检＝审核链路配置与今日用量\n"
-                "· 群名＝刷新本群群名",
-            )
+    async def _cmd_status(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 status_commands。"""
+        return await status_commands._cmd_status(self, event, parts)
 
     def _is_bot_admin_only(self, event: AstrMessageEvent) -> bool:
         """是不是「机器人管理员」（AstrBot 管理员 / 自定义 OpenID 名单）。
@@ -1117,51 +1095,9 @@ class QQGroupManager(Star):
             return f"警告（记录 #{rec.get('id')}）"
         return f"无处罚（记录 #{rec.get('id')}）"
 
-    async def _cmd_selfcheck(self, event: AstrMessageEvent) -> None:
-        """/群管 自检：一眼看清审核链路「配没配好、调没调上、花了多少」。
-
-        刻意不做主动探活——探活等于真发一次请求，既花钱又要等；
-        要看真调用的细节，把日志级别调到 DEBUG 看 [模型] 行即可。
-        """
-        g = event.get_group_id()
-        st = self._mod_settings(g)
-        try:
-            pid = str(await self._mod_provider_id(event, group=g) or "")
-        except Exception as e:                                  # provider 解析失败本身就是要报的问题
-            pid = f"解析失败（{e}）"
-        try:
-            stats = self.mod.stats(g) or {}
-        except Exception:
-            stats = {}
-        last = dict(self._mod_last_llm or {})
-        budget = int(st.get("daily_budget") or 0)
-        used = int(stats.get("today_llm_calls", 0) or 0)
-        queue = int(st.get("llm_queue_limit") or 0)
-        timeout = int(st.get("llm_timeout") or 0)
-        if last:
-            last_line = (f"最近一次模型调用：{last.get('scene') or '-'} "
-                         f"{'成功' if last.get('ok') else '失败'} {last.get('ms', '?')}ms"
-                         + (f"（{last.get('error')}）" if last.get("error") else ""))
-        else:
-            last_line = "最近一次模型调用：本进程内还没有（近期没走到模型层）"
-        lines = [
-            "【群管自检】",
-            f"适配器：{event.get_platform_id() or '-'}",
-            f"审核开关：{'开' if st.get('enabled') else '关'}"
-            f"｜执行模式：{'试运行（只判定不执行）' if st.get('dry_run') else '真实执行'}",
-            f"分层：关键词 {'开' if st.get('enable_keyword') else '关'}"
-            f"／模型 {'开' if st.get('enable_model') else '关'}"
-            f"／图片 {'开' if st.get('enable_vision') else '关'}",
-            f"审核模型：{pid or '未配置（模型层会直接跳过，只跑关键词）'}",
-            f"今日模型调用：{used}" + (f" / 预算 {budget}" if budget > 0 else "（未设上限）"),
-            f"累计判定 {stats.get('total', 0)} 条"
-            f"｜本次统计以来缓存命中率 {round(float(stats.get('cache_rate') or 0) * 100)}%",
-            f"并发闸门：排队 {self._mod_llm_pending.get(g, 0)}/{queue or '不限'}"
-            f"｜单次超时 {timeout or '不限'}s",
-            last_line,
-            "提示：不做主动探活（会真花钱）；想看调用细节，把日志级别调到 DEBUG 看 [模型] 行。",
-        ]
-        await self._reply(event, "\n".join(lines))
+    async def _cmd_selfcheck(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 status_commands。"""
+        return await status_commands._cmd_selfcheck(self, event, parts)
 
     async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str]) -> None:
         """/群管 体检：逐个确认机器人还在不在已记录的群里。
@@ -3603,46 +3539,9 @@ class QQGroupManager(Star):
             pass
         return brief
 
-    async def _cmd_list_requests(
-        self, event: AstrMessageEvent, parts: list[str] | None = None
-    ) -> None:
-        """待处理入群申请：本群 / 全部群，可翻页。
-
-        用法：
-            /群管 审批            本群第 1 页
-            /群管 审批 2          本群第 2 页
-            /群管 审批 全部       所有已知群汇总
-            /群管 审批 全部 2     汇总的第 2 页
-        """
-        g = event.get_group_id()
-        args = [a for a in (parts or [])[1:]]
-        all_groups = any(a in ("全部", "全群", "所有", "all") for a in args)
-        page = 1
-        for a in args:
-            if a.isdigit():
-                page = max(1, int(a))
-        if all_groups:
-            await self._list_requests_all_groups(event, page)
-            return
-
-        pending = self._pending_list(g)
-        if not pending:
-            pending = await self._refresh_requests(g, event.get_platform_id())
-        if not pending:
-            await self._reply(event, self._render("msg_requests_empty"))
-            return
-        per = self.REQUEST_PAGE_SIZE
-        total = len(pending)
-        pages = max(1, (total + per - 1) // per)
-        page = min(page, pages)
-        chunk = pending[(page - 1) * per: page * per]
-        lines = [f"（本群 {total} 条，第 {page}/{pages} 页）"]
-        for i, r in enumerate(chunk, start=(page - 1) * per + 1):
-            # 序号用全局序号，保证 /群管 通过 N 与本列表一一对应
-            lines.append(self._fmt_request_line(i, r))
-        if page < pages:
-            lines.append(f"下一页：/群管 审批 {page + 1}")
-        await self._reply(event, self._render("msg_requests_list", list="\n".join(lines)))
+    async def _cmd_list_requests(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 approval_commands。"""
+        return await approval_commands._cmd_list_requests(self, event, parts)
 
     async def _list_requests_all_groups(self, event: AstrMessageEvent, page: int) -> None:
         """按群汇总所有待处理申请（被动回复）。
@@ -3684,18 +3583,9 @@ class QQGroupManager(Star):
         await self._reply(event, self._render("msg_requests_list", list=body))
 
     @_with_log_context
-    async def _cmd_report(self, event: AstrMessageEvent) -> None:
-        """被动版日报：/群管 汇报 —— 立刻回一条，不等定时任务。
-
-        和定时汇报共用 _build_report_text，区别只是「回复当前消息」而不是主动推送：
-        主动消息要过频控、还依赖群未关闭主动消息，手动查的时候用被动回复更稳。
-        """
-        g = event.get_group_id()
-        if not g:
-            await self._reply(event, "这个指令要在群里发哈。")
-            return
-        text = await self._build_report_text(g, event.get_platform_id())
-        await self._reply(event, text)
+    async def _cmd_report(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 status_commands。"""
+        return await status_commands._cmd_report(self, event, parts)
 
     async def _cmd_review(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 approval_commands。"""
@@ -5659,52 +5549,9 @@ class QQGroupManager(Star):
         return await audit_service.report_violation(self, event, parts)
 
     # ---------------- /群规 ----------------
-    async def _cmd_admin_register(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """审核提醒名单的管理员登记：/管理登记 [取消|列表]
-
-        为什么要登记而不是自动识别：QQ 官方通道下群消息拿不到稳定的角色字段
-        （_get_qq_role 恒为 None），而"谁在线、谁愿意兜底"本来就是群自己的事。
-        所以由管理员主动发一条指令把自己写进本群名单，变体累计提醒只 @ 名单内的人；
-        一个群没人登记，就不发提醒（不刷群、不浪费主动消息配额）。
-        """
-        event.call_llm = True
-        g = event.get_group_id() or ""
-        if not g:
-            await self._reply(event, "本指令只能在群里使用")
-            return
-        if not self._mod_group_allowed(g):
-            return
-        sender = str(event.get_sender_id() or "")
-        name = str(event.get_sender_name() or "")
-        sub = parts[1].strip() if len(parts) > 1 else ""
-        if sub in ("列表", "查看", "list"):
-            admins = self.mod.get_admins(g)
-            if not admins:
-                await self._reply(event, self._mod_tpl(g, "mod_admin_list_empty"))
-                return
-            names = "、".join((a.get("name") or f"<@{a['openid']}>") for a in admins[:20])
-            await self._reply(event, self._mod_tpl(g, "mod_admin_list",
-                                                   count=len(admins), admins=names))
-            return
-        if sub in ("取消", "移除", "注销", "off"):
-            ok = self.mod.unregister_admin(g, sender)
-            cnt = len(self.mod.get_admins(g))
-            key = "mod_admin_unregistered" if ok else "mod_admin_not_registered"
-            await self._reply(event, self._mod_tpl(g, key, user=f"<@{sender}>", at=sender, count=cnt))
-            return
-        # 登记：能走到这里说明已经过了管理员门槛（AstrBot 管理员 / 配置名单 / 群角色任一）
-        role = str(self._get_qq_role(event) or "")
-        if not role and self._is_qq_admin_openid(g, sender):
-            role = "qq_admin"
-        if not role:
-            role = "astrbot_admin"
-        self.mod.register_admin(g, sender, name=name, role=role, by=sender)
-        cnt = len(self.mod.get_admins(g))
-        self.logger.info(f"[审核] 管理员登记：group={g} sender={sender} role={role} 名单共 {cnt} 人")
-        await self._reply(event, self._mod_tpl(g, "mod_admin_registered",
-                                               user=f"<@{sender}>", at=sender, count=cnt))
-        if not self._mod_settings(g).get("variant_strike_notify", True):
-            await self._reply(event, self._mod_tpl(g, "mod_admin_register_off"))
+    async def _cmd_admin_register(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 admin_commands。"""
+        return await admin_commands._cmd_admin_register(self, event, parts)
 
     async def _cmd_rules(self, event: AstrMessageEvent, parts: list[str]) -> None:
         event.call_llm = True
