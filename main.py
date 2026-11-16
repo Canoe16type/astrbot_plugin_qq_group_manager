@@ -48,6 +48,7 @@ from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
 from .qgm.kernel.text import short_id
 from .qgm.features.audit import policy as audit_policy
+from .qgm.features.audit import record as audit_record
 from .qq_api import QQApi, QQApiError
 from . import button_kit
 from . import member_event
@@ -1244,22 +1245,9 @@ class QQGroupManager(Star):
                 and not v.get("revoked"))
 
     def _fmt_verdict_line(self, v: dict) -> str:
-        """把一条判定记录压成一行，供「撤销 列表」和回执使用。"""
-        act = str(v.get("action") or ("mute" if v.get("executed") else "none"))
-        act_txt = {
-            "warn": "警告",
-            "recall": "已撤回",
-            "mute": f"禁言 {fmt_duration(int(v.get('ban_seconds') or 0))}",
-            "todo": "转人工待办",
-            "none": "未处罚",
-        }.get(act, act)
-        if v.get("revoked"):
-            act_txt = "已撤销"
-        ts = time.strftime("%m-%d %H:%M", time.localtime(int(v.get("created_at") or 0)))
-        verdict = (self.mod.get_cat_names(str(v.get("group") or "")).get(str(v.get("category") or ""), "违规")
-                   if v.get("violation") else "未违规")
-        return (f"#{v.get('id')} {ts} {v.get('target_name') or v.get('target') or '-'}｜{verdict}"
-                f"｜{act_txt}｜置信度 {float(v.get('confidence') or 0):.2f}")
+        """单行摘要；实现见 qgm.features.audit.record。"""
+        return audit_record.fmt_verdict_line(
+            v, self.mod.get_cat_names(str(v.get("group") or "")), fmt_duration)
 
     @_with_log_context
     async def _cmd_revoke(self, event: AstrMessageEvent, parts: list[str]) -> None:
@@ -5204,21 +5192,8 @@ class QQGroupManager(Star):
     _VERDICT_TEXT_CAP = 1000
 
     def _verdict_text(self, rep: dict) -> dict:
-        """判定记录要留的「原始内容」：够人工二次确认，又不至于把 verdicts.json 撑爆。
-
-        - text：原文前 1000 字
-        - text_len / text_truncated：原文总长与是否被截断（复核时能看出有没有剪）
-        - images：图片条数。官方图片 URL 是临时签名链接，几小时必失效，
-          存进记录里也点不开，所以只记数量，不存 URL。
-        """
-        raw = str(rep.get("text") or "")
-        cap = int(self._VERDICT_TEXT_CAP)
-        return {
-            "text": raw[:cap],
-            "text_len": len(raw),
-            "text_truncated": len(raw) > cap,
-            "images": len(rep.get("images") or []),
-        }
+        """记录原文归档；实现见 qgm.features.audit.record。"""
+        return audit_record.verdict_text(rep, int(self._VERDICT_TEXT_CAP))
 
     # moderation 话术模板里的内置模块占位符：{at} / {avatar} / {avatar:N}
     _MOD_MODULE_RE = re.compile(r"\{at\}|\{avatar(?::\d+)?\}")
@@ -7472,13 +7447,8 @@ class QQGroupManager(Star):
         days = request.query.get("days", 0, type=int) or 0
         limit = min(5000, max(1, request.query.get("limit", 1000, type=int)))
         since = int(time.time()) - days * 86400 if days > 0 else 0
-        items: list[dict] = []
-        for v in self.mod._iter_verdicts():          # 新 → 旧
-            if (not g or v.get("group") == g) and (not since or int(v.get("created_at") or 0) >= since):
-                items.append(v)
-                if len(items) >= limit:
-                    break
-        items.reverse()                              # 与旧行为一致：按时间从旧到新
+        items = audit_record.filter_records(
+            self.mod._iter_verdicts(), group=g, since=since, limit=limit)
         return json_response({"items": items, "total": len(items)})
 
     async def web_mod_verdicts(self):
