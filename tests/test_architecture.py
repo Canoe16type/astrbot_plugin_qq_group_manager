@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 9350, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 9100, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -49,6 +49,16 @@ class ArchitectureGuardTest(unittest.TestCase):
             src = (ROOT / name).read_text(encoding="utf-8")
             self.assertLessEqual(len(src.splitlines()), 20, f"{name} 已不再是薄 shim")
             self.assertIn("sys.modules", src)
+
+    def test_report_handler_is_thin(self):
+        """举报编排已迁到 service；入口方法超过 12 行说明逻辑又搬回来了。"""
+        import ast as _ast
+        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name == "_cmd_report_violation":
+                self.assertLessEqual(node.end_lineno - node.lineno + 1, 12)
+                return
+        self.fail("找不到 _cmd_report_violation")
 
 
 if __name__ == "__main__":
