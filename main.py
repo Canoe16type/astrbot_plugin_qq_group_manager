@@ -92,11 +92,10 @@ from .qgm.kernel.timefmt import (
     _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, parse_duration,
     set_active_timezone,
 )
-from .qgm.kernel.constants import (ADMIN_COMMANDS, LEXICON_UPSTREAM_MAX_BYTES, LEXICON_UPSTREAM_NAME,
+from .qgm.kernel.constants import (ADMIN_COMMANDS, LEXICON_UPSTREAM_FAST_TIMEOUT, LEXICON_UPSTREAM_MAX_BYTES, LEXICON_UPSTREAM_NAME,
     LEXICON_UPSTREAM_TIMEOUT, LEXICON_UPSTREAM_URL, PLUGIN_NAME, PLUGIN_VERSION,
     REGISTERED_COMMANDS)
 from .qgm.kernel.text import _PURGE_LABELS, _purge_summary_text, _recall_hint, _refresh_hint
-from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.features.members import events as member_events
 from .qq_api import QQApi, QQApiError
 from . import button_kit
@@ -154,7 +153,6 @@ class _TplText(str):
 # 1.0.0 及更早版本曾把数据写进 plugin_data/qq_group_manager，导致卸载时
 # AstrBot 找不到该目录、静默跳过删除（"删了数据其实没删"）。此处统一为目录名，
 # 并通过 _migrate_legacy_data_dir() 一次性迁移旧目录。
-PLUGIN_NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__))) or "astrbot_plugin_qq_group_manager"
 # 日志出口统一走 astrbot.api.logger（AstrBot 会按插件路由到 astrbot.plugin.<id>，
 # 收进 data/logs）。初始化早期（self.logger / PluginLogger 还没构造完）也用它，
 # 插件不得使用 stdlib logging，出口只能是 astrbot.api.logger。
@@ -180,7 +178,6 @@ class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
 
 
 
@@ -290,11 +287,6 @@ HISTORY_MAX_PER_GROUP = 500
 # 说明和时长静默丢失（群里表现为「已添加群规：侮辱」）。
 
 
-RULE_USAGE_ADD = (
-    "用法：/群管 群规 添加 规则名 | 说明 | 时长" + chr(10) +
-    "示例：/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
-    "竖线用半角「|」或全角「｜」都行；时长可省略，默认 1 小时。"
-)
 
 # 面板与消息里的时间统一按 AstrBot 全局配置 timezone 渲染（默认 Asia/Shanghai / UTC+8），
 # 不跟随宿主机或浏览器时区；时长类配置一律以「秒」为单位，只在展示时换算。
@@ -649,7 +641,7 @@ class QQGroupManager(Star):
         """薄壳：见 qgm/features/admin/purge.py。"""
         return admin_purge._purge_group_data(self, group, pid, reason)
 
-    async def _cmd_status(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_status(self, event: AstrMessageEvent, parts: list[str] | None=None):
         """薄壳：见 status_commands。"""
         return await status_commands._cmd_status(self, event, parts)
 
@@ -708,11 +700,11 @@ class QQGroupManager(Star):
             return f"警告（记录 #{rec.get('id')}）"
         return f"无处罚（记录 #{rec.get('id')}）"
 
-    async def _cmd_selfcheck(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_selfcheck(self, event: AstrMessageEvent, parts: list[str] | None=None):
         """薄壳：见 status_commands。"""
         return await status_commands._cmd_selfcheck(self, event, parts)
 
-    async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 members_commands。"""
         return await members_commands._cmd_presence(self, event, parts)
 
@@ -1843,7 +1835,7 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # /成员：群成员档案
     # ------------------------------------------------------------------
-    async def _cmd_member(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_member(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 members_commands。"""
         return await members_commands._cmd_member(self, event, parts)
 
@@ -1855,13 +1847,13 @@ class QQGroupManager(Star):
         """薄壳：见 qgm/features/members/names.py。"""
         return members_names._render_member_list(self, group_openid, status=status, keyword=keyword, page=page, title=title)
 
-    async def _cmd_member_sync(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_member_sync(self, group_openid: str):
         """薄壳：见 members_commands。"""
-        return await members_commands._cmd_member_sync(self, event, parts)
+        return await members_commands._cmd_member_sync(self, group_openid)
 
-    async def _cmd_group_name(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_group_name(self, event: AstrMessageEvent):
         """薄壳：见 members_commands。"""
-        return await members_commands._cmd_group_name(self, event, parts)
+        return await members_commands._cmd_group_name(self, event)
 
     def _is_mentioned_bot(self, event: AstrMessageEvent) -> bool:
         """判断消息是否 @ 了机器人自身（用于不带 / 的指令识别）。"""
@@ -1908,7 +1900,7 @@ class QQGroupManager(Star):
         """薄壳：见 mute_commands。"""
         return await mute_commands._cmd_unmute(self, event, parts)
 
-    async def _cmd_recall(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_recall(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 mute_commands。"""
         return await mute_commands._cmd_recall(self, event, parts)
 
@@ -2001,7 +1993,7 @@ class QQGroupManager(Star):
         """薄壳：见 qgm/features/approval/service.py。"""
         return approval_service._request_brief(r)
 
-    async def _cmd_list_requests(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_list_requests(self, event: AstrMessageEvent, parts: list[str] | None=None):
         """薄壳：见 approval_commands。"""
         return await approval_commands._cmd_list_requests(self, event, parts)
 
@@ -2010,7 +2002,7 @@ class QQGroupManager(Star):
         return await approval_service._list_requests_all_groups(self, event, page)
 
     @_with_log_context
-    async def _cmd_report(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_report(self, event: AstrMessageEvent, parts: list[str] | None=None):
         """薄壳：见 status_commands。"""
         return await status_commands._cmd_report(self, event, parts)
 
@@ -2689,16 +2681,16 @@ class QQGroupManager(Star):
         return await audit_service.report_violation(self, event, parts)
 
     # ---------------- /群规 ----------------
-    async def _cmd_admin_register(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_admin_register(self, event: AstrMessageEvent, parts: list[str] | None=None):
         """薄壳：见 admin_commands。"""
         return await admin_commands._cmd_admin_register(self, event, parts)
 
-    async def _cmd_rules(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_rules(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 audit_commands。"""
         return await audit_commands._cmd_rules(self, event, parts)
 
     # ---------------- /审核（管理员） ----------------
-    async def _cmd_mod(self, event: AstrMessageEvent, parts: list[str] | None = None):
+    async def _cmd_mod(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 audit_commands。"""
         return await audit_commands._cmd_mod(self, event, parts)
 

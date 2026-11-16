@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 
 async def _cmd_review(host, event, parts):
         cmd = parts[0] if parts else "/通过"

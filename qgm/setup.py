@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import Optional
 from pathlib import Path
 
 from astrbot.api.star import Star

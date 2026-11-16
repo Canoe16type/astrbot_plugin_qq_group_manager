@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
+from ...kernel.constants import _RULE_SEP_RE
+from ...kernel.timefmt import parse_duration
+
 RULE_USAGE_ADD = (
     "用法：/群管 群规 添加 规则名 | 说明 | 时长" + chr(10) +
     "示例：/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +

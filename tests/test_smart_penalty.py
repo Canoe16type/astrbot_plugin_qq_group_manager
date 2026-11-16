@@ -98,7 +98,7 @@ def _plugin(api="default", prior=0):
     p._read_config_value = lambda keys, default="", legacy_keys=(): default
     p._mod_settings = lambda g: dict(SETTINGS)
     if api == "default":
-        api = _FakeApi()
+        api = _Api()
     p._api_for_group_or_default = lambda g, **k: api
     p._is_qq_admin_openid = lambda g, m: False
     p._add_recall_record = lambda **k: None

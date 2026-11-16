@@ -14,7 +14,7 @@ except ImportError:
     from qq_api import QQApiError  # type: ignore
 
 
-async def _cmd_member(host, event, parts=None):
+async def _cmd_member(host, event, parts):
         """群成员档案：列表 / 改名 / 备注 / 删除 / 清理 / 拉取 / 查。
 
         官方事件与消息里只有 member_openid、没有昵称，所以这张表得靠人工维护；
@@ -122,7 +122,7 @@ async def _cmd_member(host, event, parts=None):
             "改昵称也可以走网页面板「成员档案」页签。",
         )
 
-async def _cmd_member_sync(host, event, parts=None):
+async def _cmd_member_sync(host, group_openid):
         """尝试用官方群成员接口补昵称。
 
         注意：GET /v2/groups/{openid}/members 与 .../members/{openid}
@@ -161,7 +161,7 @@ async def _cmd_member_sync(host, event, parts=None):
             f"人工改过的昵称不会被覆盖。"
         )
 
-async def _cmd_presence(host, event, parts=None):
+async def _cmd_presence(host, event, parts):
         """/群管 体检：逐个确认机器人还在不在已记录的群里。
 
         默认只报告；带 ``清理`` 才真删数据（避免一次手滑清一堆群）。
@@ -204,7 +204,7 @@ async def _cmd_presence(host, event, parts=None):
         )
         await host._reply(event, "\n".join(lines))
 
-async def _cmd_group_name(host, event, parts=None):
+async def _cmd_group_name(host, event):
         """刷新当前群的群名（管理员）。
 
         群名接口 GET /v2/groups/{openid}/info 仅白名单机器人可用（11253），

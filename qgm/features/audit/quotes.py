@@ -9,7 +9,7 @@ from astrbot.api.message_components import Reply
 from ...kernel.text import _norm_media_url
 
 
-def _mod_resolve_reported(host, event: AstrMessageEvent):
+def _mod_resolve_reported(host, event):
         """解析「被举报的消息」。
 
         沿用插件里已验证的引用解析链路（与 /撤回 同源）：
@@ -181,7 +181,7 @@ def _extract_quote_from_raw(host, raw):
                         or getattr(e0, "id", "")
                         or getattr(e0, "message_id", "")
                     )
-                    content = cls._clean_quote_summary(str(getattr(e0, "content", "") or ""))
+                    content = host._clean_quote_summary(str(getattr(e0, "content", "") or ""))
             # 2) message_reference 直接携带被引用消息 ID
             if not mid:
                 if isinstance(ref, dict):

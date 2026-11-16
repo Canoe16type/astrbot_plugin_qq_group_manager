@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Optional
+
 import re
 import time
 
@@ -215,7 +217,7 @@ async def _cmd_list_mute_history(host, event, parts):
         )
 
 
-async def _cmd_recall(host, event, parts=None):
+async def _cmd_recall(host, event, parts):
         """撤回消息。
 
         用法:

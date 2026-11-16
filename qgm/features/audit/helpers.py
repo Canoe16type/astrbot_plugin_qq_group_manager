@@ -83,7 +83,7 @@ async def _mod_provider_info(host, event=None, vision=False, group=''):
 async def _mod_provider_id(host, event=None, vision=False, group=''):
         return str((await host._mod_provider_info(event=event, vision=vision, group=group)).get("id") or "")
 
-def _mod_extra_variant_words(host):
+def _mod_extra_variant_words(settings: dict):
         """本群自定义关键词里的字面片段（正则语法会被拆掉，只取字面部分）。"""
         out: list[tuple[str, tuple]] = []
         try:

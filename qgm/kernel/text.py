@@ -89,6 +89,9 @@ def _norm_media_url(u: str) -> str:
     return "https://" + u
 
 
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
+
+
 def _looks_like_image_url(u: str) -> bool:
     """按扩展名判断是不是图片地址（去 query，官方 URL 后面常带签名参数）。"""
     path = str(u or "").split("?", 1)[0].lower()

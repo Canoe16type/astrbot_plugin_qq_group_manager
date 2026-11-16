@@ -6,10 +6,17 @@ import re
 import time
 import urllib.request
 
+try:
+    from .... import lexicon as lexicon_lib, moderation
+except ImportError:
+    import lexicon as lexicon_lib  # type: ignore
+    import moderation  # type: ignore
+
 from ...kernel.constants import LEXICON_UPSTREAM_NAME
 
 
-async def fetch_upstream_lexicon(host, use_mirror=True, force=False):
+async def fetch_upstream_lexicon(host, url: str = "", name: str = "", category: str = "",
+                                 auto_enable=None, mirror: str = "", force_mirror=None):
         """把上游词表下载下来写成本地词库：同名则覆盖更新，避免每点一次多一个库。"""
         conf = host._lexicon_upstream_conf()
         url = (url or conf["url"]).strip()
