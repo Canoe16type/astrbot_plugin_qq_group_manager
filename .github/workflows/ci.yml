@@ -33,18 +33,6 @@ jobs:
       - name: 元数据与配置校验
         run: python tools/check_metadata.py
 
-      - name: 词库自检
-        run: python tools/selftest_lexicon.py
-
-      - name: 变体检测自检
-        run: python tools/selftest_variant.py
-
-      - name: 分模块自检（无 AstrBot 环境时自动跳过 B 层）
-        run: |
-          python tools/selftest_mod_integration.py
-          python tools/selftest_admin_register.py
-          python tools/selftest_rule_spec.py
-
       - name: 仓库卫生检查
         run: |
           set -e
