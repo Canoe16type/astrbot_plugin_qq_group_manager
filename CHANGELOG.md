@@ -150,6 +150,10 @@
 - **文档与测试自身**：两处新增用例误缩进进 `if __name__ == "__main__"` 块导致静默不执行，已修正。
 
 **调整**
+- **开发工具拆分为独立仓库**：`bench_* / selftest_* / build_* / preview_dashboard / _plugin_import` 迁到
+  [astrbot_plugin_qq_group_manager_devtools](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools)，用 `QGM_PLUGIN_DIR` 指向插件目录运行；
+  主仓库只保留 `tools/check_metadata.py`（版本/徽章/实测版本校验）。CI 同步去掉已迁出的自检步骤。
+  README / GUIDE / CONTRIBUTING 的引用改为指向 devtools 仓库，GUIDE 新增「参与贡献与反馈」入口表。
 - **话术模板作用域收敛**：设置 → 消息模板里原有 **19 条**与「群规审核 → 话术模板」重复的审核/举报话术
   （`mod_*` 全套 + 警告/转人工/撤销/无法定位），已从设置页移除；审核话术统一只在群规审核按群修改。
   新增 `tests/test_template_scope.py` 防止两边再次重复。

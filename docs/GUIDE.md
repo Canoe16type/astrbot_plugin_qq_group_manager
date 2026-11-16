@@ -15,7 +15,7 @@
 > **免责**
 >
 > - 内置词库是**审核用黑名单**，只在本机匹配拦截，不对外提供、不生成、不上传；面板与日志都不展示词条文本。
-> - 词条由 `tools/build_lexicons.py` 从公开开源项目生成（见 [lexicons/SOURCES.md](../lexicons/SOURCES.md)），
+> - 词条由 [devtools](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools) 的 `build_lexicons.py` 从公开开源项目生成（见 [lexicons/SOURCES.md](../lexicons/SOURCES.md)），
 >   上游社区维护，**可能误伤或漏词，作者不作保证**；是否启用由使用者自行判断并承担责任。
 > - 本插件是辅助工具，不能替代平台审核义务与人工管理；使用须符合当地法律与平台规则。
 
@@ -487,7 +487,7 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 成本：纯离线计算，不调模型；索引随词库重建（约 5700 条拼音词条约 90ms），单条消息约 0.4ms。
 命中词条不写入日志与记录，只在记录里标「变体」类型。
 
-**已知短板**（`tools/bench_evasion.py` 实测召回）：插符号 / 插空格 / 插 emoji / 同音字 / 全拼 100%，
+**已知短板**（[devtools](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools) 的 `bench_evasion.py` 实测召回）：插符号 / 插空格 / 插 emoji / 同音字 / 全拼 100%，
 拼音首字母 98%，形近字替换 56%，**「词中间插字」只有 13%**（`代X刷单` 会打断连续音节窗口）。
 补它需滑窗 + 编辑距离，误报与耗时都会涨，暂不做——插字绕过主要靠「自定义关键词 + 词库字面量」兜底。
 
@@ -1015,7 +1015,7 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 体积大、宽泛词多、合规边界也更敏感，交给你自己决定要不要、用哪一份。需要更多类型有两条路（第三条见下节）：
 
 1. **自己写关键词**：「群规审核 → 举报设置」按群填，最精准、零误伤；
-2. **自己生成**：`python3 tools/build_lexicons.py`（联网，缓存 7 天）会把 9 个类型全量生成到 `lexicons/`，
+2. **自己生成**：`python3 build_lexicons.py   # 见 devtools 仓库`（联网，缓存 7 天）会把 9 个类型全量生成到 `lexicons/`，
    包括不随仓库分发的 4 个大库；生成后插件自动加载。
 
 > 不生成、不上传也完全能用：关键词层由「2 个小库 + 自定义关键词 + 代码内置正则」兜底，其他判定维度不受影响。
@@ -1048,7 +1048,7 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 | 编码 | UTF-8（含 BOM）→ GB18030 | 国内词表常见 GBK，自动回退 |
 | 匹配 | 字面量 | 避免 `C++`、`1.5折` 被当正则 |
 
-> 一次只拉一个文件，不会自动合并多个类别——要分类清楚就用 `tools/build_lexicons.py`。
+> 一次只拉一个文件，不会自动合并多个类别——要分类清楚就用 [devtools](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools) 的 `build_lexicons.py`。
 
 ### 白名单与匹配方式
 
@@ -1097,7 +1097,7 @@ TXT / CSV：一行一条，支持 `#` 注释、`[ad]` 分节、`ad: 词语` 单�
 变体检测用的 `data/pinyin_map.json`（pypinyin 0.55.0 生成 · MIT）与 `data/variant_confusables.json`（人工整理）
 的来源与许可见 [SOURCES.md](../lexicons/SOURCES.md#其他随包数据非词库)。
 
-工具：`python3 tools/build_lexicons.py` 重建词库，`python3 tools/selftest_lexicon.py` 做回归自检
+工具：`python3 build_lexicons.py   # 见 devtools 仓库` 重建词库，devtools 仓库的 `selftest_lexicon.py` 做回归自检
 （解析、开关、白名单、导出回环、性能，9 组断言）。词库文件坏了不会拖垮审核：解析失败记在词库卡片上，
 命中检测异常时自动跳回代码内置规则。
 > 不要把管理面板匿名暴露到公网。
@@ -1477,6 +1477,20 @@ intent `1<<24`（GROUP_MEMBER_EVENT），插件通过运行时注入 `member_eve
 ---
 
 ---
+
+## 参与贡献与反馈
+
+| 想去哪 | 入口 |
+| --- | --- |
+| 报 Bug / 提建议 | [Issue 模板](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) |
+| 报障前该带什么 | [SUPPORT.md](../SUPPORT.md)（版本、自检输出、记录 ID、脱敏要求） |
+| 开发与测试 | [CONTRIBUTING.md](../CONTRIBUTING.md)（环境、311 例测试、代码约定） |
+| 行为准则 | [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) |
+| 安全漏洞（私密） | [SECURITY.md](../SECURITY.md) |
+| 更新记录 | [CHANGELOG](../CHANGELOG.md) |
+| 开发工具（自检/基准/构建/预览） | [devtools 仓库](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools)（非插件本体，不装进 AstrBot） |
+
+当前版本 **1.6.0** 处于功能冻结：只收缺陷修复与测试补充，新功能请先开 issue 讨论。
 
 ## 版本记录
 

@@ -19,11 +19,9 @@ python -m pip install pyyaml         # 仅元数据校验脚本需要；插件�
 
 ```bash
 python3 tools/check_metadata.py          # 元数据 / 配置 / 版本号一致性
-python3 tools/selftest_lexicon.py        # 词库编译与匹配
-python3 tools/selftest_variant.py        # 变体检测（谐音 / 形近 / 插符号）
-python3 tools/selftest_mod_integration.py  # 审核链路（无 AstrBot 时自动跳过 B 层）
-python3 tools/selftest_admin_register.py   # /管理登记 指令链路
-python3 tools/selftest_rule_spec.py        # 群规文本解析（时长 / 阈值 / 规则字段）
+# 开发工具已拆到独立仓库（https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools）：
+#   git clone 后设置 QGM_PLUGIN_DIR 指向本插件目录，再跑 selftest_lexicon / selftest_variant / ...
+# 本仓库只保留 tools/check_metadata.py（版本/徽章/实测版本校验）
 python -m unittest discover -s tests -v     # 当前 311 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
 node --check pages/dashboard/app.js         # 动过面板必跑
 ```
@@ -69,7 +67,7 @@ node --check pages/dashboard/app.js         # 动过面板必跑
 
 - **不要提交大词库**。仓库只随包 `lexicons/ad.json` 与 `lexicons/abuse.json` 两个最小集，
   色情 / 涉政 / 涉毒 / 违法犯罪 / 赌博 / 涉枪涉爆 / 暴恐七类已在 `.gitignore` 里，
-  需要的人自己跑 `python3 tools/build_lexicons.py` 生成。
+  需要的人用 [devtools](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools) 的 `build_lexicons.py` 生成。
 - 新增内置词库或换上游，**必须同步更新 `lexicons/SOURCES.md`**（来源 + 协议 + 生成方式），否则 PR 不合并。
 - 词条内容只做审核用途，PR 里不要贴出具体词条清单。
 

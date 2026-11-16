@@ -294,6 +294,7 @@
 | 更新记录 | [CHANGELOG.md](CHANGELOG.md) |
 | 求助前先看 | [SUPPORT.md](SUPPORT.md)（该查哪份文档、报障要带什么） |
 | 参与开发 | [CONTRIBUTING.md](CONTRIBUTING.md)（环境、测试、代码约定）· [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) |
+| 开发工具 | [devtools 仓库](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools)：离线自检、基准、词库构建、面板预览（非插件本体，不装进 AstrBot） |
 
 > 贴日志前请删掉 **AppID / AppSecret / openid / 群号 / 成员昵称**。
 > 日志位置：面板「日志」，或 `data/plugin_data/astrbot_plugin_qq_group_manager/*.log`；容器部署再加 `docker logs`。
@@ -305,7 +306,7 @@
 - **AI 辅助编写**：代码与文档由 AI 辅助生成，经人工审核与测试后发布，仍可能存在疏漏，欢迎反馈。
 - **零侵入**：只使用 `astrbot.api` 公开层，不改 AstrBot 与 botpy 代码文件；不替用户修改全局配置。
 - **词库免责**：内置词库是**本地审核用黑名单**，只在本机匹配拦截，不对外提供、不生成、不上传，面板与日志不展示词条文本；
-  词条由 `tools/build_lexicons.py` 从公开开源项目生成（见 [lexicons/SOURCES.md](lexicons/SOURCES.md)），
+  词条由 [开发工具仓库](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools) 的 `build_lexicons.py` 从公开开源项目生成（见 [lexicons/SOURCES.md](lexicons/SOURCES.md)），
   上游社区维护，**可能误伤或漏词，作者不作保证**，是否启用由使用者判断并承担责任。
 - **使用边界**：本插件是辅助工具，不能替代平台审核义务与人工管理；使用须符合当地法律与平台规则。
 

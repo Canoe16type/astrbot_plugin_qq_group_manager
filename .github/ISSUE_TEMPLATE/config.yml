@@ -9,3 +9,6 @@ contact_links:
   - name: 安全问题 / 漏洞报告（私密）
     url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/security/advisories/new
     about: 涉及凭据、越权、数据泄露的问题请走私密报告，不要开公开 issue。其他问题请先看 README 的 FAQ。
+  - name: 开发工具仓库（自检 / 基准 / 构建）
+    url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools
+    about: 只在开发维护时使用，不是插件本体，不要装进 AstrBot。
