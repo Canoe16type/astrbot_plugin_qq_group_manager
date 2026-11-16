@@ -67,6 +67,10 @@ from .qgm.features.members import commands as members_commands
 from .qgm.features.audit import commands as audit_commands
 from .qgm.features.audit import engine as audit_engine
 from .qgm.features.audit import quotes as audit_quotes
+from .qgm.setup import init_plugin
+from .qgm.features.lexicon import upstream as lexicon_upstream
+from .qgm.features.status import report as status_report
+from .qgm.commands import runtime as command_runtime
 from .qgm.features.audit import scan as audit_scan
 from .qgm.features.admin import purge as admin_purge
 from .qgm.features.approval import buttons as approval_buttons
@@ -82,7 +86,7 @@ from .qgm.kernel.timefmt import (
     _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, parse_duration,
     set_active_timezone,
 )
-from .qgm.kernel.constants import (LEXICON_UPSTREAM_MAX_BYTES, LEXICON_UPSTREAM_NAME,
+from .qgm.kernel.constants import (ADMIN_COMMANDS, LEXICON_UPSTREAM_MAX_BYTES, LEXICON_UPSTREAM_NAME,
     LEXICON_UPSTREAM_TIMEOUT, LEXICON_UPSTREAM_URL, PLUGIN_NAME, PLUGIN_VERSION,
     REGISTERED_COMMANDS)
 from .qgm.kernel.text import _PURGE_LABELS, _purge_summary_text, _recall_hint, _refresh_hint
@@ -260,7 +264,6 @@ _patch_botpy_quote_fields()
 
 # 管理指令集合（需要管理员权限）
 # 管理员指令：新的「大类」+ 旧的独立写法都列在这里（旧写法会先被 _normalize_aliases 折进大类）
-ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/撤销", "/管理登记", "/成员")
 
 # 本插件注册到 AstrBot「管理行为 → 指令」面板的规范指令名（不带 /）。
 # 说明：这些名字现在挂在指令组「群管」下作为子指令（面板里是 1 条组 + 子指令），
@@ -410,157 +413,9 @@ class QQGroupManager(Star):
         except Exception:
             pass
 
-    def __init__(self, context: Context, config: AstrBotConfig):
-        super().__init__(context)
-        self.config = config
-        self.logger = PluginLogger(
-            max_entries=int(self._read_config_value(("log", "log_max_entries"), default=300, legacy_keys=("log_max_entries",))),
-            level=str(self._read_config_value(("log", "log_level"), default="DEBUG", legacy_keys=("log_level",))),
-            to_file=bool(self._read_config_value(("log", "log_to_file"), default=True, legacy_keys=("log_to_file",))),
-            keep_days=int(self._read_config_value(("log", "log_keep_days"), default=14, legacy_keys=("log_keep_days",))),
-            log_dir=self._plugin_data_dir(),
-            plugin_name=PLUGIN_NAME,
-        )
-        try:
-            self.logger.concise = bool(self._read_config_value(
-                ("log", "log_concise"), default=False, legacy_keys=("log_concise",)))
-        except Exception:
-            self.logger.concise = False
-        self._check_plugin_set()
-        self._schema_cache: dict | None = None  # _conf_schema.json 缓存（设置页用）
-        self._apis: dict[str, QQApi] = {}
-        self._known_groups: dict[str, str] = {}  # group_openid -> platform_id
-        self._intro_done: dict[str, str] = {}    # 已发过群管自我介绍的群 -> event/message/manual
-        self._intro_pending: dict[str, float] = {}  # 收到入群事件、但发送尚未确认成功的群
-        self._nick_cache: dict[str, dict[str, str]] = {}  # group_openid -> {member_openid: 昵称}
-        # 被 40034105（该群未开主动消息权限）拒过的群，仅用于日志/诊断提示，不阻止重试
-        self._member_perm_blocked: set[str] = set()
-        self._pending: dict[str, list[dict]] = {}  # group_openid -> [join_request]
-        self._notified: dict[str, dict[tuple, float]] = {}  # group_openid -> {申请键: 通知时间}（防重复推送）
-        # 轮询任务自己维护"上次看到的申请键"，不依赖共享的 self._pending：
-        # _pending 会被 /审批 指令、WebUI /requests 接口更新，若拿它当"上一轮"
-        # 对比，申请会被提前"见过"，导致新申请检测永远为空、通知永远不发送。
-        self._seen_requests: dict[str, set] = {}  # group_openid -> {申请键}
-        # 机器人不是群管理员（11703）时轮询入群申请必然失败：按群退避，
-        # 避免每 30 秒刷一条 ERROR 把日志刷到几 MB。
-        self._join_error_code: dict[str, int | None] = {}   # group_openid -> 最近一次错误码
-        self._join_backoff: dict[str, float] = {}           # group_openid -> 下次允许轮询的时间戳
-        self._join_denied_logged: set[str] = set()          # 已提示过 11703 的群
-        # ---- 1.4.0 入群申请事件化 + 消息按钮 ----
-        # GROUP_JOIN_REQUEST 事件到达时间（按群）：用来判断「事件通道是否真的在工作」，
-        # 以及 event_first 模式下轮询要不要兜底。
-        self._join_event_at: dict[str, float] = {}
-        # 事件总数 / 最近一次全局时间（面板「概览」展示用）
-        self._join_event_total = 0
-        self._join_event_last = 0.0
-        # 互动事件（按钮点击）去重：同一个 interaction 只处理一次。
-        # 官方「同一 interaction_id 只能回应一次」，但用户可能连点，这里做幂等。
-        self._interaction_done: dict[str, float] = {}
-        # 互动事件统计（面板展示）
-        self._interaction_total = 0
-        self._interaction_last = 0.0
-        self._interaction_last_result = ""
-        # 申请事件合并队列：同一群 2 秒内到达的多个申请合并成一条通知，
-        # 避免「三个人同时申请 → 群里刷三条消息」。
-        self._join_fresh: dict[str, list[dict]] = {}
-        self._join_notify_tasks: dict[str, asyncio.Task] = {}
-        self._member_event_ok = False  # 群成员事件注入是否已成功
-        self._last_inject_attempt = 0.0  # 最近一次注入尝试时间戳（防频繁重连）
-        self._mute_history: dict[str, list[dict]] = {}  # group_openid -> [记录]
-        self._history_seq = 0
-        self._recall_history: dict[str, list[dict]] = {}  # group_openid -> [撤回记录]
-        self._recall_seq = 0
-        # 消息模板的发送格式（text / markdown / image）与图片地址。
-        # 注意：模板"内容"仍保存在 AstrBot 配置里（与原生面板兼容、老配置零迁移），
-        # 这里只记录"这段内容该怎么发"，属于纯展示层元数据，丢了也只是退化成纯文本。
-        self._tpl_formats: dict[str, dict] = self._load_tpl_formats()
-        # 入群欢迎去重：{"群openid:成员openid": 时间戳}。
-        # 同一个入群事件可能被重推（断线重连补事件）；审批通过路径已经发过
-        # 欢迎语时，紧随其后的 GROUP_MEMBER_ADD 也不该再发一遍。
-        self._join_welcomed: dict[str, float] = {}
-        # 群规审核（/举报）：数据按群隔离、全部本地落盘；
-        # 注意：只有收到 /举报 才会调用模型，平时不扫描、不判定、不执行。
-        self.mod = moderation.ModerationStore(self._plugin_data_dir(), self.logger)
-        self._migrate_template_defaults()
-        try:
-            self.mod.verdict_max_records = int(
-                self._read_config_value(("moderation", "verdict_max_records"), default=5000,
-                                        legacy_keys=("verdict_max_records",)) or 0
-            )
-        except Exception:
-            self.mod.verdict_max_records = 5000
-        # 面板/配置页改了上限后不必重载：每次追加时读一次（内存字典读取，成本可忽略）
-        self.mod.verdict_limit_provider = lambda: int(
-            self._read_config_value(("moderation", "verdict_max_records"), default=5000,
-                                    legacy_keys=("verdict_max_records",)) or 0
-        )
-        # 群成员档案（openid -> 昵称/备注）：官方事件与消息里只有 openid、没有昵称，
-        # 所以"这个人是谁"必须落一张可人工维护的表；退群通知、禁言列表都从这取名。
-        self.members = member_registry_lib.MemberRegistry(
-            self._plugin_data_dir(), self.logger
-        )
-        # 关键词词库：内置的是公开开源词库（lexicons/SOURCES.md 有来源与协议），
-        # 页面可上传自己的词库、勾选启用、加白名单；词库只做关键词维度，不单独调模型。
-        self.lexicons = lexicon_lib.LexiconManager(
-            self._plugin_data_dir(), plugin_dir=os.path.dirname(os.path.abspath(__file__)), logger=self.logger
-        )
-        self.logger.info(
-            "[词库] 内置词库仅 2 个（广告引流 / 辱骂攻击，来自公开开源词表，见 lexicons/SOURCES.md），"
-            "只用于本机内容过滤与拦截，不对外发布、不代表作者立场；词条内容不在面板展示。"
-            "其他类型词表请自行上传或运行 tools/build_lexicons.py 生成"
-        )
-        # 变体检测（谐音/形近/插符号绕过）：只产出「疑似」信号，命中只撤回+记录，永不自动禁言。
-        # 拼音表与形近表都是离线数据文件，缺失时自动降级（不抛异常）。
-        self.variant = variant_lib.VariantMatcher(
-            os.path.dirname(os.path.abspath(__file__)), self.logger
-        )
-        self._variant_words: Optional[list[tuple[str, tuple]]] = None  # 词条缓存（签名比对在建表侧做）
-        self._mod_pending: set[str] = set()  # 正在审核的消息 ID，防重复受理
-        # 模型调用闸门：同群并发 1，排队数超过 llm_queue_limit 的消息直接跳过模型层，
-        # 避免刷屏群把 provider 打满、把每日额度一瞬间烧完。
-        self._mod_llm_sem: dict[str, asyncio.Semaphore] = {}
-        self._mod_llm_pending: dict[str, int] = {}
-        self._mod_last_llm: dict = {}  # 最近一次模型调用摘要（/群管 自检 用）
-        self._mod_few_shot_base: str = "".join(
-            (f"- {x}" + chr(10)) for x in [
-                "「加我vx：abc123 进群领福利」→ violation=true, basis=keyword, category=ad, severity=high",
-                "「你这个傻X」→ violation=true, basis=semantic, category=abuse, severity=medium",
-                "「哈哈哈哈哈 这也太逗了」→ violation=false（无意义刷屏但无恶意，不判违规）",
-                "「楼上说得对，我刚才也这么想」→ violation=false（正常讨论）",
-                "（图片为一串二维码+文字“扫码进群领红包”）→ violation=true, basis=vision, category=ad, severity=high",
-            ]
-        )
-        # 最近收到的群消息缓存：group_openid -> [{id, text, ts, sender}]。
-        # QQ 官方引用消息事件不提供被引用消息的 d.id（只有 REFIDX 引用索引，
-        # 撤回 API 不认），因此引用撤回时用"原文匹配"找回真实消息 ID。
-        self._recent_group_msgs: dict[str, list[dict]] = {}
-        # 最近消息缓存落盘：重载/重启后仍能定位「重载前发送的消息」，否则举报只能判不能罚
-        self._recent_cache_path = os.path.join(self._plugin_data_dir(), "recent_msgs.json")
-        self._recent_saved_at = 0.0
-        self._load_recent_msgs()
-        self._poll_task: Optional[asyncio.Task] = None
-        # 定时汇报（日报）后台任务与"今天已经发过"的日期标记
-        self._report_task: Optional[asyncio.Task] = None
-        self._report_last_day: str = ""
-        # 最近一次有活动的群（日报默认发到这里；在 _record_recent_msg 里更新）
-        self._last_active_group: str = ""
-        self._initialized = False
-        # 防重入：同一消息可能被多个正则 handler 命中（如 /禁言 与 /禁言历史），
-        # 用消息 ID 在短时间内去重，避免重复执行导致重复回复。
-        self._last_cmd_msg_id: str = ""
-        self._last_cmd_ts: float = 0.0
-
-        self._load_known_groups()
-        self._load_intro_state()
-        self._load_mute_history()
-        self._load_recall_history()
-        self._load_report_state()
-        self._register_web_apis()
-        self._rebuild_mod_few_shot()
-        self.logger.info(
-            f"QQ官机群管 已加载 (log_level={self._read_config_value(('log', 'log_level'), default='DEBUG', legacy_keys=('log_level',))}, "
-            f"poll={self._read_config_value(('approval', 'poll_interval'), default=30, legacy_keys=('poll_interval',))}s)"
-        )
+    def __init__(self, context) -> None:
+        """装配：见 qgm/setup.py。"""
+        return init_plugin(self, context)
 
     # ------------------------------------------------------------------
     # 路径 / 持久化
@@ -1647,60 +1502,9 @@ class QQGroupManager(Star):
         except Exception:
             return ""
 
-    async def _run_command(
-        self, event: AstrMessageEvent, forced_cmd: str | None = None, skip: int = 0
-    ) -> None:
-        """指令执行入口：提取原始文本 -> 权限校验 -> 分发执行。
-
-        Args:
-            forced_cmd: 由 @filter.command 注册的 handler 传入的规范指令名
-                （形如 "/禁言"）。面板里改过指令名/别名后，靠它保证内部路由
-                到正确的处理逻辑；为 None 时按消息原文解析（兼容入口用）。
-            skip: 额外丢弃消息文本前 N 个 token。指令组写法
-                （"/群管 禁言 @某人 10分钟"）需要丢掉组名之后、子指令名，
-                否则子指令名会被当成参数（比如被误认成"要禁言的人"）。
-        """
-        try:
-            # 防重入：AstrBot 会对所有正则命中的 handler 逐个执行，
-            # "/禁言历史" 会被 "/禁言" 与 "/禁言历史" 两个 handler 同时触发，
-            # 这里按消息 ID 去重，保证同一条消息只处理一次。
-            msg_id = str(getattr(event.message_obj, "message_id", "") or "")
-            now = time.time()
-            if msg_id and msg_id == self._last_cmd_msg_id and now - self._last_cmd_ts < 5:
-                self.logger.debug(f"同一条消息重复触发，已忽略 (msg_id={msg_id})")
-                return
-            if msg_id:
-                self._last_cmd_msg_id = msg_id
-                self._last_cmd_ts = now
-
-            self._ensure_poll_task()
-            self._ensure_report_task()  # WebUI 刚打开日报开关时，靠这条路径自愈
-            self._record_recent_msg(event)  # 引用撤回：原文匹配需要消息缓存
-            await self._maybe_welcome_new_group(event)
-            text = self._extract_text(event)
-            self.logger.debug(f"群消息文本: {text!r}")
-            if not text:
-                return
-            # 指令必须以 "/" 开头，或满足以下两个条件之一才处理：
-            # 1) 消息 @ 了机器人（群内常见的不带 / 指令写法）；
-            # 2) 首 token 是已知指令名。
-            # 这样既兼容 README 所述"不带 / 也可以"，又避免普通聊天内容误触发。
-            clean = re.sub(r"<@!?[0-9A-Za-z_-]+>", " ", text).strip()
-            if not clean:
-                return
-            first = clean.split()[0]
-            if not first.startswith("/"):
-                if not self._is_mentioned_bot(event):
-                    return
-                if first not in ("禁言", "审批", "状态", "撤回", "群管", "举报", "群规", "审核",
-                                 "管理登记", "成员", "帮助", "撤销"):
-                    return
-            await self._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
-        except Exception as e:
-            self.logger.error(f"{self._ctx(event.get_platform_id(), event.get_group_id())}处理群消息异常: {e}")
-            import traceback
-
-            self.logger.debug(traceback.format_exc())
+    async def _run_command(self, event, forced_cmd=None, skip=0):
+        """薄壳：见 qgm/commands/runtime.py。"""
+        return await command_runtime._run_command(self, event, forced_cmd, skip)
 
     # 按钮点击必须走独立的 button_action handler：AstrBot 唤醒阶段对按钮事件只放行挂了
     # ButtonActionFilter 的 handler，普通 event_message_type 的 handler 会被直接跳过。
@@ -2323,68 +2127,9 @@ class QQGroupManager(Star):
         tz = _active_tz()
         return datetime.now(tz) if tz else datetime.now()
 
-    async def _maybe_send_report(self) -> None:
-        """每 30 秒被叫一次：到点后把「有未处理申请的群」逐个汇报一遍，每天一轮。
-
-        为什么按群发而不是发到一个汇总群：待处理申请是**各群自己的事**，
-        汇报发到群里是给该群管理员看的（谁申请进这个群、这个群还压着几条），
-        汇总到一个群既没意义也容易泄别的群的信息。
-        """
-        enabled, (hh, mm), target = self._report_options()
-        if not enabled:
-            return
-        now = self._local_now()
-        today = now.strftime("%Y-%m-%d")
-        if self._report_last_day == today:
-            return
-        if (now.hour, now.minute) < (hh, mm):
-            return
-        groups = self._report_candidates(target)
-        if not groups:
-            self.logger.warning("[日报] 还没有任何已知群，今天跳过定时汇报")
-            self._report_last_day = today  # 避免每 30 秒刷一次日志
-            self._save_report_state()
-            return
-
-        sent = skipped = failed = 0
-        for group_openid, platform_id in groups:
-            try:
-                pending = await self._refresh_requests(group_openid, platform_id)
-            except Exception as e:  # noqa: BLE001
-                self.logger.warning(
-                    f"[日报] 拉取群 {group_openid[-6:]} 待处理申请失败，改用缓存: {e}"
-                )
-                pending = self._pending_list(group_openid)
-            # 拉取失败时缓存可能是旧的，宁可这轮不发，也别推一条「假日报」
-            err = self._join_error_code.get(group_openid)
-            if err:
-                self.logger.warning(
-                    f"[日报] 群 {group_openid[-6:]} 申请列表不可用（code={err}），本轮跳过"
-                )
-                skipped += 1
-                continue
-            if not pending:
-                skipped += 1
-                continue
-            text = await self._build_report_text(group_openid, platform_id, pending=pending)
-            ok = await self._send_group_proactive(group_openid, text, platform_id)
-            if ok:
-                sent += 1
-                self.logger.info(
-                    f"[日报] 已发送到群 {group_openid[-6:]}"
-                    f"（待处理 {len(pending)} 条，{now.strftime('%H:%M')}）"
-                )
-            else:
-                failed += 1
-                self.logger.warning(
-                    f"[日报] 群 {group_openid[-6:]} 发送失败；"
-                    "主动消息可能受权限/频控限制，可用 /群管 汇报 手动查看"
-                )
-        self._report_last_day = today
-        self._save_report_state()
-        self.logger.info(
-            f"[日报] 本轮完成：发送 {sent} 群 / 无待处理跳过 {skipped} 群 / 失败 {failed} 群"
-        )
+    async def _maybe_send_report(self):
+        """薄壳：见 qgm/features/status/report.py。"""
+        return await status_report.maybe_send_report(self)
 
     async def _build_report_text(
         self, group_openid: str, platform_id: str, *, pending: list[dict] | None = None,
@@ -2484,65 +2229,9 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # 指令分发
     # ------------------------------------------------------------------
-    async def _handle_command(
-        self,
-        event: AstrMessageEvent,
-        text: str,
-        forced_cmd: str | None = None,
-        skip: int = 0,
-    ) -> None:
-        # QQ 官方消息中 @ 以 <@openid> 文本形式保留在 content 里（AstrBot 适配器
-        # 只会清理机器人自身的 @）。这里统一剥离所有 <@...> / <@!...> 片段（替换
-        # 为空格）再解析参数，免得 @ 文本混进理由之类的字段；目标成员不依赖这段
-        # 文本，而是从 raw_message.mentions 读取。
-        cmd, parts = command_parse.parse_command(text, forced_cmd=forced_cmd, skip=skip)
-        if not cmd:
-            return
-        # 说明：用户侧矩阵是 `/群管 <子指令>`；forced_cmd 只做内部归一，
-        # 例如 `/群管 禁言 名单` → cmd=/禁言, parts=[/禁言, 名单]。
-
-        if cmd == "/群管":
-            await self._reply(event, self._render("msg_help", bot_name=event.get_platform_id()))
-            return
-
-        # /举报：所有群成员都能用（举报的意义就在于此），不受管理员门槛限制
-        if cmd == "/举报":
-            await self._cmd_report_violation(event, parts)
-            return
-
-        # /群规：查看对所有人生效；增删改在 _cmd_rules 内部单独校验管理员
-        if cmd == "/群规":
-            await self._cmd_rules(event, parts)
-            return
-
-        if cmd not in ADMIN_COMMANDS:
-            return  # 非本插件指令，不打扰
-
-        # 群白名单检查
-        if not self._target_group_allowed(event.get_group_id(), event.get_platform_id()):
-            self.logger.debug(f"群 {event.get_group_id()} 不在管理名单，忽略")
-            return
-
-        # 管理员检查
-        if not self._is_admin(event):
-            self.logger.info(
-                f"权限不足: sender={event.get_sender_id()} 尝试执行 {cmd}"
-            )
-            await self._reply(
-                event,
-                self._render(
-                    "msg_not_admin",
-                    username=event.get_sender_name() or event.get_sender_id(),
-                ),
-            )
-            event.call_llm = True  # 阻止 LLM 介入
-            return
-
-        event.call_llm = True  # 阻止 LLM 介入（已处理）
-        route = command_router.resolve_admin(cmd, parts)
-        if route:
-            handler_name, args = route
-            await getattr(self, handler_name)(event, args)
+    async def _handle_command(self, event, text, forced_cmd=None, skip=0):
+        """薄壳：见 qgm/commands/runtime.py。"""
+        return await command_runtime._handle_command(self, event, text, forced_cmd, skip)
 
     # ------------------------------------------------------------------
     # /成员：群成员档案
@@ -4453,73 +4142,9 @@ class QQGroupManager(Star):
             errors.append(f"{'直连' if source == 'direct' else '加速'}：{err}")
         return "", "；".join(errors), "", ""
 
-    async def _fetch_upstream_lexicon(self, url: str = "", name: str = "", category: str = "",
-                                     auto_enable: Optional[bool] = None, mirror: str = "",
-                                     force_mirror: Optional[bool] = None) -> dict:
-        """把上游词表下载下来写成本地词库：同名则覆盖更新，避免每点一次多一个库。"""
-        conf = self._lexicon_upstream_conf()
-        url = (url or conf["url"]).strip()
-        cat = (category or conf["category"]).strip()
-        if cat not in moderation.DEFAULT_CAT_NAMES:
-            cat = "other"
-        auto = conf["auto_enable"] if auto_enable is None else bool(auto_enable)
-        use_mirror = conf["mirror"] if mirror is None else str(mirror or "").strip()
-        force = conf["force_mirror"] if force_mirror is None else bool(force_mirror)
-        name = (name or LEXICON_UPSTREAM_NAME).strip()[:40] or LEXICON_UPSTREAM_NAME
-        started = time.time()
-
-        if not url:
-            return {"ok": False, "url": "",
-                    "error": "还没填词表地址：插件不内置任何下载链接，请自行找一份词表填进来，或直接上传文件"}
-        if not re.match(r"^https?://", url, re.I):
-            return {"ok": False, "error": "只支持 http/https 地址", "url": url}
-        if "@" in urllib.parse.urlsplit(url).netloc:
-            return {"ok": False, "error": "地址里不要带用户名密码", "url": url}
-        if force and not use_mirror:
-            return {"ok": False, "error": "勾了「只走加速」但没填加速地址", "url": url}
-
-        text, err, source, used_url = await self._download_upstream(url, use_mirror, force)
-        if err:
-            self.logger.warning(f"[词库] 一键获取失败：{err}（{url}）")
-            return {"ok": False, "error": err, "url": url, "mirror": use_mirror}
-
-        exist = next(
-            (x for x in self.lexicons.list_lexicons()
-             if x.get("source") != "builtin" and x.get("name") == name),
-            None,
-        )
-        prev_count = int(exist.get("count") or 0) if exist else 0
-        via = "加速" if source == "mirror" else "直连"
-        r = self.lexicons.upload(
-            name=name, content=text, fmt="txt", default_category=cat,
-            description=f"一键获取自动生成（{via}），来源：{url}"[:300],
-            mode="overwrite" if exist else "new",
-            target_id=exist["id"] if exist else "",
-            match_mode=lexicon_lib.MATCH_LITERAL,
-        )
-        if not r.get("ok"):
-            return {"ok": False, "error": r.get("error") or "写入词库失败", "url": url}
-        # upload 新建时默认启用，这里按设置改回用户要的状态
-        self.lexicons.set_enabled(r["id"], auto)
-        count = int(r.get("count") or 0)
-        self.logger.info(
-            f"[词库] 一键获取「{r.get('name')}」{count} 条"
-            f"（{'覆盖' if exist else '新建'}·{via}，{'已启用' if auto else '未启用'}）"
-        )
-        # 走加速站时词条数剧烈变化，多半是镜像给了错误页/别的版本，提醒一句
-        note = ""
-        if source == "mirror":
-            note = "本次走的是第三方加速地址，建议核对一下条数是否合理"
-        return {
-            "ok": True, "url": url, "used_url": used_url, "source": via,
-            "id": r["id"], "name": r.get("name"), "count": count,
-            "prev_count": prev_count,
-            "mode": "overwrite" if exist else "new", "enabled": auto,
-            "errors": (r.get("errors") or [])[:5],
-            "warnings": (r.get("warnings") or [])[:5],
-            "note": note,
-            "elapsed_ms": int((time.time() - started) * 1000),
-        }
+    def _fetch_upstream_lexicon(self, url='', name='', category='', auto_enable=None, mirror='', force_mirror=None):
+        """薄壳：见 qgm/features/lexicon/upstream.py。"""
+        return lexicon_upstream.fetch_upstream_lexicon(self, url, name, category, auto_enable, mirror, force_mirror)
 
     async def web_lexicons(self):
         """薄壳：词库 API 见 qgm.features.lexicon.web。"""
