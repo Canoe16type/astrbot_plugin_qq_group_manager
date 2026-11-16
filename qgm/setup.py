@@ -11,7 +11,7 @@ from astrbot.api.star import Star
 from ..qq_api import QQApi
 from ..plugin_logger import PluginLogger
 from .. import lexicon as lexicon_lib, member_registry as member_registry_lib, moderation, variant as variant_lib
-from .kernel.constants import PLUGIN_NAME
+from .kernel.constants import PLUGIN_NAME, plugin_root
 
 
 def init_plugin(host, context, config=None):
@@ -106,7 +106,7 @@ def init_plugin(host, context, config=None):
         # 关键词词库：内置的是公开开源词库（lexicons/SOURCES.md 有来源与协议），
         # 页面可上传自己的词库、勾选启用、加白名单；词库只做关键词维度，不单独调模型。
         host.lexicons = lexicon_lib.LexiconManager(
-            host._plugin_data_dir(), plugin_dir=os.path.dirname(os.path.abspath(__file__)), logger=host.logger
+            host._plugin_data_dir(), plugin_dir=str(plugin_root()), logger=host.logger
         )
         host.logger.info(
             "[词库] 内置词库仅 2 个（广告引流 / 辱骂攻击，来自公开开源词表，见 lexicons/SOURCES.md），"
@@ -116,7 +116,7 @@ def init_plugin(host, context, config=None):
         # 变体检测（谐音/形近/插符号绕过）：只产出「疑似」信号，命中只撤回+记录，永不自动禁言。
         # 拼音表与形近表都是离线数据文件，缺失时自动降级（不抛异常）。
         host.variant = variant_lib.VariantMatcher(
-            os.path.dirname(os.path.abspath(__file__)), host.logger
+            str(plugin_root()), host.logger
         )
         host._variant_words: Optional[list[tuple[str, tuple]]] = None  # 词条缓存（签名比对在建表侧做）
         host._mod_pending: set[str] = set()  # 正在审核的消息 ID，防重复受理

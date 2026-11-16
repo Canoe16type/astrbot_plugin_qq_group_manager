@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+from ...kernel.constants import plugin_root
 import os
 import re
 import time
@@ -507,6 +509,8 @@ def parse_lexicon(text: str, fmt: str = "txt", default_category: str = "other",
 
 def _restrict(path: str, mode: int) -> None:
     """尽力把文件/目录权限收紧到指定值（Linux/macOS 生效，Windows 静默跳过）。"""
+    if not os.path.exists(path):
+        return
     try:
         os.chmod(path, mode)
     except OSError as e:
@@ -519,7 +523,7 @@ class LexiconManager:
     def __init__(self, data_dir: str, plugin_dir: Optional[str] = None, logger=None):
         self.data_dir = data_dir
         self.logger = logger
-        self.plugin_dir = plugin_dir or os.path.dirname(os.path.abspath(__file__))
+        self.plugin_dir = plugin_dir or str(plugin_root())
         self.builtin_dir = os.path.join(self.plugin_dir, BUILTIN_DIRNAME)
         self.custom_dir = os.path.join(data_dir, BUILTIN_DIRNAME)
         self.state_path = os.path.join(data_dir, STATE_FILENAME)
@@ -1119,7 +1123,7 @@ class LexiconManager:
 def self_test() -> None:  # pragma: no cover - 手动跑
     import tempfile
     d = tempfile.mkdtemp()
-    mgr = LexiconManager(d, plugin_dir=os.path.dirname(os.path.abspath(__file__)))
+    mgr = LexiconManager(d, plugin_dir=str(plugin_root()))
     st = mgr.stats()
     print(json.dumps({k: st[k] for k in ("lexicon_count", "enabled_count", "pattern_count",
                                          "literal_count", "allow_count")}, ensure_ascii=False))

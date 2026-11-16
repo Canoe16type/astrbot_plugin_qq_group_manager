@@ -69,6 +69,13 @@ class LoaderHarnessTest(unittest.TestCase):
     def test_terminate_is_safe(self):
         asyncio.run(self.plugin.terminate())
 
+    def test_variant_assets_load_from_plugin_root(self):
+        """搬迁后 __file__ 会指向 qgm/；变体/词库资源必须仍从插件根加载。"""
+        self.assertEqual(self.plugin.variant.dir, str(ROOT))
+        self.plugin.variant._load_assets()
+        self.assertTrue(getattr(self.plugin.variant, "_py_map", {}), "拼音表未加载")
+        self.assertTrue(getattr(self.plugin.variant, "_cf_map", {}), "形近表未加载")
+
 
 if __name__ == "__main__":
     unittest.main()

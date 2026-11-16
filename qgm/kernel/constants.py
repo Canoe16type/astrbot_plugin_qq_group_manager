@@ -6,13 +6,18 @@ import re
 from pathlib import Path
 
 
-def plugin_name() -> str:
-    """安装目录名（市场安装时可能带哈希后缀），与 main.PLUGIN_NAME 的推导一致。"""
+def plugin_root() -> Path:
+    """插件根目录（含 metadata.yaml 的那一层），与安装目录名无关。"""
     here = Path(__file__).resolve()
     for parent in here.parents:
         if (parent / "metadata.yaml").exists():
-            return parent.name
-    return "astrbot_plugin_qq_group_manager"
+            return parent
+    return here.parents[1]
+
+
+def plugin_name() -> str:
+    """安装目录名（市场安装时可能带哈希后缀），与 main.PLUGIN_NAME 的推导一致。"""
+    return plugin_root().name
 
 
 PLUGIN_NAME = plugin_name()
