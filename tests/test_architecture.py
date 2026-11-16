@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 4150, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 4000, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -146,6 +146,17 @@ class ArchitectureGuardTest(unittest.TestCase):
         for rel in ("qgm/setup.py",):
             src = (ROOT / rel).read_text(encoding="utf-8")
             self.assertNotIn("super()", src, f"{rel} 里不能用零参 super()")
+
+    def test_static_methods_do_not_use_self(self):
+        """@staticmethod 里出现 self 说明薄壳写错了（应传参数而不是 self）。"""
+        import ast as _ast
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        tree = _ast.parse(src)
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                if any(isinstance(d, _ast.Name) and d.id == "staticmethod" for d in node.decorator_list):
+                    seg = _ast.get_source_segment(src, node) or ""
+                    self.assertNotIn("self", seg, f"{node.name} 是 staticmethod 却用了 self")
 
 
 if __name__ == "__main__":
