@@ -57,6 +57,7 @@ from .qgm.features.lexicon import web as lexicon_web
 from .qgm.features.status import web as status_web
 from .qgm.features.members import web as members_web
 from .qgm.features.config import web as config_web
+from .qgm.commands import router as command_router
 from .qgm.features.approval import web as approval_web
 from .qgm.features.mute import web as mute_web
 from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
@@ -3009,37 +3010,10 @@ class QQGroupManager(Star):
             return
 
         event.call_llm = True  # 阻止 LLM 介入（已处理）
-        if cmd == "/审核":
-            await self._cmd_mod(event, parts)
-            return
-        if cmd == "/禁言":
-            sub = parts[1].lower() if len(parts) > 1 else ""
-            if sub in ("解除", "解禁", "unmute"):
-                await self._cmd_unmute(event, ["/禁言"] + parts[2:])
-            elif sub in ("名单", "列表", "list", "查"):
-                await self._cmd_list_mutes(event)
-            elif sub in ("历史", "history", "记录", "流水"):
-                await self._cmd_list_mute_history(event, ["/禁言"] + parts[2:])
-            else:
-                await self._cmd_mute(event, parts)
-        elif cmd == "/审批":
-            sub = parts[1].lower() if len(parts) > 1 else ""
-            if sub in ("通过", "同意", "approve", "过"):
-                await self._cmd_review(event, "/通过", ["/通过"] + parts[2:])
-            elif sub in ("拒绝", "驳回", "reject", "拒"):
-                await self._cmd_review(event, "/拒绝", ["/拒绝"] + parts[2:])
-            else:
-                await self._cmd_list_requests(event, parts)
-        elif cmd == "/状态":
-            await self._cmd_status(event, parts)
-        elif cmd == "/撤销":
-            await self._cmd_revoke(event, parts)
-        elif cmd == "/撤回":
-            await self._cmd_recall(event, parts)
-        elif cmd == "/管理登记":
-            await self._cmd_admin_register(event, parts)
-        elif cmd == "/成员":
-            await self._cmd_member(event, parts)
+        route = command_router.resolve_admin(cmd, parts)
+        if route:
+            handler_name, args = route
+            await getattr(self, handler_name)(event, args)
 
     # ------------------------------------------------------------------
     # /成员：群成员档案

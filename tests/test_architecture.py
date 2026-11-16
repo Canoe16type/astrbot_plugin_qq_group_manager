@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 7200, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 7100, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -117,6 +117,12 @@ class ArchitectureGuardTest(unittest.TestCase):
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in moved:
                 self.assertLessEqual(node.end_lineno - node.lineno + 1, 12, node.name)
+
+    def test_command_dispatch_is_table_driven(self):
+        """指令分发应走路由表；_handle_command 出现大段 if/elif 说明又退回旧写法。"""
+        src = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("command_router.resolve_admin", src)
+        self.assertLessEqual(src.count("elif cmd =="), 2)
 
 
 if __name__ == "__main__":
