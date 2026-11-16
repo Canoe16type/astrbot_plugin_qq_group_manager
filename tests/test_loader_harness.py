@@ -71,7 +71,8 @@ class LoaderHarnessTest(unittest.TestCase):
 
     def test_variant_assets_load_from_plugin_root(self):
         """搬迁后 __file__ 会指向 qgm/；变体/词库资源必须仍从插件根加载。"""
-        self.assertEqual(self.plugin.variant.dir, str(ROOT))
+        from plugins.astrbot_plugin_qq_group_manager.qgm.kernel.constants import plugin_root
+        self.assertEqual(self.plugin.variant.dir, str(plugin_root()))
         self.plugin.variant._load_assets()
         self.assertTrue(getattr(self.plugin.variant, "_py_map", {}), "拼音表未加载")
         self.assertTrue(getattr(self.plugin.variant, "_cf_map", {}), "形近表未加载")
@@ -80,9 +81,10 @@ class LoaderHarnessTest(unittest.TestCase):
         """构造完成后，词库/模板/变体资源都应指向插件根并可用。"""
         from plugins.astrbot_plugin_qq_group_manager.qgm.kernel.constants import plugin_root
 
-        self.assertEqual(plugin_root(), ROOT)
-        self.assertTrue((ROOT / "data" / "pinyin_map.json").is_file())
-        self.assertTrue((ROOT / "data" / "variant_confusables.json").is_file())
+        root = plugin_root()
+        self.assertTrue((root / "metadata.yaml").is_file(), "plugin_root 必须指向插件根")
+        self.assertTrue((root / "data" / "pinyin_map.json").is_file())
+        self.assertTrue((root / "data" / "variant_confusables.json").is_file())
         self.assertGreaterEqual(len(self.plugin.lexicons.scan()), 2, "内置词库未加载")
         self.plugin.variant._load_assets()
         self.assertTrue(getattr(self.plugin.variant, "_py_map", {}), "拼音表未加载")
