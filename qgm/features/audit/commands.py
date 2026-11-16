@@ -9,7 +9,7 @@ from ...kernel.timefmt import fmt_duration
 from .rules import RULE_USAGE_ADD, RULE_USAGE_SET, parse_rule_spec
 
 
-async def _cmd_mod(host, event, parts=None):
+async def _cmd_mod(host, event, parts):
         g = event.get_group_id()
         if not g:
             return
@@ -98,7 +98,7 @@ async def _cmd_mod(host, event, parts=None):
             f"用法：/群管 审核 试跑 开|关 ｜ /群管 审核 巡检 开|关 ｜ /群管 审核 测试 <内容> ｜ /群管 审核 自我介绍"
         ))
 
-async def _cmd_rules(host, event, parts=None):
+async def _cmd_rules(host, event, parts):
         event.call_llm = True
         g = event.get_group_id()
         if not g:

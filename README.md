@@ -3,7 +3,7 @@
 <img src="logo.png" width="96" align="right" alt="插件图标">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![version](https://img.shields.io/badge/version-1.6.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.7.0-blue.svg)](CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
 [![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
