@@ -27,7 +27,6 @@ def _mod_resolve_reported(host, event):
         quoted_content = ""
         quoted_images = []
         try:
-            from astrbot.api.message_components import Reply
 
             reply = next((c for c in (event.message_obj.message or []) if isinstance(c, Reply)), None)
             if reply is not None:

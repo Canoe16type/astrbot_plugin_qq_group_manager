@@ -113,6 +113,5 @@ async def _run_command(host, event, forced_cmd=None, skip=0):
             await host._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:
             host.logger.error(f"{host._ctx(event.get_platform_id(), event.get_group_id())}处理群消息异常: {e}")
-            import traceback
 
             host.logger.debug(traceback.format_exc())

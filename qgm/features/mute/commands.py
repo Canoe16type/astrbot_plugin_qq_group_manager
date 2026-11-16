@@ -252,8 +252,7 @@ async def _cmd_recall(host, event, parts):
         # 方式二：引用（回复）目标消息
         else:
             try:
-                from astrbot.api.message_components import Reply
-
+    
                 reply = next(
                     (c for c in event.message_obj.message if isinstance(c, Reply)),
                     None,

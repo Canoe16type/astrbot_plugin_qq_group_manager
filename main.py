@@ -657,8 +657,8 @@ class QQGroupManager(Star):
                 admins = (self.context.get_config() or {}).get("admins_id") or []
                 if sid in admins or getattr(event, "role", "") == "admin":
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug(f"[权限] 读取 AstrBot 管理员列表失败，回退到插件配置：{e}")
         extra = self._read_config_value(("admin", "admin_openids"), default=[],
                                         legacy_keys=("admin_openids",)) or []
         return sid in extra
@@ -1867,8 +1867,8 @@ class QQGroupManager(Star):
                     or getattr(u, "id", None)
                 ):
                     return True
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug(f"[权限] 读取平台管理员标记失败：{e}")
         return False
 
     # ---------- 禁言 ----------
@@ -1888,8 +1888,8 @@ class QQGroupManager(Star):
                 )
                 if oid and oid != self_id:
                     out.append(oid)
-        except Exception:
-            pass
+        except Exception as e:
+            self.logger.debug(f"[权限] 枚举机器人管理员失败：{e}")
         return out
 
     async def _cmd_mute(self, event: AstrMessageEvent, parts: list[str]):
