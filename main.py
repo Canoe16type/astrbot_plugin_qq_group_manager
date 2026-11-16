@@ -65,6 +65,9 @@ from .qgm.features.mute import commands as mute_commands
 from .qgm.features.status import commands as status_commands
 from .qgm.features.members import commands as members_commands
 from .qgm.features.audit import commands as audit_commands
+from .qgm.features.audit import engine as audit_engine
+from .qgm.features.audit import scan as audit_scan
+from .qgm.features.status import proactive as status_proactive
 from .qgm.features.admin import commands as admin_commands
 from .qgm.features.approval import commands as approval_commands
 from .qgm.features.approval import web as approval_web
@@ -1609,108 +1612,9 @@ class QQGroupManager(Star):
         except Exception as e:
             self.logger.error(f"回复消息失败: {e}")
 
-    async def _send_group_proactive(
-        self, group_openid: str, text: str, platform_id: str, *, at_openid: str = "",
-        keyboard: dict | None = None,
-    ) -> bool:
-        """主动往群里发一条模板消息（入群欢迎这类「没有可回复事件」的场景）。
-
-        为什么必须走主动消息：官方 ``event_id`` 被动回复只支持 3 个事件
-        （INTERACTION_CREATE / GROUP_ADD_ROBOT / GROUP_MSG_RECEIVE），
-        GROUP_MEMBER_ADD、GROUP_JOIN_REQUEST 都不在白名单里，拿它们的事件 id
-        去回会直接 40034027。
-        代价是受主动消息频控（未认证 30 条/分钟、单群 20 条/分钟、每群每天
-        1000 条），且用户可在 QQ 客户端关掉「允许主动发送」。
-
-        模板格式为图片（image）时只发配文：入群瞬间没有可渲染图片的消息上下文，
-        图片模板退化成文字，总比什么都不发好。
-
-        Args:
-            keyboard: 内联键盘（按钮）。按钮相关错误码（305007 键盘参数错误、
-                40034029 行列超限、40034124 markdown 参数错误、22006 类型不匹配）
-                出现时会**去掉键盘重发一次**——宁可少按钮，也别把通知丢了。
-
-        Returns:
-            True 表示接口调用成功。
-        """
-        key = getattr(text, "tpl_key", "") or ""
-        fmt = self._tpl_format(key) if key else "text"
-        content = self._expand_msg_modules(
-            str(text), None, fmt,
-            getattr(text, "tpl_target", "") or at_openid,
-            platform_id=platform_id,
-        )
-        if not content.strip():
-            self.logger.debug(f"[主动消息] 模板 {key or '?'} 展开后为空，跳过发送")
-            return False
-        api = self._api_for_group_or_default(group_openid, platform_id)
-        if api is None:
-            self.logger.warning(
-                f"[主动消息] 群 {str(group_openid)[-6:]} 找不到可用 API 客户端，发送跳过"
-            )
-            return False
-        # ---- 发送阶梯：按钮优先，逐级降级，正文最后兜底 ----
-        # 为什么不「失败就丢按钮」：markdown 通道对 keyboard 的校验比文本通道严
-        # （实测 group_id 含冒号就 40011021 整条拒发），一次失败直接丢按钮，等于
-        # 把最值钱的功能丢了。所以按「损失从小到大」逐级试：
-        #   ① markdown + 完整键盘（有互斥变灰）
-        #   ② markdown + 去掉 group_id 的键盘（按钮还在，只是不互斥）
-        #   ③ markdown 纯正文（保住排版）
-        #   ④ 纯文本（保住内容）
-        plans: list = []
-        if keyboard:
-            plans.append((True, keyboard))
-            if button_kit.has_group_id(keyboard):
-                stripped = button_kit.without_group_id(keyboard)
-                if stripped:
-                    plans.append((True, stripped))
-            plans.append((True, None))
-            plans.append((False, None))
-        elif fmt == "markdown":
-            plans.append((True, None))
-            plans.append((False, None))
-        else:
-            plans.append((False, None))
-
-        last_err = None
-        for idx, (md, kb) in enumerate(plans):
-            kwargs: dict = {"markdown": True} if md else {}
-            if kb:
-                kwargs["keyboard"] = kb
-            try:
-                await api.send_group_message(group_openid, content, **kwargs)
-                if keyboard and kb is None:
-                    self.logger.warning(
-                        "[主动消息] 已降级为无按钮消息（正文送达，但群里没有"
-                        "「通过/拒绝」按钮）；审批可用 /群管 审批 或面板操作"
-                    )
-                elif keyboard and kb is not keyboard:
-                    self.logger.info(
-                        "[主动消息] 去掉 group_id（按钮互斥分组）后重发成功，按钮可用"
-                    )
-                return True
-            except QQApiError as e:
-                last_err = e
-                code = getattr(e, "code", None)
-                if code in self.FATAL_SEND_CODES and keyboard:
-                    # 权限 / 频控 / 不在群：换格式一样失败，别为了按钮白刷四档请求。
-                    # 注意只在「带按钮」时短路：无按钮的 markdown 降级只有一两档，
-                    # 且正文优先，宁可多试一次也别把欢迎语/通知丢了。
-                    self.logger.warning(
-                        f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败: {e}；"
-                        f"{self._explain_send_error(code)}"
-                    )
-                    return False
-                if idx + 1 < len(plans):
-                    self.logger.warning(
-                        f"[主动消息] 第 {idx + 1} 档发送失败（code={code}），继续降级: {e}"
-                    )
-        if last_err is not None:
-            self.logger.warning(
-                f"[主动消息] 群 {str(group_openid)[-6:]} 发送失败（所有降级档位均失败）: "
-                f"{last_err}；{self._explain_send_error(getattr(last_err, 'code', None))}"
-            )
-        return False
+    async def _send_group_proactive(self, group_openid, text, platform_id, *, at_openid='', keyboard=None):
+        """薄壳：见 status_proactive。"""
+        return await status_proactive._send_group_proactive(self, group_openid, text, platform_id, at_openid=at_openid, keyboard=keyboard)
 
     # ------------------------------------------------------------------
     # 群消息入口（指令走标准正则过滤器；普通消息仅做新群欢迎）
@@ -2094,74 +1998,9 @@ class QQGroupManager(Star):
         """薄壳：成员事件见 qgm.features.members.events。"""
         return await member_events.on_member_add(self, data, platform_id)
 
-    async def _welcome_member_on_join(
-        self, group_openid: str, member_openid: str, platform_id: str | None
-    ) -> None:
-        """成员真进群时发欢迎语（主动消息，见 _send_group_proactive）。"""
-        if not bool(self._read_config_value(
-            ("member_event", "enable_member_add_welcome"), default=True,
-            legacy_keys=("enable_member_add_welcome",),
-        )):
-            self.logger.debug("[入群欢迎] 配置已关闭，跳过")
-            return
-
-        now = time.time()
-        # 先抢占槽位再发：审批通过路径和入群事件路径是两条独立的并发流程，
-        # 谁先到谁发，"检查→发送→写记录"的旧写法在两者交错时必然双发。
-        if not self._claim_join_welcome(group_openid, member_openid):
-            last = float(
-                self._join_welcomed.get(f"{group_openid}:{member_openid}") or 0
-            )
-            self.logger.info(
-                f"[入群欢迎] 群 {str(group_openid)[-6:]} 成员 "
-                f"{member_registry_lib.short_id(member_openid)} "
-                f"{int(now - last)} 秒前刚欢迎过（事件重推或审批已欢迎），跳过"
-            )
-            return
-
-        # 名字：进群瞬间档案通常只有 openid，能用就用，实在没有给个中性称呼
-        username = ""
-        if self._members_on():
-            try:
-                username = str(
-                    (self.members.get(group_openid, member_openid) or {}).get("nickname") or ""
-                ).strip()
-            except Exception:  # noqa: BLE001
-                username = ""
-
-        try:
-            group_name = self._welcome_group_name(group_openid)
-        except Exception:  # noqa: BLE001
-            group_name = group_openid
-
-        text = self._render(
-            "msg_welcome_after_approve",
-            username=username or "新朋友",
-            group_name=group_name,
-            bot_name=platform_id or "",
-            at=member_openid,
-        )
-        if not str(text or "").strip():
-            self.logger.info("[入群欢迎] 欢迎语模板为空，跳过")
-            self._release_join_welcome(group_openid, member_openid)
-            return
-
-        ok = await self._send_group_proactive(
-            group_openid, text, platform_id or "", at_openid=member_openid
-        )
-        if ok:
-            self.logger.info(
-                f"[入群欢迎] 群 {str(group_openid)[-6:]} 已向 "
-                f"{member_registry_lib.short_id(member_openid)} 发送欢迎语"
-            )
-        else:
-            # 发失败就释放槽位，下次事件重推还能再试一次
-            self._release_join_welcome(group_openid, member_openid)
-            self.logger.warning(
-                f"[入群欢迎] 群 {str(group_openid)[-6:]} 欢迎语发送失败："
-                f"主动消息需要该群允许机器人推送（部分群需群主在权限项里开启），"
-                f"也可能撞上频控或用户在客户端关掉了「允许主动发送」"
-            )
+    async def _welcome_member_on_join(self, group_openid, member_openid, platform_id):
+        """薄壳：见 member_events。"""
+        return await member_events._welcome_member_on_join(self, group_openid, member_openid, platform_id)
 
     def _claim_join_welcome(self, group_openid: str, member_openid: str) -> bool:
         """抢占该成员本次入群的欢迎发送权（先写表、后发送）。
@@ -3445,91 +3284,9 @@ class QQGroupManager(Star):
             del pending[:-50]
         return True
 
-    async def _on_group_join_request(self, data: dict, platform_id: str | None = None) -> None:
-        """GROUP_JOIN_REQUEST 事件入口（由 member_event 注入的 handler 调过来）。"""
-        if not isinstance(data, dict):
-            return
-        group_openid = str(data.get("group_openid") or "")
-        member_openid = str(data.get("member_openid") or "")
-        if not group_openid or not member_openid:
-            self.logger.debug(f"[入群申请] 事件字段不完整，忽略: {list(data)[:6]}")
-            return
-        if not self._group_in_scope(group_openid, platform_id):
-            self.logger.debug(f"[入群申请] 群 {group_openid[-6:]} 不在管理范围，忽略")
-            return
-
-        now = time.time()
-        self._join_event_at[group_openid] = now
-        self._join_event_last = now
-        self._join_event_total += 1
-
-        apply_at = str(data.get("apply_at") or "")
-        req = {
-            "join_request_id": str(data.get("join_request_id") or ""),
-            "member_openid": member_openid,
-            "username": str(data.get("username") or ""),
-            "apply_at": apply_at,
-            "apply_source": str(data.get("apply_source") or ""),
-            "invited_by": str(data.get("invited_by") or ""),
-            "risk_tips": str(data.get("risk_tips") or ""),
-            "verify_info": data.get("verify_info") or {},
-            "bot": bool(data.get("bot")),
-            "_from": "event",
-        }
-        is_new = self._upsert_pending(group_openid, req)
-        if req["username"]:
-            try:
-                self._nick_cache.setdefault(group_openid, {})[member_openid] = req["username"]
-            except Exception:
-                pass
-
-        # 自动审批策略已经放行：这不是「待审批」，只发一条结果提示（可关）。
-        auto = data.get("auto_approved") if isinstance(data, dict) else None
-        if isinstance(auto, dict) and auto.get("strategy_id"):
-            strategy = str(auto.get("strategy_id"))
-            self.logger.info(
-                f"[入群申请] 群 {group_openid[-6:]} 成员 {member_openid[-6:]} 已被策略 {strategy} 自动通过"
-            )
-            # 自动通过 = 不需要人工处理，从待审批缓存里摘掉
-            self._pending[group_openid] = [
-                x for x in self._pending.get(group_openid, [])
-                if self._req_key(x) != self._req_key(req)
-            ]
-            if bool(self._read_config_value(
-                ("approval", "notify_auto_approved"), default=True,
-                legacy_keys=("notify_auto_approved",),
-            )):
-                text = self._render(
-                    "msg_join_request_auto_approved",
-                    username=req["username"] or member_openid[-6:],
-                    strategy=strategy,
-                    group_name=group_openid,
-                )
-                if await self._send_group_proactive(
-                    group_openid, text, platform_id or self._known_groups.get(group_openid, "")
-                ):
-                    self.logger.info(f"[入群申请] 已推送自动通过提示到群 {group_openid[-6:]}")
-            return
-
-        self.logger.info(
-            f"[入群申请] 群 {group_openid[-6:]} 收到申请"
-            f"（{'新申请' if is_new else '刷新已有申请'}）"
-            f" member={member_openid[-6:]} source={req['apply_source'] or '?'}"
-        )
-        if not is_new:
-            # 同一申请重复推送（断线重连补事件）：缓存已更新，通知去重交给 _notified。
-            pass
-        if not self._join_notify_enabled():
-            return
-        if is_new:
-            # 进合并队列，2 秒内的多条申请一起发（见 _flush_join_notify）
-            self._join_fresh.setdefault(group_openid, []).append(req)
-            self._schedule_join_notify(group_openid, platform_id)
-        else:
-            # 重复推送（断线补事件）：缓存已刷新，通知窗口内不再重复发，
-            # 但如果是「上一批还没发出」的新申请，仍然让它照常合并发送。
-            if self._join_fresh.get(group_openid):
-                self._schedule_join_notify(group_openid, platform_id)
+    async def _on_group_join_request(self, data, platform_id):
+        """薄壳：见 member_events。"""
+        return await member_events._on_group_join_request(self, data, platform_id)
 
     JOIN_NOTIFY_DEBOUNCE_SECONDS = 2.0
 
@@ -3568,77 +3325,9 @@ class QQGroupManager(Star):
         finally:
             self._join_notify_tasks.pop(group_openid, None)
 
-    async def _notify_join_requests(
-        self, group_openid: str, platform_id: str | None, reqs: list[dict],
-        *, source: str = "轮询",
-    ) -> int:
-        """把一批新申请推送到群里（事件与轮询共用），返回实际推送的条数。
-
-        统一出口的好处：按钮、去重、失败降级只有一份实现——
-        之前事件/轮询各写一套的话，按钮很容易只在其中一条路径上生效。
-        """
-        if not reqs:
-            return 0
-        api = self._api_for_group_or_default(group_openid, platform_id or "")
-        if api is None:
-            self.logger.warning(
-                f"[入群申请] 群 {group_openid[-6:]} 找不到可用 API 客户端，通知跳过"
-            )
-            return 0
-
-        now = time.time()
-        dedupe_sec = self.JOIN_NOTIFY_DEDUPE_SECONDS
-        notified = self._notified.setdefault(group_openid, {})
-        fresh = [
-            r for r in reqs
-            if now - notified.get(self._req_key(r), 0) >= dedupe_sec
-        ]
-        if not fresh:
-            self.logger.debug(f"[入群申请] {source}通知：{len(reqs)} 条申请近期已通知过，跳过")
-            return 0
-
-        pending = self._pending.get(group_openid) or []
-        lines = []
-        for r in fresh:
-            try:
-                idx = next(
-                    i + 1 for i, x in enumerate(pending) if self._req_key(x) == self._req_key(r)
-                )
-            except StopIteration:
-                idx = len(pending)
-            lines.append(self._fmt_request_line(idx, r))
-        text = self._render("msg_join_request_notify", list="\n".join(lines))
-
-        buttons_on, perm, limit = self._join_button_options()
-        keyboard = None
-        if buttons_on and self._button_channel_ready():
-            keyboard = button_kit.join_request_keyboard(
-                fresh, permission=perm, max_requests=limit
-            )
-            if len(fresh) > limit:
-                self.logger.info(
-                    f"[入群申请] {len(fresh)} 条新申请，按钮只带前 {limit} 条"
-                    f"（行数上限 {button_kit.MAX_ROWS}），其余请用 /群管 审批 处理"
-                )
-        elif buttons_on:
-            self.logger.info("[入群申请] 当前 AstrBot 版本不支持按钮回调，转为纯文本通知")
-
-        ok = await self._send_group_proactive(
-            group_openid, text, platform_id or "", keyboard=keyboard
-        )
-        if not ok:
-            self.logger.warning(
-                f"[入群申请] 群 {group_openid[-6:]} 推送申请通知失败"
-                f"（QQ 主动消息可能受权限/频控限制，可用 /群管 审批 手动查看）"
-            )
-            return 0
-        for r in fresh:
-            notified[self._req_key(r)] = now
-        self.logger.info(
-            f"[入群申请] 已推送 {len(fresh)} 条申请通知到群 {group_openid[-6:]}"
-            f"（来源={source}，按钮={button_kit.describe_keyboard(keyboard) if keyboard else '无'}）"
-        )
-        return len(fresh)
+    async def _notify_join_requests(self, group_openid, platform_id, reqs, *, source='轮询'):
+        """薄壳：见 member_events。"""
+        return await member_events._notify_join_requests(self, group_openid, platform_id, reqs, source=source)
 
     # ------------------------------------------------------------------
     # 消息按钮回调（INTERACTION_CREATE → AstrBot 的按钮事件）
@@ -4531,128 +4220,9 @@ class QQGroupManager(Star):
             result["variant_note"] = _recall_hint(e)
             self.logger.warning(f"[审核][变体] 撤回失败：{result['variant_note']}")
 
-    async def _mod_variant_strike(self, event: AstrMessageEvent, group: str, rep: dict,
-                                  settings: dict, variant: dict, result: dict,
-                                  rec: Optional[dict]) -> dict:
-        """变体累计升级（strike）：窗口内同一人的疑似变体次数 → 提醒 / 自动禁言。
-
-        设计边界（延续「变体只是疑似」的定位）：
-        - L1 提醒默认开：零风险，只发一条**被动消息** @ 已登记管理员 + 待办高亮；
-        - L2 禁言默认关：须同时满足「阈值 + 人工确认过 ≥1 次 + 冷却期外」，缺一不可；
-        - 本群无人登记管理员 → 不发提醒（不刷群、也不消耗主动消息配额）。
-        """
-        info = {"count": 0, "confirmed": 0, "level": moderation.STRIKE_NONE,
-                "notified": False, "muted": False, "note": ""}
-        if not settings.get("variant_strike_enabled", True):
-            return info
-        target = str(rep.get("sender") or "")
-        if not target:
-            return info
-        try:
-            win = max(1, int(settings.get("variant_strike_window_days") or 7))
-        except (TypeError, ValueError):
-            win = 7
-        summ = self.mod.variant_strike_summary(group, target, window_days=win)
-        count = int(summ["count"])
-        info["count"] = count
-        info["confirmed"] = int(summ["confirmed"])
-        try:
-            thr = max(1, int(settings.get("variant_strike_threshold") or 3))
-        except (TypeError, ValueError):
-            thr = 3
-        # 只在「首次达阈值」和「阈值整数倍」时提醒（3、6、9…）：既不漏，也不每来一条刷一次群
-        crossed = count >= thr and (count == thr or count % thr == 0)
-        if crossed:
-            info["level"] = moderation.STRIKE_TODO
-
-        # ---------------- L2：自动禁言（默认关） ----------------
-        if bool(settings.get("variant_strike_mute", False)) and not settings.get("dry_run", True):
-            try:
-                mute_thr = max(1, int(settings.get("variant_strike_mute_threshold") or 5))
-            except (TypeError, ValueError):
-                mute_thr = 5
-            try:
-                cool = max(0, int(settings.get("variant_strike_cooldown_hours") or 6)) * 3600
-            except (TypeError, ValueError):
-                cool = 6 * 3600
-            exempt = (target in [str(x) for x in (settings.get("whitelist") or [])]
-                      or self._is_qq_admin_openid(group, target))
-            if count >= mute_thr and not exempt:
-                if bool(settings.get("variant_strike_require_confirm", True)) and not summ["confirmed"]:
-                    info["note"] = "未自动禁言：需先有 1 次人工确认过的变体记录"
-                elif cool and (time.time() - int(summ["last_muted"] or 0)) < cool:
-                    info["note"] = f"未自动禁言：冷却中（{int(cool / 3600)} 小时内已处理过）"
-                else:
-                    try:
-                        cap = int(settings.get("max_mute_seconds") or 86400)
-                    except (TypeError, ValueError):
-                        cap = 86400
-                    try:
-                        secs = int(settings.get("variant_strike_mute_seconds") or 600)
-                    except (TypeError, ValueError):
-                        secs = 600
-                    secs = max(60, min(secs, cap))
-                    api = self._api_for_group_or_default(group, fallback_pid=event.get_platform_id())
-                    if api is None:
-                        info["note"] = "未自动禁言：无可用 API 客户端"
-                    else:
-                        expire_ts = time.time() + secs
-                        try:
-                            await api.set_mute(group, target,
-                                               mute_expire_at=QQApi.format_rfc3339(expire_ts), op="add")
-                            info["muted"] = True
-                            info["level"] = moderation.STRIKE_MUTE
-                            info["mute_seconds"] = secs
-                            self._add_mute_record(
-                                group_openid=group,
-                                platform_id=event.get_platform_id(),
-                                member_openid=target,
-                                username=str(rep.get("sender_name") or ""),
-                                reason=f"连续疑似变体 ×{count}（近 {win} 天）",
-                                seconds=secs, expire_ts=expire_ts,
-                                operator="", operator_name="变体累计升级",
-                            )
-                            self.logger.info(f"[审核][变体] 累计升级禁言：target={target} count={count} "
-                                             f"{secs}s group={group}")
-                        except Exception as e:
-                            info["note"] = f"未自动禁言：{e}"
-                            self.logger.warning(f"[审核][变体] 累计升级禁言失败：{e}")
-
-        # ---------------- L1：被动消息 @ 已登记管理员 ----------------
-        mentions = ""
-        if info["muted"] or (crossed and bool(settings.get("variant_strike_notify", True))):
-            admins = self.mod.get_admins(group)
-            if admins:
-                # 只 @ 前 10 个，避免消息过长被截断
-                mentions = " ".join(f"<@{a['openid']}>" for a in admins[:10])
-                info["notified"] = True
-            else:
-                info["note"] = info["note"] or "本群无人登记管理员，未发送 @ 提醒"
-        method = self._variant_method_name(str(variant.get("method") or ""))
-        if info["notified"]:
-            if info["muted"]:
-                text = self._mod_tpl(group, "mod_variant_strike_muted", mentions=mentions,
-                                     user=f"<@{target}>", at=target, count=count, days=win,
-                                     duration=fmt_duration(int(info.get("mute_seconds") or 0)))
-            else:
-                text = self._mod_tpl(group, "mod_variant_strike_notify", mentions=mentions,
-                                     user=f"<@{target}>", at=target, count=count, days=win, method=method)
-            await self._reply(event, text)
-        if info["note"]:
-            self.logger.info(f"[审核][变体] {info['note']}（group={group} target={target} count={count}）")
-
-        # 回填到本条判定记录：让待办能显示「累计 ×N」并按档位排序
-        if rec and rec.get("id"):
-            self.mod.update_verdict(int(rec["id"]), variant_strike={
-                "count": count,
-                "level": info["level"],
-                "window_days": win,
-                "notified": bool(info["notified"]),
-                "muted": bool(info["muted"]),
-                "confirmed": int(summ["confirmed"]),
-            })
-        result["variant_strike_notified"] = bool(info["notified"])
-        return info
+    async def _mod_variant_strike(self, event: AstrMessageEvent, group: str, rep: dict, settings: dict, variant: dict, result: dict, rec: Optional[dict]):
+        """薄壳：见 qgm.features.audit.engine。"""
+        return await audit_engine._mod_variant_strike(self, event, group, rep, settings, variant, result, rec)
 
     def _mod_keyword_hit(self, text: str, settings: dict) -> Optional[dict]:
         """关键词维度（零成本）：按「本群自定义关键词 → 词库 → 代码内置正则」取第一条命中。
@@ -4867,134 +4437,9 @@ class QQGroupManager(Star):
         )
         await self._reply(event, text)
 
-    async def _mod_execute(self, event: AstrMessageEvent, group: str, rep: dict,
-                           verdict: dict, settings: dict) -> dict:
-        """按判定结果执行动作。返回执行摘要（含话术所需字段）。"""
-        # 归因不可靠时一律只判定、不处罚：
-        # - unattributed：引用超出缓存窗口，拿不到发送者
-        # - match_ambiguous：有多条同文候选，选中哪条都可能是错的（禁错人的代价远大于漏判）
-        forced_only = bool(rep.get("unattributed") or rep.get("match_ambiguous"))
-        out = {
-            "violation": bool(verdict.get("violation")),
-            "basis": verdict.get("basis"),
-            "category": verdict.get("category") or "other",
-            "severity": str(verdict.get("severity") or ""),
-            "confidence": verdict.get("confidence", 0),
-            "reason": verdict.get("reason") or "",
-            "rule_name": "",
-            "seconds": 0,
-            "duration": "",
-            "executed": False,
-            "skipped_reason": "",
-            "recall_note": "",
-            "dry_run": bool(settings.get("dry_run", True)) or forced_only,
-            "unattributed": bool(rep.get("unattributed")),
-            "ambiguous": bool(rep.get("match_ambiguous")),
-            "cached": bool(verdict.get("from_cache")),
-        }
-        if not out["violation"]:
-            return out
-        plan = self._mod_plan(group, verdict, rep, settings=settings)
-        out.update({
-            "action": plan["action"],
-            "rule_name": plan["rule_name"],
-            "rule_id": plan["rule_id"],
-            "match_by": plan["match_by"],
-            "source": plan["source"],
-            "severity": plan["severity"] or out["severity"],
-            "seconds": plan["seconds"] if plan["action"] == "mute" else 0,
-            "duration": plan["duration"] if plan["action"] == "mute" else "",
-            "prior_offenses": plan["prior_offenses"],
-            "escalation": plan["escalation"],
-            "escalation_capped": bool(plan["escalation_capped"]),
-            "policy_trace": plan.get("trace") or {},
-        })
-        kind = plan["action"]
-        if kind == "none":
-            out["skipped_reason"] = plan.get("reason") or "未触发处罚"
-            self.logger.debug(
-                f"{self._ctx(event.get_platform_id(), group)}[审核] 未处罚：{out['skipped_reason']}"
-            )
-            return out
-
-        target = str(rep.get("sender") or "")
-        if not target:
-            out["skipped_reason"] = "无法确定被举报消息的发送者（消息过久未在缓存中）"
-            return out
-        # 豁免：管理员 / 白名单成员
-        wl = [str(x) for x in (settings.get("whitelist") or [])]
-        if target in wl or self._is_qq_admin_openid(group, target):
-            out["skipped_reason"] = "该成员在豁免名单中"
-            return out
-        self.logger.info(
-            f"{self._ctx(event.get_platform_id(), group, target)}[审核] 决策 action={kind} "
-            f"时长={out.get('duration') or '-'} 前科={plan.get('prior_offenses')} "
-            f"倍率×{plan.get('escalation')} 来源={plan.get('source')} 规则={plan.get('rule_name') or '-'}"
-        )
-
-        if out["dry_run"]:
-            out["skipped_reason"] = "试运行模式，未实际执行"
-            return out
-
-        # 待办不需要任何 API 客户端，但如果计划要求「先撤回」，这里顺手把内容撤下来
-        if kind == "todo":
-            if plan.get("recall"):
-                out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
-            out["pending_review"] = True
-            out["executed"] = False
-            out["skipped_reason"] = out.get("skipped_reason") or "转人工复核"
-            self.logger.info(f"{self._ctx(event.get_platform_id(), group, str(rep.get('sender') or ''))}[审核] 转人工待办：{out['skipped_reason']}")
-            return out
-
-        # 1) 撤回：警告与禁言都可能用到；失败不影响后续动作。
-        # 官方限制：非管理员只能撤自己的消息（40062003）；超过 2 分钟不可撤回（40064004）。
-        if kind in ("mute", "warn") and (kind == "mute" or plan.get("recall")):
-            out["recall_note"] = await self._mod_try_recall(event, group, rep, settings)
-
-        if kind == "warn":
-            # 警告靠消息通道，不需要 API 客户端；发完即收口
-            out["executed"] = True
-            await self._send_mod_warning(event, group, rep, out, plan)
-            self.logger.info(
-                f"{self._ctx(event.get_platform_id(), group, target)}[审核] 已警告 severity={out.get('severity')} conf={out.get('confidence')}"
-            )
-            return out
-
-        api = self._api_for_group_or_default(group, fallback_pid=event.get_platform_id())
-        if api is None:
-            out["skipped_reason"] = "无可用 API 客户端"
-            return out
-
-        # 2) 禁言
-        expire_ts = time.time() + int(out["seconds"])
-        try:
-            ok, err = await self._run_action(
-                api.set_mute(group, target, mute_expire_at=QQApi.format_rfc3339(expire_ts), op="add")
-            )
-            if not ok:
-                out["executed"] = False
-                out["skipped_reason"] = err
-                return out
-        except Exception as e:
-            self.logger.error(f"{self._ctx(event.get_platform_id(), group, target)}[审核] 禁言失败: {e}")
-            out["skipped_reason"] = f"禁言失败：{e}"
-            return out
-        out["executed"] = True
-        try:
-            self._add_mute_record(
-                group_openid=group,
-                platform_id=event.get_platform_id(),
-                member_openid=target,
-                username=str(rep.get("sender_name") or ""),
-                reason=f"举报审核：{out['reason']}"[:120],
-                seconds=int(out["seconds"]),
-                expire_ts=expire_ts,
-                operator=event.get_sender_id(),
-                operator_name=f"举报人:{event.get_sender_name() or ''}",
-            )
-        except Exception as e:
-            self.logger.debug(f"{self._ctx(event.get_platform_id(), group, target)}[审核] 写入禁言历史失败: {e}")
-        return out
+    async def _mod_execute(self, event: AstrMessageEvent, group: str, rep: dict, verdict: dict, settings: dict):
+        """薄壳：见 qgm.features.audit.engine。"""
+        return await audit_engine._mod_execute(self, event, group, rep, verdict, settings)
 
     def _is_qq_admin_openid(self, group: str, member: str) -> bool:
         try:
@@ -5056,95 +4501,9 @@ class QQGroupManager(Star):
         })
         await self._mod_variant_strike(event, group, rep, settings, variant, result, rec)
 
-    async def _maybe_auto_scan(self, event: AstrMessageEvent) -> None:
-        """隐藏开关：本群自动巡检（每群独立，互不影响，默认关）。
-
-        成本控制：默认只跑零成本的「关键词维度」；需要 AI 巡检时，
-        在插件页面把该群的 auto_scan_llm 打开（会按 daily_budget 熔断）。
-        变体检测（variant_check，默认关）在这里与判定并行、互不影响：
-        命中只是「疑似」，只撤回 + 记录 + 进待办，绝不禁言。
-        整条链路完全由本群的 auto_scan 开关控制，关了就连变体层一起不跑。
-        """
-        try:
-            g = event.get_group_id()
-            if not g:
-                return
-            st = self._mod_settings(g)
-            if not st.get("auto_scan"):
-                return
-            text = self._extract_text(event)
-            images = self._extract_images(event)
-            # 纯图片消息也要能进巡检：官方群消息常把「文字 + 图片」拆成两条，
-            # 只按 text 判会把图片那条整条丢掉（图片维度等于没开）。
-            if (not text and not images) or (not text and not st.get("enable_vision", True)):
-                return
-            rep = {
-                "id": str(getattr(event.message_obj, "message_id", "") or ""),
-                "text": text,
-                "sender": event.get_sender_id() or "",
-                "sender_name": event.get_sender_name() or "",
-                "images": images,
-                "ts": time.time(),
-            }
-            # 变体疑似信号：与「是否违规」的判定并行、互不影响（variant_check 默认关，关着就不扫）
-            variant = self._mod_variant_scan(g, rep, st)
-            if variant:
-                self.logger.info(
-                    f"[审核][变体] 巡检疑似命中：method={variant['method']} "
-                    f"strength={variant['strength']} hits={variant['count']} group={g}"
-                )
-            verdict = self._mod_review_fast(g, rep, scene="巡检")
-            if verdict is None and st.get("auto_scan_llm"):
-                verdict = await self._mod_review_llm(
-                    event, g, rep, self._mod_context_lines(g, rep, st), "（自动巡检）", scene="巡检"
-                )
-            if not verdict or not verdict.get("violation"):
-                # 没判定违规但疑似变体：单独走「只撤回+记录」分支（不发言、不禁言）
-                if variant:
-                    await self._mod_auto_variant_only(event, g, rep, st, variant)
-                return
-            result = await self._mod_execute(event, g, rep, verdict, st)
-            # 变体疑似：没被判定路径处理掉的话，按群配置决定是否撤回（只撤回，不禁言）
-            if variant and not result["executed"]:
-                await self._mod_variant_action(event, g, rep, st, variant, result)
-            rec = self.mod.add_verdict({
-                "group": g, "msg_id": rep["id"], "reporter": "auto_scan",
-                "target": rep["sender"], "target_name": rep["sender_name"],
-                **self._verdict_text(rep), "violation": result["violation"],
-                "basis": result["basis"], "category": result["category"],
-                "confidence": result["confidence"], "reason": result["reason"],
-                "rule_name": result["rule_name"],
-                "action": str(result.get("action") or ("mute" if result["executed"] else "none")),
-                "pending_review": bool(result.get("pending_review")),
-                "rule_id": result.get("rule_id") or "",
-                "match_by": result.get("match_by") or "none",
-                "policy_trace": result.get("policy_trace") or {},
-                "ban_seconds": result["seconds"], "skipped_reason": result["skipped_reason"],
-                "executed": result["executed"], "dry_run": result["dry_run"],
-                "recall_note": result.get("recall_note", ""),
-                "from_cache": result["cached"],
-                "severity": result.get("severity") or verdict.get("severity") or "",
-                "prior_offenses": result.get("prior_offenses") or 0,
-                "escalation": result.get("escalation") or 1.0,
-                "model": verdict.get("model") or "keyword",
-                "variant_hit": bool(variant),
-                "variant": ({"method": variant["method"], "strength": variant["strength"],
-                             "count": variant["count"], "source": variant["source"]} if variant else None),
-                "variant_recalled": bool(result.get("variant_recalled")),
-                "variant_note": result.get("variant_note", ""),
-                "todo_state": "" if st.get("todo_enabled", True) else "disabled",
-            })
-            if variant:
-                await self._mod_variant_strike(event, g, rep, st, variant, result, rec)
-            if result["executed"]:
-                await self._reply(event, self._mod_tpl(
-                    g, "mod_hit",
-                    basis=self.mod.get_dim_names(g).get(str(result["basis"]), "多重维度"),
-                    category=self.mod.get_cat_names(g).get(str(result["category"]), "违规"),
-                    duration=result["duration"], user=rep["sender_name"], reason=result["reason"],
-                ))
-        except Exception as e:
-            self.logger.debug(f"[审核] 自动巡检异常: {e}")
+    async def _maybe_auto_scan(self, event):
+        """薄壳：见 audit_scan。"""
+        return await audit_scan._maybe_auto_scan(self, event)
 
     # ---------------- /举报 ----------------
     @_with_log_context
