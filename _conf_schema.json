@@ -564,88 +564,6 @@
         "default": "👋 {username}（{short}）离开了本群{extra}",
         "hint": "变量：{username} 昵称（档案里没有则显示「某位成员」）、{short} openid 短标识、{openid} 完整 openid、{days} 在群天数、{msgs} 发言条数、{extra} 自动拼好的「在群 X 天 · 共发言 Y 条」、{group} 群名、{at}（@该成员）、{avatar}（该成员头像，尺寸可写成 {avatar:40} 小图 / {avatar:160} 大图，需 Markdown 格式）。需先在「群成员事件」分组开启退群通知"
       },
-      "mod_hit": {
-        "description": "审核 · 命中违规",
-        "type": "text",
-        "default": "根据{basis}，符合{category}，已被禁言{duration}",
-        "hint": "变量：{basis}（关键词/群管 群规/语义分析/图片识别）{category} {duration} {user} {reason}"
-      },
-      "mod_hit_general": {
-        "description": "审核 · 通配违规（未对应群规）",
-        "type": "text",
-        "default": "根据多重维度评判，符合{category}，已被禁言{duration}",
-        "hint": "留空则回退到「审核 · 命中违规」"
-      },
-      "mod_clean": {
-        "description": "审核 · 未违规",
-        "type": "text",
-        "default": "根据多重维度评判，此消息不涉嫌违规",
-        "hint": "变量：{user}"
-      },
-      "mod_receiving": {
-        "description": "审核 · 受理回执",
-        "type": "text",
-        "default": "已收到举报，正在审核中…"
-      },
-      "mod_quote_lost": {
-        "description": "审核 · 引用消息失联",
-        "type": "text",
-        "default": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报",
-        "hint": "举报时引用的消息过旧、不在缓存中，或未真正引用而只是 @ 人"
-      },
-      "mod_uncertain": {
-        "description": "审核 · 判定未完成",
-        "type": "text",
-        "default": "判定把握不足，本次未自动处理，已记入审核记录",
-        "hint": "用于置信度不足等未执行场景；避免误报「已禁言」；插件无人工审核环节"
-      },
-      "mod_layer_off": {
-        "description": "审核 · 模型层已关闭",
-        "type": "text",
-        "default": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定",
-        "hint": "本群维度开关里关掉了「模型层」时使用"
-      },
-      "mod_failed": {
-        "description": "审核 · 审核失败",
-        "type": "text",
-        "default": "审核未完成（{error}），已记入审核记录",
-        "hint": "变量：{error}；用于引用失联 / 执行失败等"
-      },
-      "mod_exempt": {
-        "description": "审核 · 豁免成员",
-        "type": "text",
-        "default": "该成员在豁免名单中，本次不做处理"
-      },
-      "mod_no_quote": {
-        "description": "审核 · 未引用消息",
-        "type": "text",
-        "default": "请先长按违规消息选择「回复」引用它，再发送 /群管 举报"
-      },
-      "mod_disabled": {
-        "description": "审核 · 本群未开启审核",
-        "type": "text",
-        "default": "本群未开启举报审核"
-      },
-      "mod_dry_run": {
-        "description": "审核 · 试运行提示",
-        "type": "text",
-        "default": "（试运行）根据{basis}，符合{category}，本应禁言{duration}"
-      },
-      "mod_report_limit": {
-        "description": "审核 · 举报过频",
-        "type": "text",
-        "default": "举报太频繁啦，请稍后再试。"
-      },
-      "mod_need_admin": {
-        "description": "审核 · 非管理员改群规",
-        "type": "text",
-        "default": "只有管理员可以修改群规"
-      },
-      "mod_rules_empty": {
-        "description": "审核 · 本群无群规",
-        "type": "text",
-        "default": "本群还没有配置群规，审核暂时只按关键词和语义判断。管理员可以这样加一条：\n/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟\n（竖线隔开三段：规则名 | 说明 | 时长；时长不写默认 1 小时）"
-      },
       "msg_join_request_auto_approved": {
         "description": "审批 · 自动通过提示",
         "type": "text",
@@ -687,26 +605,6 @@
         "type": "text",
         "default": "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人",
         "hint": "可用变量：{date} {time} {pending_count} {list} {muted_count} {group}。{list} 会自动展开成申请名单，没有申请时是一句「暂无待处理申请」"
-      },
-      "msg_mod_warn": {
-        "description": "审核 · 警告提示（默认 markdown）",
-        "type": "text",
-        "default": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。"
-      },
-      "msg_mod_todo": {
-        "description": "审核 · 高危低置信转人工回执",
-        "type": "text",
-        "default": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。"
-      },
-      "msg_mod_revoke": {
-        "description": "审核 · 撤销处罚并致歉",
-        "type": "text",
-        "default": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
-      },
-      "msg_mod_unattributed": {
-        "description": "审核 · 无法定位被举报发送者时的回执",
-        "type": "text",
-        "default": "⚠️ 已判定：{verdict}。\n但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"
