@@ -47,6 +47,7 @@ from astrbot.api.web import json_response, request, stream_response
 from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
 from .qgm.kernel.text import short_id
+from .qgm.features.audit import policy as audit_policy
 from .qq_api import QQApi, QQApiError
 from . import button_kit
 from . import member_event
@@ -6200,27 +6201,9 @@ class QQGroupManager(Star):
     # ---------------- 执行（撤回 + 禁言） ----------------
     def _mod_plan(self, group: str, verdict: dict, rep: dict, *,
                   settings: dict | None = None, prior_override=None) -> dict:
-        """把「判定结果」变成「处罚计划」的唯一来源。
-
-        试跑（_mod_predict_action）与真实执行（_mod_execute）都走这里，
-        避免两份参数拼装漂移——之前就出现过「试跑显示警告、实际不处罚」。
-        只计算，不产生任何副作用。
-        """
+        """把「判定结果」变成「处罚计划」；纯逻辑在 qgm.features.audit.policy。"""
         st = settings if settings is not None else self._mod_settings(group)
         smart = bool(st.get("smart_penalty", False))
-        sev0 = str(verdict.get("severity") or "")
-        plan = {
-            "action": "none", "recall": False, "seconds": 0, "duration": "",
-            "rule_name": "", "rule_id": "", "match_by": "none", "source": "none",
-            "severity": sev0, "confidence": verdict.get("confidence", 0),
-            "prior_offenses": 0, "escalation": 1.0, "escalation_capped": False,
-            "smart": smart, "reason": "",
-        }
-        try:
-            conf = float(verdict.get("confidence") or 0)
-        except (TypeError, ValueError):
-            conf = 0.0
-
         prior = 0.0
         try:
             if prior_override is not None:
@@ -6232,86 +6215,18 @@ class QQGroupManager(Star):
                 ))
         except Exception:
             prior = 0.0
-        plan["prior_offenses"] = prior
-
-        if not verdict or not verdict.get("violation"):
-            plan["reason"] = "未违规"
-            plan["trace"] = self._plan_trace(plan, st, conf)
-            return plan
-
-        thr = float(st.get("confidence_threshold") or 0.75)
-        warn_thr = float(st.get("warn_confidence_threshold") or 0.6)
-        if conf < thr and not verdict.get("from_cache"):
-            if smart and sev0.lower() == "high":
-                # 高危但拿不准：先把内容撤下来（可逆、无成员影响），处罚交人工决定
-                plan.update(action="todo", recall=True,
-                            reason=f"高危但置信度 {conf:.2f} < {thr:.2f}，已撤回并转人工复核")
-            elif smart and warn_thr <= conf < thr:
-                # 中度以上：撤回 + 警告（内容仍有风险）；轻微：只警告，不动消息
-                plan.update(action="warn", recall=sev0.lower() != "low", source="smart",
-                            severity=sev0 or "medium",
-                            reason=f"置信度 {conf:.2f} 低于阈值 {thr:.2f}，仅警告不处罚")
-            else:
-                plan.update(action="none", reason=f"置信度 {conf:.2f} < 阈值 {thr:.2f}")
-            plan["trace"] = self._plan_trace(plan, st, conf)
-            return plan
-
-        dec = moderation.decide_action(
-            verdict,
+        return audit_policy.build_plan(
+            verdict=verdict,
+            settings=st,
+            prior=prior,
             rules=self.mod.get_rules(group),
-            max_seconds=int(st.get("max_mute_seconds") or 604800),
-            default_seconds=int(self._read_config_value(("moderation", "default_mute_seconds"), default=600) or 600),
-            smart=smart,
-            high_conf=thr,
-            prior_offenses=prior,
-            prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
-            force_mute_priors=int(st.get("smart_force_mute_priors") or 0),
-            rule_floor_high=bool(st.get("rule_floor_high", True)),
+            default_seconds=int(self._read_config_value(
+                ("moderation", "default_mute_seconds"), default=600) or 600),
+            decide_action=moderation.decide_action,
+            escalate_seconds=moderation.escalate_seconds,
+            fmt_duration=fmt_duration,
+            warn=self.logger.warning,
         )
-        kind = str(dec.get("action") or "mute")
-        plan.update({
-            "action": kind,
-            "recall": bool(dec.get("recall")),
-            "seconds": int(dec.get("seconds") or 0) if kind == "mute" else 0,
-            "duration": fmt_duration(int(dec.get("seconds") or 0)) if kind == "mute" else "",
-            "rule_name": dec.get("rule_name") or "",
-            "rule_id": dec.get("rule_id") or "",
-            "match_by": dec.get("match_by") or "none",
-            "source": dec.get("source") or "legacy",
-            "severity": dec.get("severity") or sev0,
-            "reason": dec.get("skipped_reason") or "",
-        })
-
-        if kind == "mute" and prior:
-            before = int(plan["seconds"] or 0)
-            try:
-                if smart and not st.get("escalate_enabled", False):
-                    max_mult = float(st.get("smart_max_multiplier") or 3.0)
-                    secs, mult = moderation.escalate_seconds(
-                        before, prior, step=0.5, max_multiplier=max_mult,
-                        cap=int(st.get("max_mute_seconds") or 604800),
-                    )
-                    intended = min(1.0 + float(prior) * 0.5, max_mult)
-                else:
-                    secs, mult = moderation.escalate_seconds(
-                        before, prior,
-                        step=float(st.get("escalate_step") or 1.0),
-                        max_multiplier=float(st.get("escalate_max_multiplier") or 4.0),
-                        cap=int(st.get("max_mute_seconds") or 604800),
-                    )
-                    intended = mult
-                if secs != before:
-                    plan["seconds"] = secs
-                    plan["duration"] = fmt_duration(secs)
-                    plan["escalation"] = mult
-                elif intended > 1.0:
-                    plan["escalation"] = intended
-                    plan["escalation_capped"] = True
-            except Exception as e:
-                self.logger.warning(f"[审核] 累犯加刑计算失败，按原时长执行：{e}")
-
-        plan["trace"] = self._plan_trace(plan, st, conf)
-        return plan
 
     _LEGACY_TEMPLATE_DEFAULTS = {
         "msg_mod_revoke": (
@@ -6343,23 +6258,8 @@ class QQGroupManager(Star):
 
     @staticmethod
     def _plan_trace(plan: dict, st: dict, conf: float) -> dict:
-        """写进判定记录的决策依据，便于事后回答「为什么罚成这样」。"""
-        return {
-            "source": plan.get("source") or "none",
-            "rule_id": plan.get("rule_id") or "",
-            "rule_name": plan.get("rule_name") or "",
-            "match_by": plan.get("match_by") or "none",
-            "severity": plan.get("severity") or "",
-            "confidence": round(float(conf or 0), 3),
-            "threshold": float(st.get("confidence_threshold") or 0.75),
-            "prior": plan.get("prior_offenses") or 0,
-            "bump_at": int(st.get("smart_tier_bump_at") or 2),
-            "force_at": int(st.get("smart_force_mute_priors") or 0),
-            "escalation": plan.get("escalation") or 1.0,
-            "capped": bool(plan.get("escalation_capped")),
-            "smart": bool(st.get("smart_penalty", False)),
-            "action": plan.get("action") or "none",
-        }
+        """写进判定记录的决策依据；实现见 qgm.features.audit.policy。"""
+        return audit_policy.plan_trace(plan, st, conf)
 
     def _mod_predict_action(self, group: str, verdict: dict, rep: dict,
                             prior_override: int | None = None) -> dict:
