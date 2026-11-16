@@ -62,7 +62,9 @@ from .qgm.commands import parse as command_parse
 from .qgm.features.approval import web as approval_web
 from .qgm.features.mute import web as mute_web
 from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
-from .qgm.kernel.timefmt import fmt_duration, fmt_rfc3339, fmt_ts, set_active_timezone
+from .qgm.kernel.timefmt import (
+    _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, set_active_timezone,
+)
 from .qgm.kernel.constants import PLUGIN_NAME, PLUGIN_VERSION
 from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.kernel.text import _recall_hint, _refresh_hint
@@ -402,12 +404,6 @@ RULE_USAGE_SET = (
 
 # 面板与消息里的时间统一按 AstrBot 全局配置 timezone 渲染（默认 Asia/Shanghai / UTC+8），
 # 不跟随宿主机或浏览器时区；时长类配置一律以「秒」为单位，只在展示时换算。
-_ACTIVE_TZ_NAME = "Asia/Shanghai"
-
-
-def active_timezone_name() -> str:
-    return _ACTIVE_TZ_NAME
-
 
 
 

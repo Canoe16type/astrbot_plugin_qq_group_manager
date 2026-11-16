@@ -8,6 +8,10 @@ from zoneinfo import ZoneInfo
 _ACTIVE_TZ_NAME = "Asia/Shanghai"
 
 
+def active_timezone_name() -> str:
+    return _ACTIVE_TZ_NAME
+
+
 def fmt_ts(ts: float, fmt: str = "%Y-%m-%d %H:%M") -> str:
     """unix 时间戳 -> 本地可读时间。"""
     try:
