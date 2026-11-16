@@ -72,6 +72,7 @@ async def collect(host, ctx: dict) -> list[Evidence]:
             try:
                 host.logger.warning(f"[审核][扩展] 检测器 {getattr(d, 'name', '?')} 异常：{e}")
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
             continue
         if ev:

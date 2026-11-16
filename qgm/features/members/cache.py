@@ -79,6 +79,7 @@ def _record_recent_msg(host, event):
                 if mt is not None and int(mt) == 103:
                     return  # 引用消息自身不入缓存
             except (TypeError, ValueError):
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
             text = host._extract_text(event)[:500]   # 落盘缓存只留前 500 字
             images = host._extract_images(event)
@@ -100,6 +101,7 @@ def _record_recent_msg(host, event):
             lst[:] = [r for r in lst if now - r["ts"] <= 600][-200:]
             host._save_recent_msgs()
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
 def _match_recent_msg_id(host, group_openid, text, max_age=150.0):

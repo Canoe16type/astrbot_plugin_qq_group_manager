@@ -46,6 +46,7 @@ async def web_logs_stream(host):
                             yield ": keepalive\n\n"
                     await asyncio.sleep(1)
             except asyncio.CancelledError:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
 
         return stream_response(gen())

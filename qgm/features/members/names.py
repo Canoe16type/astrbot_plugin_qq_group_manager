@@ -20,6 +20,7 @@ async def _resolve_member_name(host, group_openid, member_openid):
             if str(rec.get("nickname") or "").strip():
                 return str(rec["nickname"]).strip()
         except Exception:  # noqa: BLE001
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
         cached = (host._nick_cache.get(group_openid) or {}).get(member_openid)
         if cached:
@@ -38,9 +39,11 @@ async def _resolve_member_name(host, group_openid, member_openid):
                             if rec is not None and rec.get("name_source") != "manual":
                                 host.members.set_name(group_openid, member_openid, name, source="api")
                         except Exception:  # noqa: BLE001
+                            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                             pass
                     return name
             except Exception:
+                # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                 pass
         return ""
 

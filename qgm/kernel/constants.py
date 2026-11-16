@@ -28,6 +28,7 @@ def _read_version() -> str:
                     if line.strip().startswith("version:"):
                         return line.split(":", 1)[1].strip().strip('"\'')
             except OSError:
+                # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                 pass
     return "0.0.0"
 

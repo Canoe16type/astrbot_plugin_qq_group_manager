@@ -169,6 +169,7 @@ class MemberRegistry:
         try:
             getattr(self.logger, level.lower(), self.logger.info)(f"[成员档案] {msg}")
         except Exception:  # noqa: BLE001
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
     # ------------------------------------------------------------------

@@ -236,6 +236,7 @@ def _patch_botpy_quote_fields() -> None:
                         for _k in list(_extra_by_id)[: len(_extra_by_id) - _MAX_EXTRA]:
                             del _extra_by_id[_k]
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
 
         base.__init__ = _patched_init
@@ -404,6 +405,7 @@ class QQGroupManager(Star):
                     f"plugin_set 里残留旧插件名 {LEGACY_PLUGIN_NAME}（该目录已不存在），可在面板手动删除。"
                 )
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
     def __init__(self, context, config=None) -> None:
@@ -440,8 +442,8 @@ class QQGroupManager(Star):
             if os.path.isdir(legacy) and not os.path.exists(new_dir):
                 os.replace(legacy, new_dir)
                 logger.info(f"数据目录已迁移：{LEGACY_PLUGIN_NAME} -> {PLUGIN_NAME}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"数据目录迁移失败（继续使用新目录）：{e}")
 
     def _groups_file(self) -> str:
         return os.path.join(self._plugin_data_dir(), "known_groups.json")
@@ -960,8 +962,8 @@ class QQGroupManager(Star):
                 admins = (self.context.get_config() or {}).get("admins_id") or []
                 if sender_id in admins:
                     c = True
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(f"[权限] 读取 AstrBot admins_id 失败，回退到事件角色：{e}")
             conds.append(c)
         # 2. QQ 群角色（兼容字符串 "owner"/"admin" 与数字 1/2）
         if bool(self._read_config_value(("admin", "admin_use_qq_role"), default=True, legacy_keys=("admin_use_qq_role",))):
@@ -1344,6 +1346,7 @@ class QQGroupManager(Star):
             try:
                 event.stop_event()
             except Exception:  # noqa: BLE001 - 老版本没有 stop_event 也无妨
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
             return True
         except Exception as e:  # noqa: BLE001
@@ -1667,6 +1670,7 @@ class QQGroupManager(Star):
             try:
                 await task
             except (asyncio.CancelledError, Exception):
+                # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                 pass
 
         # 定时汇报任务同理：不取消的话重载后会和新实例一起发，一天变两条
@@ -1677,6 +1681,7 @@ class QQGroupManager(Star):
             try:
                 await rtask
             except (asyncio.CancelledError, Exception):
+                # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                 pass
 
         # 入群申请的「合并推送」任务也要收掉：它 sleep(2s) 后才真正发消息，
@@ -1707,6 +1712,7 @@ class QQGroupManager(Star):
         try:
             self.logger.close()
         except Exception:
+            # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
             pass
 
     def _ensure_poll_task(self) -> None:
@@ -2238,6 +2244,7 @@ class QQGroupManager(Star):
             if group:
                 LOG_CONTEXT.set(self._ctx("", str(group)))
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
     @staticmethod
@@ -2619,6 +2626,7 @@ class QQGroupManager(Star):
             try:
                 coro.close()
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
             return False, "动作队列繁忙（并发上限 2），本次未执行"
         try:
@@ -2913,8 +2921,10 @@ class QQGroupManager(Star):
                 if not QQGroupManager._ip_is_public(ipaddress.ip_address(addr)):
                     return "该域名解析到本机 / 内网地址，已拒绝"
         except (socket.gaierror, ValueError):
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
         except Exception:                                          # noqa: BLE001
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
         return ""
 

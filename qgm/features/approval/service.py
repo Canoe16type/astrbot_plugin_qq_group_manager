@@ -154,6 +154,7 @@ def _request_brief(r):
             if vi.get("method") == "verify_message" and vi.get("verify_message"):
                 brief += f" 验证消息: {vi['verify_message']}"
         except Exception:  # noqa: BLE001
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
         return brief
 

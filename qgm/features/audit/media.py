@@ -31,6 +31,7 @@ def _extract_images(host, event):
                 for attr in ("url", "file", "path"):
                     add(getattr(c, attr, ""))
         except Exception:
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
 
         try:  # 原始附件兜底（图片可能只在 attachments 里，组件里没有）
@@ -45,6 +46,7 @@ def _extract_images(host, event):
                 if ct.startswith("image") or _looks_like_image_url(u):
                     add(u)
         except Exception:
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
         return urls[:4]
 
@@ -169,5 +171,6 @@ def _quote_attachments_from_raw(host, raw):
                     if u not in out:
                         out.append(u)
         except Exception:
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
         return out[:4]

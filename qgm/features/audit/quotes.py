@@ -49,6 +49,7 @@ def _mod_resolve_reported(host, event):
                 if chain_parts:
                     quoted_content = host._clean_quote_summary("\n".join(chain_parts))
         except Exception:
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
         try:
             raw = getattr(event.message_obj, "raw_message", None)
@@ -65,6 +66,7 @@ def _mod_resolve_reported(host, event):
                     if u not in quoted_images:
                         quoted_images.append(u)
         except Exception:
+            # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
             pass
 
         rec = None
@@ -164,6 +166,7 @@ def _extract_quote_from_raw(host, raw):
                     f"message_reference={_d(ref)}"
                 )
             except Exception:
+                # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                 pass
 
             # 1) 引用元素里直接带被引用消息 ID（REFIDX 格式）与原文

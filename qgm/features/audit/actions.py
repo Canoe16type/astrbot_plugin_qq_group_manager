@@ -46,5 +46,6 @@ async def run(host, ctx: dict) -> list[dict]:
             try:
                 host.logger.warning(f"[审核][扩展] 动作 {getattr(a, 'name', '?')} 异常：{e}")
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
     return out

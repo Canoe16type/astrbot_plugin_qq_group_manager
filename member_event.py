@@ -64,6 +64,7 @@ def _install_gateway_sniffer(logger) -> None:
                     else:
                         logger.debug(f"[成员事件][网关] 收到事件 {t}")
         except Exception:  # noqa: BLE001
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
         return await original(self, ws, message)
 
@@ -78,6 +79,7 @@ def _install_gateway_sniffer(logger) -> None:
             try:
                 intent = int((getattr(self, "_session", None) or {}).get("intent", 0))
             except Exception:  # noqa: BLE001
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
             if intent & GROUP_MEMBER_EVENT_INTENT:
                 logger.info(f"[成员事件][网关] identify 上报 intents=0x{intent:x}（含群成员事件）")
@@ -325,5 +327,6 @@ async def _reconnect_after(plugin, client, delay: float) -> None:
         try:
             await ws.close()
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
     logger.info("[成员事件] 已触发 websocket 重连，群成员事件订阅将在重连后生效")

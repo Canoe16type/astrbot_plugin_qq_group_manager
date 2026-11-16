@@ -183,6 +183,7 @@ async def on_member_remove(host, data: dict, platform_id: str | None = None) -> 
                         if int(code) == 40034105:
                             host._member_perm_blocked.add(g)
                     except (TypeError, ValueError):
+                        # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                         pass
                     if blocked:
                         # 已经提示过该群没开主动消息权限，后续同类失败不再刷 ERROR
@@ -215,6 +216,7 @@ async def on_member_add(host, data: dict, platform_id: str | None = None) -> Non
         try:
             host.members.clear_tombstone(g, member)   # 重新入群：允许重建档案
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
         ctx = host._ctx(platform_id or "-", g, member)
         ev_id = host._member_event_key(g, member, data)
@@ -281,6 +283,7 @@ async def _on_group_join_request(host, data, platform_id=None):
             try:
                 host._nick_cache.setdefault(group_openid, {})[member_openid] = req["username"]
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
 
         # 自动审批策略已经放行：这不是「待审批」，只发一条结果提示（可关）。

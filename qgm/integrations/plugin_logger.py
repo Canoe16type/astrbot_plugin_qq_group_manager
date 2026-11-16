@@ -11,6 +11,7 @@
 
 import contextvars
 import json
+import logging
 import os
 import re
 import threading
@@ -110,6 +111,7 @@ class PluginLogger:
             try:
                 os.chmod(base, 0o700)   # 日志里有 openid / 群名，目录不给其他用户进
             except OSError:
+                # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                 pass
             return base
         except Exception:
@@ -163,6 +165,7 @@ class PluginLogger:
                     os.remove(p)
                     removed += 1
                 except Exception:
+                    # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                     pass
         return removed
 
@@ -230,6 +233,7 @@ class PluginLogger:
                 if self._pending:
                     self.flush()
             except Exception:
+                # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                 pass
 
     def flush(self) -> None:
@@ -252,9 +256,11 @@ class PluginLogger:
                 try:
                     os.chmod(path, 0o600)
                 except OSError:
+                    # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                     pass
                 self._perm_fixed = True
         except Exception:
+            # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
             pass
 
     def close(self) -> None:
@@ -459,6 +465,7 @@ class PluginLogger:
                 os.remove(p)
                 removed += 1
             except Exception:
+                # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
                 pass
         return removed
 
@@ -487,6 +494,7 @@ class PluginLogger:
             try:
                 size += os.path.getsize(p)
             except Exception:
+                # noqa: silent-cleanup —— 降级兜底，不影响主流程
                 pass
         return {
             "dir": self.log_dir or "",

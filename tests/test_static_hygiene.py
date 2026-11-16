@@ -31,6 +31,22 @@ class StaticHygieneTest(unittest.TestCase):
                 self.assertNotIn(pat, src, f"{p} 含 {pat}")
             self.assertIsNone(SECRET_RE.search(src), f"{p} 疑似硬编码密钥")
 
+    def test_no_unmarked_silent_except(self):
+        """静默 except 必须显式标注原因；未标注视为隐藏故障。"""
+        import ast
+
+        bad = []
+        for path in [ROOT / "main.py", *(ROOT / "qgm").rglob("*.py")]:
+            src = path.read_text(encoding="utf-8")
+            lines = src.splitlines()
+            for node in ast.walk(ast.parse(src)):
+                if isinstance(node, ast.ExceptHandler) and len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
+                    ln = node.body[0].lineno
+                    prev = lines[ln - 2] if 0 <= ln - 2 < len(lines) else ""
+                    if "noqa: silent-cleanup" not in prev:
+                        bad.append(f"{path}:{node.lineno}")
+        self.assertEqual(bad, [], "未标注的静默 except：" + ", ".join(bad))
+
 
 if __name__ == "__main__":
     unittest.main()

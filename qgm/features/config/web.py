@@ -100,6 +100,7 @@ async def web_config_bulk_save(host):
                     try:
                         del host.config[ikey]
                     except Exception:
+                        # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
                         pass
                 applied.setdefault(gkey, {})[ikey] = value
 

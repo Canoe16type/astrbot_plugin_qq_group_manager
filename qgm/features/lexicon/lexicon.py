@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -508,8 +509,8 @@ def _restrict(path: str, mode: int) -> None:
     """尽力把文件/目录权限收紧到指定值（Linux/macOS 生效，Windows 静默跳过）。"""
     try:
         os.chmod(path, mode)
-    except OSError:
-        pass
+    except OSError as e:
+        logging.getLogger(__name__).warning(f"[词库] 收紧权限失败（{path} -> {oct(mode)}）：{e}")
 
 
 class LexiconManager:

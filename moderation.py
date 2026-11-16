@@ -195,6 +195,7 @@ def parse_json_loose(raw: str) -> Optional[dict]:
         obj = json.loads(s)
         return obj if isinstance(obj, dict) else None
     except Exception:
+        # noqa: silent-cleanup —— 解析/读取兜底，失败即跳过
         pass
     # 退化为括号配对扫描
     start = s.find("{")
@@ -365,6 +366,7 @@ def decide_action(
             if steps:
                 sev = tier_order[min(tier_order.index(sev) + steps, len(tier_order) - 1)]
         except (TypeError, ValueError):
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
         if sev == "high":
             if conf < float(high_conf):
@@ -787,6 +789,7 @@ class ModerationStore:
         try:
             os.replace(self._verdict_path, self._verdict_path + ".migrated")
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
     def _iter_verdicts(self, reverse: bool = True):
@@ -840,6 +843,7 @@ class ModerationStore:
                 try:
                     seq = max(seq, int(v.get("id") or 0))
                 except Exception:
+                    # noqa: silent-cleanup —— 降级兜底，不影响主流程
                     pass
             self._seq, self._vcount = seq, cnt
             self._save_vmeta()
@@ -849,6 +853,7 @@ class ModerationStore:
         try:
             self._save(self._verdict_meta, {"seq": int(self._seq), "count": int(self._vcount)})
         except Exception:
+            # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
     @property
@@ -978,6 +983,7 @@ class ModerationStore:
                 self.set_rules(group, rules)
                 return removed
         except (TypeError, ValueError):
+            # noqa: silent-cleanup —— 清理/权限尽力而为，失败不影响主流程
             pass
         return None
 
