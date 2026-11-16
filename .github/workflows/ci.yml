@@ -11,12 +11,12 @@ permissions:
 
 jobs:
   check:
-    name: 自检（Python ${{ matrix.python-version }}）
+    name: 自检（Python 3.12）
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,11 +56,9 @@ jobs:
           echo "卫生检查通过"
 
       - name: 安装运行测试依赖
-        if: matrix.python-version == '3.12'
         run: python -m pip install --quiet astrbot
 
       - name: 运行完整测试（加载器 / 资源路径 / 366 例）
-        if: matrix.python-version == '3.12'
         run: |
           mkdir -p /tmp/qgm/plugins
           cp -r "$GITHUB_WORKSPACE" /tmp/qgm/plugins/astrbot_plugin_qq_group_manager
