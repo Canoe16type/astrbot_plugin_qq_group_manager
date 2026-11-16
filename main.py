@@ -53,6 +53,8 @@ from .qgm.features.audit import service as audit_service
 from .qgm.features.audit import review as audit_review
 from .qgm.features.audit import revoke as audit_revoke
 from .qgm.features.audit import web as audit_web
+from .qgm.features.audit import rules as audit_rules
+from .qgm.features.audit.rules import RULE_USAGE_ADD, RULE_USAGE_SET, parse_rule_spec
 from .qgm.features.lexicon import web as lexicon_web
 from .qgm.features.status import web as status_web
 from .qgm.features.members import web as members_web
@@ -61,6 +63,8 @@ from .qgm.commands import router as command_router
 from .qgm.commands import parse as command_parse
 from .qgm.features.mute import commands as mute_commands
 from .qgm.features.status import commands as status_commands
+from .qgm.features.members import commands as members_commands
+from .qgm.features.audit import commands as audit_commands
 from .qgm.features.admin import commands as admin_commands
 from .qgm.features.approval import commands as approval_commands
 from .qgm.features.approval import web as approval_web
@@ -71,7 +75,7 @@ from .qgm.kernel.timefmt import (
     set_active_timezone,
 )
 from .qgm.kernel.constants import PLUGIN_NAME, PLUGIN_VERSION
-from .qgm.kernel.text import _recall_hint, _refresh_hint
+from .qgm.kernel.text import _PURGE_LABELS, _purge_summary_text, _recall_hint, _refresh_hint
 from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.features.members import events as member_events
 from .qq_api import QQApi, QQApiError
@@ -288,37 +292,6 @@ HISTORY_MAX_PER_GROUP = 500
 
 
 # 退群清理：各类数据的可读名（日志 / 回执里给用户看）
-_PURGE_LABELS = {
-    "known_groups": "已知群记录",
-    "mute_history": "禁言历史",
-    "recall_history": "撤回历史",
-    "members": "成员档案",
-    "rules": "群规",
-    "settings": "审核设置",
-    "verdicts": "判定记录",
-    "group_meta": "群名/备注",
-    "admins": "提醒名单",
-    "templates": "群话术覆盖",
-    "welcome_dedupe": "入群欢迎去重",
-    "notify_task": "待推送通知",
-    "nick_cache": "昵称缓存",
-    "pending": "申请缓存",
-}
-
-
-def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") -> str:
-    """把清理结果字典拼成一句人能读的话。"""
-    if not summary:
-        return empty
-    parts = []
-    for k, v in summary.items():
-        label = _PURGE_LABELS.get(k, k)
-        try:
-            n = int(v or 0)
-        except (TypeError, ValueError):
-            n = 0
-        parts.append(f"{label} {n} 条" if n > 1 else label)
-    return "、".join(parts)
 
 
 
@@ -331,51 +304,12 @@ def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") ->
 _RULE_SEP_RE = re.compile(r"\s*[｜|︱]\s*")
 
 
-def parse_rule_spec(text: str) -> tuple[str, str, int, Optional[str]]:
-    """解析群规的一行式写法，返回 (name, desc, seconds, error)。
-
-    error 非 None 时调用方应回用法提示，而不是硬建一条残缺群规。
-
-    三种写法都认（都是用户真实会发出来的）：
-      名｜说明｜时长（全角竖线，帮助里的标准写法）
-      名 | 说明 | 时长（半角竖线，手机输入法/英文键盘最常见）
-      名 说明 时长（纯空格）
-    时长可省略 → 默认 1 小时；只写一段 → 只当规则名。
-    """
-    raw = (text or "").strip()
-    if not raw:
-        return "", "", 3600, "empty"
-    norm = _RULE_SEP_RE.sub("｜", raw)
-    if "｜" in norm:
-        seg = [x.strip() for x in norm.split("｜") if x.strip()]
-    else:
-        seg = [x.strip() for x in norm.split() if x.strip()]
-    seconds = 3600
-    if len(seg) >= 2:
-        tail = parse_duration(seg[-1])
-        if tail:
-            seconds = int(tail)
-            seg = seg[:-1]
-    if not seg:
-        return "", "", 3600, "empty"
-    name = seg[0]
-    desc = " ".join(seg[1:]).strip()
-    if len(name) > 24:
-        return name, desc, seconds, "name_too_long"
-    return name, desc, seconds, None
-
 
 RULE_USAGE_ADD = (
     "用法：/群管 群规 添加 规则名 | 说明 | 时长" + chr(10) +
     "示例：/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
     "竖线用半角「|」或全角「｜」都行；时长可省略，默认 1 小时。"
 )
-RULE_USAGE_SET = (
-    "用法：/群管 群规 设置 规则名 | 说明 | 时长" + chr(10) +
-    "示例：/群管 群规 设置 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
-    "多条用「;」隔开，规则会追加到本群群规里。"
-)
-
 
 # 面板与消息里的时间统一按 AstrBot 全局配置 timezone 渲染（默认 Asia/Shanghai / UTC+8），
 # 不跟随宿主机或浏览器时区；时长类配置一律以「秒」为单位，只在展示时换算。
@@ -1099,48 +1033,9 @@ class QQGroupManager(Star):
         """薄壳：见 status_commands。"""
         return await status_commands._cmd_selfcheck(self, event, parts)
 
-    async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """/群管 体检：逐个确认机器人还在不在已记录的群里。
-
-        默认只报告；带 ``清理`` 才真删数据（避免一次手滑清一堆群）。
-        bot_state 需要白名单权限，拿不到权限的群一律标「无法确认」，不动数据。
-        """
-        do_purge = any(str(p).lower() in ("清理", "purge", "clean") for p in parts[1:])
-        cur = event.get_group_id()
-        groups = dict(self._managed_groups())
-        if cur and cur not in groups:
-            groups[cur] = event.get_platform_id()
-
-        if not groups:
-            await self._reply(event, "还没有记录到任何群，等机器人在群里收到消息或收到入群事件后再说。")
-            return
-
-        lines = [f"【群管体检】已知群 {len(groups)} 个" + ("（检出离群会自动清理）" if do_purge else "（只报告，不改数据；加「清理」才会删）")]
-        stat = {"in": 0, "absent": 0, "unknown": 0}
-        purged = 0
-        for g, pid in list(groups.items())[:20]:      # 上限 20 个，避免回执太长
-            state, detail = await self._check_group_presence(g, pid)
-            stat[state] = stat.get(state, 0) + 1
-            label = self.mod.display_name(g) or g
-            tail = f"…{g[-6:]}"
-            if state == "in":
-                lines.append(f"✅ {label}（{tail}）{detail}")
-            elif state == "absent":
-                if do_purge and self._purge_enabled():
-                    summary = self._purge_group_data(g, pid, reason="/群管 体检 检出离群")
-                    purged += 1
-                    lines.append(f"❌ {label}（{tail}）{detail}，已清理：{_purge_summary_text(summary, empty='无残留数据')}")
-                else:
-                    lines.append(f"❌ {label}（{tail}）{detail}" + ("（加「清理」可删除本群数据）" if not do_purge else "（自动清理开关已关，未删除）"))
-            else:
-                lines.append(f"⚠️ {label}（{tail}）{detail}")
-        if len(groups) > 20:
-            lines.append(f"……还有 {len(groups) - 20} 个群没检查（一次最多 20 个，可分批用 /群管 成员 查看）")
-        lines.append(
-            f"小结：在群 {stat.get('in', 0)}｜离群 {stat.get('absent', 0)}｜无法确认 {stat.get('unknown', 0)}"
-            + (f"｜已清理 {purged} 个群" if purged else "")
-        )
-        await self._reply(event, "\n".join(lines))
+    async def _cmd_presence(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 members_commands。"""
+        return await members_commands._cmd_presence(self, event, parts)
 
     # ---------- 禁言历史（长期存储） ----------
 
@@ -2913,113 +2808,9 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # /成员：群成员档案
     # ------------------------------------------------------------------
-    async def _cmd_member(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """群成员档案：列表 / 改名 / 备注 / 删除 / 清理 / 拉取 / 查。
-
-        官方事件与消息里只有 member_openid、没有昵称，所以这张表得靠人工维护；
-        面板「成员档案」页签改的是同一份数据（members.json）。
-        """
-        g = event.get_group_id()
-        if not g:
-            await self._reply(event, "这个指令要在群里发哈。")
-            return
-        if not self._members_on():
-            await self._reply(event, "群成员档案已在配置里关闭（member_registry.enabled）。")
-            return
-
-        sub = parts[1].lower() if len(parts) > 1 else ""
-        args = parts[2:]
-
-        # 宽松一点：/群管 成员 2、/群管 成员 已退 都当作列表查询
-        if sub.isdigit() or sub in ("已退", "退群", "在群", "全部", "无名", "未命名", "有名", "named"):
-            args = [sub] + args
-            sub = "列表"
-
-        if sub in ("", "列表", "list"):
-            status = "all"
-            page = 1
-            for a in args:
-                if a in ("在群", "active"):
-                    status = "active"
-                elif a in ("已退", "退群", "left"):
-                    status = "left"
-                elif a in ("无名", "未命名", "unnamed"):
-                    status = "unnamed"
-                elif a in ("有名", "named"):
-                    status = "named"
-                elif a.isdigit():
-                    page = max(1, int(a))
-            await self._reply(event, self._render_member_list(g, status=status, page=page))
-            return
-
-        if sub in ("查", "搜索", "search"):
-            kw = " ".join(args).strip()
-            if not kw:
-                await self._reply(event, "用法：/群管 成员 查 <昵称/备注/openid 片段>")
-                return
-            await self._reply(event, self._render_member_list(g, keyword=kw, title=f"搜索「{kw}」"))
-            return
-
-        if sub in ("改名", "设置", "rename", "set"):
-            if len(args) < 2:
-                await self._reply(event, "用法：/群管 成员 改名 <序号或openid> <昵称>\n先发 /群管 成员 列表 看序号。")
-                return
-            openid = self._member_ref(g, args[0])
-            if not openid:
-                await self._reply(event, f"没找到成员「{args[0]}」，先发 /群管 成员 列表 看看序号。")
-                return
-            name = " ".join(args[1:]).strip()[:40]
-            self.members.set_name(g, openid, name, source="manual")
-            await self._reply(event, f"✅ 已记下：{member_registry_lib.short_id(openid)} → {name or '（清空）'}")
-            return
-
-        if sub in ("备注", "note"):
-            if len(args) < 1:
-                await self._reply(event, "用法：/群管 成员 备注 <序号或openid> [备注内容]（留空即清除）")
-                return
-            openid = self._member_ref(g, args[0])
-            if not openid:
-                await self._reply(event, f"没找到成员「{args[0]}」。")
-                return
-            note = " ".join(args[1:]).strip()[:200]
-            self.members.set_note(g, openid, note)
-            await self._reply(event, f"✅ 备注已更新：{member_registry_lib.short_id(openid)} → {note or '（空）'}")
-            return
-
-        if sub in ("删除", "删", "delete", "del"):
-            if not args:
-                await self._reply(event, "用法：/群管 成员 删除 <序号或openid>")
-                return
-            openid = self._member_ref(g, args[0])
-            if not openid:
-                await self._reply(event, f"没找到成员「{args[0]}」。")
-                return
-            self.members.delete(g, openid)
-            await self._reply(event, f"🗑 已从档案删除：{member_registry_lib.short_id(openid)}")
-            return
-
-        if sub in ("清理", "clean"):
-            n = self.members.delete_left(g)
-            await self._reply(event, f"🧹 已清理 {n} 条「已退群」档案。" if n else "没有「已退群」的档案需要清理。")
-            return
-
-        if sub in ("拉取", "同步", "sync"):
-            await self._reply(event, await self._cmd_member_sync(g))
-            return
-
-        await self._reply(
-            event,
-            "群成员档案用法：\n"
-            "/群管 成员 —— 看档案（默认按最近发言排序）\n"
-            "/群管 成员 已退 / 无名 / 全部 —— 按状态筛\n"
-            "/群管 成员 查 <关键词> —— 搜昵称/备注/openid\n"
-            "/群管 成员 改名 <序号> <昵称> —— 人工补名字\n"
-            "/群管 成员 备注 <序号> <备注>\n"
-            "/群管 成员 删除 <序号> —— 删单条\n"
-            "/群管 成员 清理 —— 清掉所有已退群记录\n"
-            "/群管 成员 拉取 —— 调官方群成员接口补昵称（需白名单权限）\n"
-            "改昵称也可以走网页面板「成员档案」页签。",
-        )
+    async def _cmd_member(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 members_commands。"""
+        return await members_commands._cmd_member(self, event, parts)
 
     def _member_ref(self, group_openid: str, token: str) -> str:
         """把「序号」或「openid / openid 尾段」解析成完整 openid。"""
@@ -3082,79 +2873,13 @@ class QQGroupManager(Star):
         lines.append("改名：/群管 成员 改名 <序号> <昵称>")
         return "\n".join(lines)
 
-    async def _cmd_member_sync(self, group_openid: str) -> str:
-        """尝试用官方群成员接口补昵称。
+    async def _cmd_member_sync(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 members_commands。"""
+        return await members_commands._cmd_member_sync(self, event, parts)
 
-        注意：GET /v2/groups/{openid}/members 与 .../members/{openid}
-        目前都是**内邀白名单**能力，普通机器人调用返回 11253。这里如实回报，
-        不做"假装成功"的提示。
-        """
-        api = self._api_for_group_or_default(group_openid)
-        if api is None:
-            return "没有可用的机器人实例，先确认 QQ 官方适配器在线。"
-        try:
-            members = await api.list_group_members(group_openid)
-        except QQApiError as e:
-            if e.code == 11253:
-                return (
-                    "❌ 官方「群成员列表」接口还是内邀能力（错误码 11253），本机器人没有权限。\n"
-                    "可以先用 /群管 成员 改名 手工补，或在面板「成员档案」页签里批量改。"
-                )
-            return f"❌ 拉取失败：{e}"
-        except Exception as e:  # noqa: BLE001
-            return f"❌ 拉取失败：{e}"
-        if not members:
-            return "接口没返回成员（可能权限不足或群为空）。"
-        rows = [
-            {
-                "openid": m.get("member_openid") or "",
-                "nickname": m.get("username") or "",
-                "role": m.get("member_role") or "",
-                "user_openid": m.get("union_openid") or m.get("user_openid") or "",
-                "joined_at": m.get("joined_at") or "",
-            }
-            for m in members
-        ]
-        added, updated = self.members.upsert_many(group_openid, rows)
-        return (
-            f"✅ 已从官方接口同步 {len(rows)} 人（新增 {added}、更新 {updated}）。\n"
-            f"人工改过的昵称不会被覆盖。"
-        )
-
-    async def _cmd_group_name(self, event: AstrMessageEvent) -> None:
-        """刷新当前群的群名（管理员）。
-
-        群名接口 GET /v2/groups/{openid}/info 仅白名单机器人可用（11253），
-        无权限时如实回报，并提示改用面板手动备注。
-        """
-        grp = event.get_group_id()
-        if not grp:
-            await self._reply(event, "这个指令要在群里发哈。")
-            return
-        pid = event.get_platform_id()
-        try:
-            api = self._get_api(pid)
-        except QQApiError as e:
-            await self._reply(event, f"没找到这个机器人的实例：{e}")
-            return
-        data, err = await api.fetch_group_info(grp)
-        if data and data.get("group_name"):
-            name = str(data["group_name"])[:60]
-            self.mod.set_group_meta(grp, name=name, platform_id=pid,
-                                    name_state="ok", name_error="")
-            await self._reply(event, f"本群群名：{name}")
-            return
-        code = getattr(err, "code", None)
-        msg = str(err) if err else "未知错误"
-        self.mod.set_group_meta(grp, platform_id=pid,
-                                name_state=("denied" if code == 11253 else "failed"),
-                                name_error=msg[:200])
-        if code == 11253:
-            await self._reply(event, "取不到群名：官方「获取群信息」接口只对白名单机器人开放"
-                                     "（错误码 11253，需在 QQ 开放平台申请「群基本信息」权限）。\n"
-                                     "临时办法：打开管理面板 →「群规审核」→ 点「✎ 备注」给这个群起个名字。")
-        else:
-            await self._reply(event, f"拉取群名失败：{msg}")
+    async def _cmd_group_name(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 members_commands。"""
+        return await members_commands._cmd_group_name(self, event, parts)
 
     def _is_mentioned_bot(self, event: AstrMessageEvent) -> bool:
         """判断消息是否 @ 了机器人自身（用于不带 / 的指令识别）。"""
@@ -3201,130 +2926,9 @@ class QQGroupManager(Star):
         """薄壳：见 mute_commands。"""
         return await mute_commands._cmd_unmute(self, event, parts)
 
-    async def _cmd_recall(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """撤回消息。
-
-        用法:
-        - 引用（回复）目标消息后发送 /撤回
-        - /撤回 <message_id>
-
-        官方限制: 发送超过 2 分钟的消息不可撤回；机器人是群管理员时可撤回
-        普通群成员的消息（消息 ID 从群消息事件 d.id 获取），否则只能撤回
-        自己发送的消息。
-        """
-        # 功能开关：配置里关闭后指令直接提示（不误报为无权限）
-        if not bool(self._read_config_value(
-                ("recall", "enable_recall"), default=True,
-                legacy_keys=("enable_recall",))):
-            await self._reply(event, self._render("msg_recall_disabled"))
-            return
-
-        api = self._get_api(event.get_platform_id())
-        g = event.get_group_id()
-        if not g:
-            await self._reply(event, self._render("msg_recall_group_only"))
-            return
-
-        message_id = ""
-        source = "quote"
-        quoted_content = ""
-        # 方式一：/撤回 <message_id>
-        # 兼容 ROBOT1.0_xxx / REFIDX_xxx== 等官方消息 ID 格式
-        if len(parts) > 1 and re.fullmatch(r"[0-9A-Za-z_.\-=]{16,}", parts[1]):
-            message_id = parts[1]
-            source = "message_id"
-        # 方式二：引用（回复）目标消息
-        else:
-            try:
-                from astrbot.api.message_components import Reply
-
-                reply = next(
-                    (c for c in event.message_obj.message if isinstance(c, Reply)),
-                    None,
-                )
-                if reply and getattr(reply, "id", None):
-                    message_id = str(reply.id)
-                    # 引用组件里带被引用消息的原文（官方接口不提供查消息内容，
-                    # 引用撤回是唯一能拿到原文的途径），用于历史备份查验。
-                    quoted_content = self._clean_quote_summary(getattr(reply, "message_str", "") or "")
-                    if not quoted_content:
-                        chain = getattr(reply, "chain", None)
-                        if chain:
-                            quoted_content = "".join(
-                                str(getattr(c, "text", "") or "")
-                                for c in chain
-                            )
-                # 无论 Reply 组件是否带原文/ID，都从原始消息里再挖一次：
-                # botpy 适配器可能拿不到引用 ID（QQ 官方引用消息的被引用
-                # ID 在 msg_elements[0].msg_idx，见 _patch_botpy_quote_fields），
-                # 且原文用于下面的缓存匹配（真实消息 ID 只能靠它找回）。
-                raw = getattr(event.message_obj, "raw_message", None)
-                if raw is not None:
-                    mid, mcontent = self._extract_quote_from_raw(raw)
-                    if not message_id and mid:
-                        message_id = str(mid)
-                    if not quoted_content and mcontent:
-                        quoted_content = str(mcontent)
-
-                # 关键：QQ 官方引用消息事件拿不到被引用消息的 d.id（只有
-                # REFIDX 引用索引，撤回 API 不认），所以优先用原文在消息缓存
-                # 里匹配真实消息 ID（机器人能收到群内全量消息时必然命中）。
-                if quoted_content:
-                    cache_id = self._match_recent_msg_id(g, quoted_content)
-                    # 仅当现有 ID 是引用索引（REFIDX/TMP，撤回 API 不接受）
-                    # 或为空时，才用缓存中的真实消息 ID 覆盖。
-                    if cache_id and (
-                        not message_id
-                        or message_id.startswith("REFIDX")
-                        or message_id.startswith("TMP_")
-                    ):
-                        message_id = cache_id
-                        source = "quote_cache"
-                        self.logger.debug(
-                            f"引用撤回命中消息缓存: text={quoted_content!r} id={cache_id}"
-                        )
-                    elif message_id and not cache_id:
-                        self.logger.debug(
-                            f"引用撤回未命中缓存，将尝试事件内 ID: {message_id} "
-                            f"(REFIDX 格式可能不被撤回 API 接受)"
-                        )
-            except Exception as e:
-                self.logger.debug(f"提取引用消息 id 失败: {e}")
-
-        if not message_id:
-            await self._reply(event, self._render("msg_recall_need_quote"))
-            return
-
-        try:
-            await api.recall_group_message(g, message_id)
-            self.logger.info(f"撤回消息成功: group={g} message_id={message_id}")
-            # 永久保存原始消息，便于备份查验
-            rec = self._add_recall_record(
-                group_openid=g,
-                platform_id=event.get_platform_id(),
-                message_id=message_id,
-                content=quoted_content,
-                source=source,
-                operator=event.get_sender_id(),
-                operator_name=event.get_sender_name() or "",
-            )
-            self.logger.info(
-                f"已记录撤回历史: id={rec['id']} source={source} "
-                f"content={'有原文' if quoted_content else '无原文(仅消息ID)'}"
-            )
-            await self._reply(event, self._render("msg_recall_ok"))
-        except QQApiError as e:
-            self.logger.warning(
-                f"撤回消息失败: group={g} message_id={message_id} err={e}"
-            )
-            if e.code == 40064004:
-                await self._reply(event, self._render("msg_recall_timeout"))
-            elif e.code == 40062003:
-                await self._reply(event, self._render("msg_recall_no_perm"))
-            elif e.code == 40061001:
-                await self._reply(event, self._render("msg_recall_invalid_id"))
-            else:
-                await self._reply(event, self._render("msg_recall_failed", error=str(e)))
+    async def _cmd_recall(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 mute_commands。"""
+        return await mute_commands._cmd_recall(self, event, parts)
 
     def _extract_quote_from_raw(self, raw) -> tuple[str, str]:
         """从 botpy 原始消息对象中提取被引用消息的 ID 与原文。
@@ -5553,195 +5157,14 @@ class QQGroupManager(Star):
         """薄壳：见 admin_commands。"""
         return await admin_commands._cmd_admin_register(self, event, parts)
 
-    async def _cmd_rules(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        event.call_llm = True
-        g = event.get_group_id()
-        if not g:
-            return
-        if not self._mod_group_allowed(g):
-            return
-        sub = parts[1] if len(parts) > 1 else ""
-        rules = self.mod.get_rules(g)
-
-        if not sub or sub in ("查看", "列表"):
-            if not rules:
-                await self._reply(event, self._mod_tpl(g, "mod_rules_empty"))
-                return
-            lines = [f"【本群群规】共 {len(rules)} 条"]
-            for i, r in enumerate(rules, 1):
-                flag = "" if r.get("enabled", True) else "（已停用）"
-                lines.append(
-                    f"{i}. {r.get('name')}{flag}｜{r.get('desc','')}"
-                    f"｜{self.mod.get_cat_names(g).get(str(r.get('category')), r.get('category'))}"
-                    f"｜{fmt_duration(int(r.get('seconds') or 0))}"
-                )
-            await self._reply(event, chr(10).join(lines))
-            return
-
-        # 以下为写操作，需要管理员
-        if not self._is_admin(event):
-            await self._reply(event, self._mod_tpl(g, "mod_need_admin"))
-            return
-
-        if sub in ("设置", "修改"):
-            text = " ".join(parts[2:]).strip()
-            if not text:
-                await self._reply(event, RULE_USAGE_SET)
-                return
-            items = [x.strip() for x in re.split("[" + chr(10) + ";]", text) if x.strip()]
-            new_rules, bad = [], []
-            for it in items:
-                name, desc, secs, err = parse_rule_spec(it)
-                if err:
-                    bad.append(it)
-                    continue
-                new_rules.append({
-                    "name": name, "desc": desc or name,
-                    "category": "other", "severity": "medium",
-                    "seconds": int(secs or 3600), "enabled": True,
-                })
-            for r in new_rules:
-                self.mod.add_rule(g, r)
-            if not new_rules:
-                await self._reply(event, RULE_USAGE_SET)
-                return
-            msg = f"已保存 {len(new_rules)} 条群规，当前共 {len(self.mod.get_rules(g))} 条。"
-            if bad:
-                msg += chr(10) + f"有 {len(bad)} 行没看懂，已跳过：" + " / ".join(bad[:3])
-            await self._reply(event, msg)
-            return
-
-        if sub in ("添加", "新增", "add"):
-            text = " ".join(parts[2:]).strip()
-            name, desc, secs, err = parse_rule_spec(text)
-            if err:
-                tip = RULE_USAGE_ADD
-                if err == "name_too_long":
-                    tip = ("规则名太长了（超过 24 字），中间八成漏了竖线分隔。" + chr(10) + RULE_USAGE_ADD)
-                await self._reply(event, tip)
-                return
-            rule = self.mod.add_rule(g, {
-                "name": name, "desc": desc,
-                "category": "other", "severity": "medium",
-                "seconds": int(secs or 3600), "enabled": True,
-            })
-            # 回显完整内容：让用户当场看出说明和时长有没有被吃掉
-            await self._reply(event, (
-                f"已添加群规 {rule['id']}" + chr(10) +
-                f"名称：{rule['name']}" + chr(10) +
-                f"说明：{rule['desc'] or '（未填，按名称判定）'}" + chr(10) +
-                f"判定命中后禁言：{fmt_duration(int(rule['seconds']))}"
-            ))
-            return
-
-        if sub in ("删除", "移除"):
-            key = parts[2] if len(parts) > 2 else ""
-            removed = self.mod.delete_rule(g, key) if key else None
-            await self._reply(event, f"已删除群规：{removed.get('name')}" if removed else "没找到这条群规（可用序号或 id）")
-            return
-
-        if sub == "清空":
-            self.mod.set_rules(g, [])
-            await self._reply(event, "已清空本群群规。")
-            return
-
-        await self._reply(event, (
-            "群规指令怎么用：" + chr(10) +
-            "· /群管 群规            看现有群规" + chr(10) +
-            "· /群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟" + chr(10) +
-            "· /群管 群规 删除 2     删第 2 条" + chr(10) +
-            "· /群管 群规 清空       全删"
-        ))
+    async def _cmd_rules(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 audit_commands。"""
+        return await audit_commands._cmd_rules(self, event, parts)
 
     # ---------------- /审核（管理员） ----------------
-    async def _cmd_mod(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        g = event.get_group_id()
-        if not g:
-            return
-        sub = parts[1] if len(parts) > 1 else ""
-        st = self._mod_settings(g)
-        if sub == "试跑":
-            val = (parts[2] if len(parts) > 2 else "").strip()
-            if val in ("开", "on", "true", "1"):
-                st = self.mod.set_settings(g, {"dry_run": True})
-                await self._reply(event, "已开启试运行：只判定不执行。")
-            elif val in ("关", "off", "false", "0"):
-                self.mod.set_settings(g, {"dry_run": False})
-                await self._reply(event, "已关闭试运行：判定后将真实撤回/禁言，请确认群规已调好。")
-            else:
-                await self._reply(event, "用法：/群管 审核 试跑 开|关")
-            return
-        if sub == "巡检":
-            val = (parts[2] if len(parts) > 2 else "").strip()
-            if val in ("开", "on", "true", "1"):
-                self.mod.set_settings(g, {"auto_scan": True})
-                await self._reply(event, "已开启本群关键词巡检（仅本群生效，零成本；AI 巡检请在插件页面开启）。")
-            elif val in ("关", "off", "false", "0"):
-                self.mod.set_settings(g, {"auto_scan": False})
-                await self._reply(event, "已关闭本群巡检，恢复为「仅举报才审核」。")
-            else:
-                await self._reply(event, "用法：/群管 审核 巡检 开|关")
-            return
-        if sub == "自我介绍":
-            await self._reply(event, "正在发送本群群管功能介绍…")
-            if await self._send_group_intro(g, event.get_platform_id()):
-                self._mark_intro_done(g, "manual")
-                await self._reply(event, "已发送 ✅ 此后本群不再触发「首条消息欢迎」。")
-            else:
-                await self._reply(
-                    event,
-                    "发送失败。主动消息要求群内 24 小时内有人 @ 过机器人（11251），"
-                    "先在本群 @ 我一下再试；入群事件那条路不受此限制。",
-                )
-            return
-        if sub == "测试":
-            text = " ".join(parts[2:]).strip()
-            # 可选：在末尾加「前科=3」模拟该成员已有 3 次前科（不写任何数据）
-            prior_override = None
-            m_prior = re.search(r"(?:前科|prior)=(\d{1,3})", text)
-            if m_prior:
-                prior_override = int(m_prior.group(1))
-                text = (text[:m_prior.start()] + text[m_prior.end():]).strip()
-            if not text:
-                await self._reply(event, "用法：/群管 审核 测试 <消息内容> [前科=3]")
-                return
-            rep = {"text": text, "sender": "test", "sender_name": "测试用户", "images": [], "ts": time.time(), "id": ""}
-            v = self._mod_review_fast(g, rep, respect_switches=False, scene="审核测试") or await self._mod_review_llm(
-                event, g, rep, [], "（测试）", respect_switches=False, scene="审核测试")
-            if not v:
-                await self._reply(event, "测试失败：模型未返回结果。")
-                return
-            d = self._mod_predict_action(g, v, rep, prior_override=prior_override)
-            try:
-                vh = self._mod_variant_scan(g, rep, {**st, "variant_check": True})
-            except Exception:
-                vh = None
-            vh_text = (f"变体层：疑似命中（{vh['hint']}｜强度 {vh['strength']}｜{vh['count']} 处）"
-                       if vh else "变体层：未命中")
-            await self._reply(event, (
-                f"【测试判定】违规={v.get('violation')} 依据={self.mod.get_dim_names(g).get(str(v.get('basis')),'')} "
-                f"类型={v.get('category')} 严重度={v.get('severity')} 置信度={v.get('confidence')}" + chr(10) + ""
-                f"理由：{v.get('reason')}" + chr(10) +
-                f"拟执行：{d['action']} {d['duration']}"
-                + (f"（前科 {d['prior_offenses']} 次，倍率 ×{d['escalation']}）" if d["escalation"] and d["escalation"] != 1.0 else "")
-                + ("（智能分级已开启）" if d["smart"] else "（智能分级未开启）")
-                + "（试跑不执行任何动作）" + chr(10) +
-                vh_text
-            ))
-            return
-        # 默认：状态
-        s = self.mod.stats(g)
-        await self._reply(event, (
-            "【本群审核状态】" + chr(10) + ""
-            f"举报审核：{'开启' if st.get('enabled') else '关闭'}｜试运行：{'开' if st.get('dry_run') else '关'}"
-            f"｜巡检：{'开' if st.get('auto_scan') else '关'}" + chr(10) + ""
-            f"群规：{len(self.mod.get_rules(g))} 条｜阈值：{st.get('confidence_threshold')}｜上限：{fmt_duration(int(st.get('max_mute_seconds') or 0))}" + chr(10) + ""
-            f"累计：{s['total']} 次（违规 {s['hit']}）｜今日：{s['today_total']} 次（违规 {s['today_hit']}）" + chr(10) + ""
-            f"变体检测：{'开' if st.get('variant_check') else '关'}"
-            f"（命中即撤回：{'开' if st.get('variant_recall') else '关'}）"
-            f"｜待办：{s.get('todo_open', 0)} 条｜复犯累进：{'开' if st.get('escalate_enabled') else '关'}" + chr(10) + ""
-            f"用法：/群管 审核 试跑 开|关 ｜ /群管 审核 巡检 开|关 ｜ /群管 审核 测试 <内容> ｜ /群管 审核 自我介绍"
-        ))
+    async def _cmd_mod(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 audit_commands。"""
+        return await audit_commands._cmd_mod(self, event, parts)
 
     # ---------------- 插件 Page 接口 ----------------
     # ---------------- 机器人 / 群名（openid 太抽象，这里做人类可读映射） ----------------

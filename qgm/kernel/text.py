@@ -43,3 +43,35 @@ def _refresh_hint(updated: int, denied: int, no_bot: int, failed: list, first_er
     if failed:
         return f"更新 {updated} 个群名；{len(failed)} 个失败：{first_error[:120]}{tail}"
     return f"没有需要拉取的群{tail}"
+
+
+_PURGE_LABELS = {
+    "known_groups": "已知群记录",
+    "mute_history": "禁言历史",
+    "recall_history": "撤回历史",
+    "members": "成员档案",
+    "rules": "群规",
+    "settings": "审核设置",
+    "verdicts": "判定记录",
+    "group_meta": "群名/备注",
+    "admins": "提醒名单",
+    "templates": "群话术覆盖",
+    "welcome_dedupe": "入群欢迎去重",
+    "notify_task": "待推送通知",
+    "nick_cache": "昵称缓存",
+    "pending": "申请缓存",
+}
+
+def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") -> str:
+    """把清理结果字典拼成一句人能读的话。"""
+    if not summary:
+        return empty
+    parts = []
+    for k, v in summary.items():
+        label = _PURGE_LABELS.get(k, k)
+        try:
+            n = int(v or 0)
+        except (TypeError, ValueError):
+            n = 0
+        parts.append(f"{label} {n} 条" if n > 1 else label)
+    return "、".join(parts)
