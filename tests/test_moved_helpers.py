@@ -26,6 +26,10 @@ class MovedHelperSmokeTest(unittest.TestCase):
         self.assertTrue(main_mod.fmt_ts(0))
         self.assertTrue(main_mod.fmt_rfc3339("2026-11-16T00:00:00Z"))
 
+    def test_parse_duration(self):
+        self.assertEqual(main_mod.parse_duration("5分钟"), 300)
+        self.assertEqual(main_mod.parse_duration("一小时"), 3600)
+
 
 if __name__ == "__main__":
     unittest.main()

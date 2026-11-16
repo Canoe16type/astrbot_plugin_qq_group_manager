@@ -59,11 +59,14 @@ from .qgm.features.members import web as members_web
 from .qgm.features.config import web as config_web
 from .qgm.commands import router as command_router
 from .qgm.commands import parse as command_parse
+from .qgm.features.mute import commands as mute_commands
+from .qgm.features.approval import commands as approval_commands
 from .qgm.features.approval import web as approval_web
 from .qgm.features.mute import web as mute_web
 from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
 from .qgm.kernel.timefmt import (
-    _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, set_active_timezone,
+    _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, parse_duration,
+    set_active_timezone,
 )
 from .qgm.kernel.constants import PLUGIN_NAME, PLUGIN_VERSION
 from .qgm.kernel.text import _recall_hint, _refresh_hint
@@ -260,7 +263,6 @@ def _patch_botpy_quote_fields() -> None:
 
 _patch_botpy_quote_fields()
 
-DURATION_RE = re.compile(r"^\s*(\d+)\s*(秒|分钟|分|小时|时|天|s|m|h|d)?\s*$", re.I)
 
 # 管理指令集合（需要管理员权限）
 # 管理员指令：新的「大类」+ 旧的独立写法都列在这里（旧写法会先被 _normalize_aliases 折进大类）
@@ -319,35 +321,6 @@ def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") ->
 
 
 # 中文数字映射（"一分钟" -> 1）
-_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
-           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-
-
-def parse_duration(text: str) -> Optional[int]:
-    """解析时长文本为秒数。支持 30秒/5分钟/2小时/1天/600(秒)/一分钟。"""
-    m = DURATION_RE.match(text or "")
-    if not m:
-        # 兼容中文数字写法："一分钟"→60s、"半小时"→1800s（十以上暂不展开）
-        t = (text or "").strip()
-        if len(t) == 3 and t[0] in _CN_NUM and t[1:] in ("秒", "分", "分钟", "时", "小时", "天"):
-            return parse_duration(f"{_CN_NUM[t[0]]}{t[1:]}")
-        if len(t) == 3 and t[0] == "半":
-            if t[1:] in ("分", "分钟"):
-                return 30
-            if t[1:] in ("时", "小时"):
-                return 30 * 60
-        return None
-    num = int(m.group(1))
-    unit = (m.group(2) or "s").lower()
-    if unit in ("s", "秒"):
-        return num
-    if unit in ("m", "分钟", "分"):
-        return num * 60
-    if unit in ("h", "小时", "时"):
-        return num * 3600
-    if unit in ("d", "天"):
-        return num * 86400
-    return num
 
 
 # 群规「一行式」写法里的分隔符：全角竖线 / 半角竖线 / 兼容 U+FE31 竖排形式。
@@ -3284,96 +3257,13 @@ class QQGroupManager(Star):
             pass
         return out
 
-    async def _cmd_mute(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        api = self._get_api(event.get_platform_id())
-        g = event.get_group_id()
-        mentioned = self._mentioned_openids(event)
-        if not mentioned:
-            await self._reply(event, self._render("msg_mute_need_at"))
-            return
-        # 时长与理由：第一个能解析为时长的参数作为时长，
-        # 其余非 @ 参数全部合并为理由（兼容 "10分钟 刷屏" 与 "刷屏 10分钟" 两种顺序）
-        seconds: Optional[int] = None
-        reason_parts: list[str] = []
-        for p in parts[1:]:
-            if p.startswith("@"):
-                continue
-            if seconds is None:
-                s = parse_duration(p)
-                if s is not None:
-                    seconds = s
-                    continue
-            reason_parts.append(p)
-        if seconds is None:
-            await self._reply(event, self._render("msg_duration_invalid"))
-            return
-        if seconds <= 0:
-            await self._reply(event, self._render("msg_duration_invalid"))
-            return
-        # 官方上限 30 天：超出按上限执行，回复里显示的就是真实时长
-        if seconds > 30 * 86400:
-            self.logger.info(f"禁言时长 {seconds}s 超过官方上限，按 30 天执行")
-            seconds = 30 * 86400
-        reason = " ".join(reason_parts).strip() or str(
-            self._read_config_value(("basic", "default_mute_reason"), default="违反群规", legacy_keys=("default_mute_reason",))
-        )
-        target = mentioned[0]
-        if target == event.get_sender_id():
-            await self._reply(event, self._render("msg_mute_self"))
-            return
-        expire_ts = time.time() + seconds
-        expire_at = QQApi.format_rfc3339(expire_ts)
-        self.logger.info(
-            f"禁言: group={g} member={target} seconds={seconds} "
-            f"reason={reason!r} expire={expire_at}"
-        )
-        try:
-            await api.set_mute(g, target, mute_expire_at=expire_at, op="add")
-        except QQApiError as e:
-            self.logger.error(f"禁言失败: {e}")
-            await self._reply(event, self._render("msg_mute_failed", error=str(e)))
-            return
-        # 记录历史（被禁言者昵称 API 不返回，存 openid；操作者昵称单独存）
-        self._add_mute_record(
-            group_openid=g,
-            platform_id=event.get_platform_id(),
-            member_openid=target,
-            username="",
-            reason=reason,
-            seconds=seconds,
-            expire_ts=expire_ts,
-            operator=event.get_sender_id(),
-            operator_name=event.get_sender_name() or "",
-        )
-        await self._reply(
-            event,
-            self._render(
-                "msg_mute_success",
-                username=f"<@{target}>",
-                at=target,
-                seconds=seconds,
-                minutes=seconds // 60,
-                duration_text=fmt_duration(seconds),
-                reason=reason,
-            ),
-        )
+    async def _cmd_mute(self, event: AstrMessageEvent, parts: list[str]):
+        """薄壳：见 mute_commands。"""
+        return await mute_commands._cmd_mute(self, event, parts)
 
-    async def _cmd_unmute(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        api = self._get_api(event.get_platform_id())
-        g = event.get_group_id()
-        mentioned = self._mentioned_openids(event)
-        if not mentioned:
-            await self._reply(event, self._render("msg_mute_need_at"))
-            return
-        for target in mentioned:
-            try:
-                await api.set_mute(g, target, op="del")
-                self._mark_unmuted(g, target)
-                self.logger.info(f"解禁: group={g} member={target}")
-                await self._reply(event, self._render("msg_unmute_success", username=f"<@{target}>", at=target))
-            except QQApiError as e:
-                self.logger.error(f"解禁失败: {e}")
-                await self._reply(event, self._render("msg_mute_failed", error=str(e)))
+    async def _cmd_unmute(self, event: AstrMessageEvent, parts: list[str]):
+        """薄壳：见 mute_commands。"""
+        return await mute_commands._cmd_unmute(self, event, parts)
 
     async def _cmd_recall(self, event: AstrMessageEvent, parts: list[str]) -> None:
         """撤回消息。
@@ -3581,36 +3471,9 @@ class QQGroupManager(Star):
             self.logger.debug(f"解析引用消息原始结构失败: {e}")
         return mid, content
 
-    async def _cmd_list_mutes(self, event: AstrMessageEvent, parts: list[str] | None = None) -> None:
-        api = self._get_api(event.get_platform_id())
-        g = event.get_group_id()
-        try:
-            data = await api.get_mute_state(g)
-        except QQApiError as e:
-            self.logger.error(f"查询禁言失败: {e}")
-            await self._reply(event, self._render("msg_api_error", error=str(e)))
-            return
-        members = data.get("members") or []
-        if not members:
-            await self._reply(event, self._render("msg_mute_list_empty"))
-            return
-        history = list(self._mute_history.get(g, []))
-        lines = []
-        for m in members:
-            oid = m.get("member_openid", "?")
-            # QQ API 不返回成员昵称（username 字段基本为空），统一用短标识；
-            # 匹配/判断始终用完整 openid，短标识仅用于人眼区分。
-            name = (m.get("username") or "").strip() or f"{oid[:8]}"
-            expire = fmt_rfc3339(m.get("mute_expire_at", ""))
-            reason = self._last_reason(g, oid)
-            cnt = sum(1 for r in history if r.get("member_openid") == oid)
-            line = f"· {name} 到期 {expire}"
-            if reason:
-                line += f"（理由：{reason}）"
-            if cnt:
-                line += f" 历史{cnt}次"
-            lines.append(line)
-        await self._reply(event, self._render("msg_mute_list", list="\n".join(lines)))
+    async def _cmd_list_mutes(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：见 mute_commands。"""
+        return await mute_commands._cmd_list_mutes(self, event, parts)
 
     @staticmethod
     def _mute_status_text(status: str) -> str:
@@ -3675,83 +3538,9 @@ class QQGroupManager(Star):
         oid, target = oid.lower(), target.lower()
         return oid == target or oid.startswith(target)
 
-    async def _cmd_list_mute_history(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        """/禁言历史 [条数|汇总] [@用户|openid前缀]：本群流水（默认10条）/ 按人汇总 / 单用户记录。
-
-        单用户查询示例：
-          /禁言历史 @某人        -> 该用户最近10条
-          /禁言历史 @某人 5      -> 该用户最近5条
-          /禁言历史 @某人 汇总   -> 该用户禁言汇总
-          /禁言历史 4F697792...  -> 直接输 openid（或前缀）查询，方便查已不在群的用户
-        """
-        g = event.get_group_id()
-        limit = 10
-        mode = "group"
-        target: Optional[str] = None
-        mentioned = self._mentioned_openids(event)
-        if mentioned:
-            target = mentioned[0]
-        for p in parts[1:]:
-            if p.isdigit():
-                limit = max(1, min(int(p), 50))
-            elif p in ("汇总", "summary", "统计"):
-                mode = "summary"
-            elif target is None and len(p) >= 8 and re.fullmatch(r"[0-9A-Za-z_-]+", p):
-                # 未 @ 时支持直接输入 openid 或前缀（条数参数已在上面被 isdigit 捕获）
-                target = p
-        records = list(self._mute_history.get(g, []))
-        if not records:
-            await self._reply(event, self._render("msg_mute_history_empty"))
-            return
-
-        if target:
-            matched = [r for r in records if self._match_openid(r.get("member_openid", ""), target)]
-            if not matched:
-                await self._reply(
-                    event,
-                    self._render("msg_mute_history_user_empty", openid=target),
-                )
-                return
-            if mode == "summary":
-                await self._reply(
-                    event,
-                    self._render(
-                        "msg_mute_history_user_summary",
-                        openid=target,
-                        count=len(matched),
-                        list=self._render_mute_summary(matched),
-                    ),
-                )
-                return
-            matched = matched[-limit:][::-1]  # 最新在前
-            blocks = [self._fmt_history_line(r, full=True) for r in matched]
-            await self._reply(
-                event,
-                self._render(
-                    "msg_mute_history_user",
-                    openid=target,
-                    count=len(matched),
-                    list="\n\n".join(blocks),
-                ),
-            )
-            return
-
-        if mode == "summary":
-            await self._reply(
-                event,
-                self._render(
-                    "msg_mute_history_summary",
-                    count=len(records),
-                    list=self._render_mute_summary(records),
-                ),
-            )
-            return
-        records = records[-limit:][::-1]  # 最新在前
-        blocks = [self._fmt_history_line(r) for r in records]
-        await self._reply(
-            event,
-            self._render("msg_mute_history_list", count=len(records), list="\n\n".join(blocks)),
-        )
+    async def _cmd_list_mute_history(self, event: AstrMessageEvent, parts: list[str]):
+        """薄壳：见 mute_commands。"""
+        return await mute_commands._cmd_list_mute_history(self, event, parts)
 
     # ---------- 入群审批 ----------
     def _pending_list(self, group_openid: str) -> list[dict]:
@@ -3908,60 +3697,9 @@ class QQGroupManager(Star):
         text = await self._build_report_text(g, event.get_platform_id())
         await self._reply(event, text)
 
-    async def _cmd_review(self, event: AstrMessageEvent, parts: list[str]) -> None:
-        cmd = parts[0] if parts else "/通过"
-        g = event.get_group_id()
-        pending = self._pending_list(g)
-        if not pending:
-            pending = await self._refresh_requests(g, event.get_platform_id())
-        if not pending:
-            await self._reply(event, self._render("msg_requests_empty"))
-            return
-        if len(parts) < 2:
-            await self._reply(event, self._render("msg_request_index_invalid"))
-            return
-        arg = parts[1]
-        # 序号 或 昵称关键字
-        idx: Optional[int] = None
-        if arg.isdigit():
-            idx = int(arg)
-            if not (1 <= idx <= len(pending)):
-                await self._reply(event, self._render("msg_request_index_invalid"))
-                return
-        else:
-            for i, r in enumerate(pending, start=1):
-                if arg.lower() in str(r.get("username", "")).lower():
-                    idx = i
-                    break
-            if idx is None:
-                await self._reply(event, self._render("msg_request_index_invalid"))
-                return
-
-        target = pending[idx - 1]
-        member_openid = target.get("member_openid", "")
-        username = target.get("username", member_openid)
-        reason = " ".join(parts[2:]) if len(parts) > 2 else None
-        op = "approve" if cmd == "/通过" else "decline"
-
-        ok, err = await self._apply_join_decision(
-            event, g, event.get_platform_id(), target, op, reason=reason, via="指令"
-        )
-        if not ok:
-            await self._reply(event, self._render("msg_approve_failed", error=err))
-            return
-        if op == "approve":
-            await self._reply(
-                event, self._render("msg_approve_success", username=username)
-            )
-            welcome_left = await self._welcome_after_approve(
-                event, g, event.get_platform_id(), member_openid, username
-            )
-            if welcome_left:
-                await self._reply(event, welcome_left)
-        else:
-            await self._reply(
-                event, self._render("msg_reject_success", username=username)
-            )
+    async def _cmd_review(self, event: AstrMessageEvent, parts: list[str]):
+        """薄壳：见 approval_commands。"""
+        return await approval_commands._cmd_review(self, event, parts)
 
     async def _apply_join_decision(
         self, event: Optional[AstrMessageEvent], group_openid: str, platform_id: str,
