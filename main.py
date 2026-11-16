@@ -66,7 +66,12 @@ from .qgm.features.status import commands as status_commands
 from .qgm.features.members import commands as members_commands
 from .qgm.features.audit import commands as audit_commands
 from .qgm.features.audit import engine as audit_engine
+from .qgm.features.audit import quotes as audit_quotes
 from .qgm.features.audit import scan as audit_scan
+from .qgm.features.admin import purge as admin_purge
+from .qgm.features.approval import buttons as approval_buttons
+from .qgm.web import registry as web_registry
+from .qgm.kernel.constants import WEB_API_PREFIX
 from .qgm.features.status import proactive as status_proactive
 from .qgm.features.admin import commands as admin_commands
 from .qgm.features.approval import commands as approval_commands
@@ -77,7 +82,9 @@ from .qgm.kernel.timefmt import (
     _active_tz, active_timezone_name, fmt_duration, fmt_rfc3339, fmt_ts, parse_duration,
     set_active_timezone,
 )
-from .qgm.kernel.constants import PLUGIN_NAME, PLUGIN_VERSION
+from .qgm.kernel.constants import (LEXICON_UPSTREAM_MAX_BYTES, LEXICON_UPSTREAM_NAME,
+    LEXICON_UPSTREAM_TIMEOUT, LEXICON_UPSTREAM_URL, PLUGIN_NAME, PLUGIN_VERSION,
+    REGISTERED_COMMANDS)
 from .qgm.kernel.text import _PURGE_LABELS, _purge_summary_text, _recall_hint, _refresh_hint
 from .qgm.kernel.text import _recall_hint, _refresh_hint
 from .qgm.features.members import events as member_events
@@ -141,7 +148,6 @@ PLUGIN_NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__))) or "a
 # 日志出口统一走 astrbot.api.logger（AstrBot 会按插件路由到 astrbot.plugin.<id>，
 # 收进 data/logs）。初始化早期（self.logger / PluginLogger 还没构造完）也用它，
 # 插件不得使用 stdlib logging，出口只能是 astrbot.api.logger。
-WEB_API_PREFIX = PLUGIN_NAME
 # 腾讯 QQ 官方机器人的两种接入形态（都是同一套开放平台 API、同样的 appid/secret）：
 #   - qq_official：AstrBot 内置 WebSocket 适配器（botpy），成员事件注入只对它有效；
 #   - qq_official_webhook：4.16 起提供的 Webhook 适配器，事件由平台推到本地 HTTP。
@@ -152,13 +158,7 @@ QQ_PLATFORM_NAMES = ("qq_official", "qq_official_webhook")
 LEGACY_PLUGIN_NAME = "qq_group_manager"
 
 # ---- 一键获取上游词库 ----
-LEXICON_UPSTREAM_NAME = "上游词库（一键获取）"
 # 刻意不内置任何下载地址：词表由使用者自行寻找/自行提供，插件只负责「下载 + 解析 + 落地」。
-LEXICON_UPSTREAM_URL = ""
-LEXICON_UPSTREAM_MAX_BYTES = 2 * 1024 * 1024      # 单次下载上限 2 MB
-LEXICON_UPSTREAM_TIMEOUT = 15.0                   # 下载超时（秒）
-LEXICON_UPSTREAM_FAST_TIMEOUT = 8.0               # 配了加速地址时，直连只等这么久
-
 
 class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
     """重定向时复检目标地址，防止 302 跳内网。"""
@@ -285,11 +285,6 @@ ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/撤�
 # 1.5.0 起对外只推「大类」：禁言 / 审批 / 状态 / 审核 / 群规 / 撤回 / 举报 / 成员 / 管理登记。
 # 旧的独立指令（解禁、查禁言、禁言历史、通过、拒绝、汇报、体检、自检、群名）
 # 仍作为别名挂在对应大类下，老写法继续可用。
-REGISTERED_COMMANDS = (
-    "禁言", "审批", "状态", "撤回", "审核", "群规", "撤销",
-    "管理登记", "群管", "举报", "成员", "帮助",
-)
-
 # 禁言历史：每群最多保留的条数
 HISTORY_MAX_PER_GROUP = 500
 
@@ -304,8 +299,6 @@ HISTORY_MAX_PER_GROUP = 500
 # 群规「一行式」写法里的分隔符：全角竖线 / 半角竖线 / 兼容 U+FE31 竖排形式。
 # 教训：以前只认全角「｜」，用户用半角「|」时整句会被当成规则名，
 # 说明和时长静默丢失（群里表现为「已添加群规：侮辱」）。
-_RULE_SEP_RE = re.compile(r"\s*[｜|︱]\s*")
-
 
 
 RULE_USAGE_ADD = (
@@ -891,87 +884,9 @@ class QQGroupManager(Star):
             return "absent", f"不在群（{text}）"
         return "unknown", f"查询失败，无法确认（{text}）"
 
-    def _purge_group_data(self, group: str, pid: str = "", reason: str = "") -> dict:
-        """把一个群在本插件里的所有痕迹清掉，返回各表删除数量。
-
-        覆盖：已知群列表、群管自我介绍状态、禁言历史、撤回历史、成员档案、
-        群规/审核设置/判定记录/群名备注/提醒名单、入群欢迎去重、各种
-        按群缓存与待推送任务。
-        """
-        group = str(group or "")
-        if not group:
-            return {}
-        reason = reason or "手动清理"
-        out: dict[str, object] = {}
-
-        # ① 已知群列表
-        if self._known_groups.pop(group, None) is not None:
-            self._save_known_groups()
-            out["known_groups"] = 1
-
-        # ② 群管自我介绍状态（发过的标记 / 待兜底标记）
-        touched = False
-        if self._intro_done.pop(group, None) is not None:
-            touched = True
-        if self._intro_pending.pop(group, None) is not None:
-            touched = True
-        if touched:
-            self._save_intro_state()
-
-        # ③ 禁言历史 / 撤回历史
-        if self._mute_history.pop(group, None) is not None:
-            self._save_mute_history()
-            out["mute_history"] = 1
-        if self._recall_history.pop(group, None) is not None:
-            self._save_recall_history()
-            out["recall_history"] = 1
-
-        # ④ 成员档案
-        try:
-            n = self.members.purge_group(group)
-            if n:
-                out["members"] = n
-        except Exception as e:                       # noqa: BLE001
-            self.logger.warning(f"[清理] 成员档案清理失败: {e}")
-
-        # ⑤ 群规 / 审核设置 / 判定记录 / 群名备注 / 提醒名单 / 群模板
-        try:
-            removed = self.mod.purge_group(group)
-            if any(int(v or 0) for v in removed.values()):
-                out.update({k: v for k, v in removed.items() if int(v or 0)})
-        except Exception as e:                       # noqa: BLE001
-            self.logger.warning(f"[清理] 审核数据清理失败: {e}")
-
-        # ⑥ 入群欢迎去重表（键是 "群:成员"）
-        prefix = f"{group}:"
-        stale = [k for k in self._join_welcomed if k.startswith(prefix)]
-        for k in stale:
-            self._join_welcomed.pop(k, None)
-        if stale:
-            out["welcome_dedupe"] = len(stale)
-
-        # ⑦ 按群内存缓存 / 待推送任务
-        for attr in (
-            "_nick_cache", "_pending", "_notified", "_seen_requests",
-            "_join_error_code", "_join_backoff", "_join_event_at",
-            "_join_fresh", "_recent_group_msgs",
-        ):
-            bucket = getattr(self, attr, None)
-            if isinstance(bucket, dict) and bucket.pop(group, None) is not None:
-                out[attr.lstrip("_")] = 1
-        for attr in ("_member_perm_blocked", "_join_denied_logged"):
-            bucket = getattr(self, attr, None)
-            if isinstance(bucket, set):
-                bucket.discard(group)
-        task = self._join_notify_tasks.pop(group, None)
-        if task is not None and not task.done():
-            task.cancel()
-            out["notify_task"] = 1
-        if self._last_active_group == group:
-            self._last_active_group = ""
-
-        self.logger.info(f"[清理] 群 {group} 数据已清理（{reason}）：{_purge_summary_text(out)}")
-        return out
+    def _purge_group_data(self, group, pid='', reason='') -> dict:
+        """薄壳：见 qgm/features/admin/purge.py。"""
+        return admin_purge._purge_group_data(self, group, pid, reason)
 
     async def _cmd_status(self, event: AstrMessageEvent, parts: list[str] | None = None):
         """薄壳：见 status_commands。"""
@@ -2769,86 +2684,9 @@ class QQGroupManager(Star):
         """薄壳：见 mute_commands。"""
         return await mute_commands._cmd_recall(self, event, parts)
 
-    def _extract_quote_from_raw(self, raw) -> tuple[str, str]:
-        """从 botpy 原始消息对象中提取被引用消息的 ID 与原文。
-
-        QQ 官方群消息引用事件（message_type=103）结构：
-        - msg_elements[0].msg_idx: 被引用消息 ID（REFIDX_xxx== 格式）
-        - msg_elements[0].content: 被引用消息原文
-        - message_scene.ext: ["msg_idx=...", "ref_msg_idx=...", ...]
-        - message_reference.message_id: 部分场景下直接携带
-
-        返回 (message_id, content)，取不到时为空字符串；解析异常不抛出。
-        """
-        mid = ""
-        content = ""
-        try:
-            elems = getattr(raw, "msg_elements", None) or []
-            scene = getattr(raw, "message_scene", None) or {}
-            ref = getattr(raw, "message_reference", None) or {}
-
-            # 调试：完整 dump 引用事件的关键字段，确认真实 payload 结构
-            try:
-                import json as _json
-
-                def _d(v):
-                    if isinstance(v, (dict, list)):
-                        try:
-                            return _json.dumps(v, ensure_ascii=False)
-                        except Exception:
-                            return str(v)
-                    return str(v)
-
-                self.logger.debug(
-                    "引用消息原始结构: "
-                    f"id={getattr(raw, 'id', '')!r} "
-                    f"message_type={getattr(raw, 'message_type', '')!r} "
-                    f"msg_elements={_d(elems)} "
-                    f"message_scene={_d(scene)} "
-                    f"message_reference={_d(ref)}"
-                )
-            except Exception:
-                pass
-
-            # 1) 引用元素里直接带被引用消息 ID（REFIDX 格式）与原文
-            if elems:
-                e0 = elems[0]
-                if isinstance(e0, dict):
-                    mid = str(
-                        e0.get("msg_idx") or e0.get("id") or e0.get("message_id") or ""
-                    )
-                    content = self._clean_quote_summary(str(e0.get("content") or ""))
-                else:
-                    mid = str(
-                        getattr(e0, "msg_idx", "")
-                        or getattr(e0, "id", "")
-                        or getattr(e0, "message_id", "")
-                    )
-                    content = cls._clean_quote_summary(str(getattr(e0, "content", "") or ""))
-            # 2) message_reference 直接携带被引用消息 ID
-            if not mid:
-                if isinstance(ref, dict):
-                    mid = str(ref.get("message_id") or "")
-                else:
-                    mid = str(getattr(ref, "message_id", "") or "")
-            # 3) message_scene.ext 里找 ref_msg_idx / msg_idx
-            if not mid:
-                if isinstance(scene, dict):
-                    ext = scene.get("ext", []) or []
-                else:
-                    ext = getattr(scene, "ext", None) or []
-                for kv in ext:
-                    if isinstance(kv, str) and kv.startswith("ref_msg_idx="):
-                        mid = kv.split("=", 1)[1]
-                        break
-                if not mid:
-                    for kv in ext:
-                        if isinstance(kv, str) and kv.startswith("msg_idx="):
-                            mid = kv.split("=", 1)[1]
-                            break
-        except Exception as e:
-            self.logger.debug(f"解析引用消息原始结构失败: {e}")
-        return mid, content
+    def _extract_quote_from_raw(self, raw):
+        """薄壳：见 qgm/features/audit/quotes.py。"""
+        return audit_quotes._extract_quote_from_raw(self, raw)
 
     async def _cmd_list_mutes(self, event: AstrMessageEvent, parts: list[str] | None = None):
         """薄壳：见 mute_commands。"""
@@ -3423,125 +3261,9 @@ class QQGroupManager(Star):
         if event is not None:
             await self._reply(event, text)
 
-    async def _handle_button_interaction(self, event: AstrMessageEvent) -> bool:
-        """处理消息按钮点击，返回 True 表示这条事件已被本插件消费。"""
-        bi = self._button_interaction_of(event)
-        if bi is None:
-            return False
-        data = str(getattr(bi, "data", "") or "")
-        if not data.startswith(button_kit.CALLBACK_PREFIX):
-            return False  # 其他插件/其他用途的按钮，不插手
-
-        iid = str(getattr(bi, "interaction_id", "") or "")
-        now = time.time()
-        # 幂等：同一 interaction 只处理一次（用户连点会重复推事件）
-        self._interaction_done = {
-            k: v for k, v in self._interaction_done.items() if now - v < 3600
-        }
-        if iid and iid in self._interaction_done:
-            self.logger.debug(f"[按钮] interaction {iid[:8]}… 重复点击，忽略")
-            return True
-        if iid:
-            self._interaction_done[iid] = now
-        self._interaction_total += 1
-        self._interaction_last = now
-
-        group_openid = str(event.get_group_id() or "")
-        operator = str(event.get_sender_id() or "")
-        platform_id = event.get_platform_id()
-        action = button_kit.parse_join_action(data)
-        if action is None or not group_openid:
-            self._interaction_last_result = "数据无效"
-            self.logger.warning(
-                f"[按钮] 回调数据无法解析或不在群场景（可能被伪造）：{data[:60]}"
-            )
-            await self._reply_button_result(
-                event, group_openid, platform_id,
-                self._render("msg_join_request_button_gone"),
-            )
-            return True
-
-        if not self._group_in_scope(group_openid, platform_id):
-            # 通知只发在生效范围内的群；配置被改过之后仍可能点到旧消息上的按钮，
-            # 这里也要挡一道，避免越权处理。
-            self._interaction_last_result = "群不在生效范围"
-            self.logger.warning(
-                f"[按钮] 群 {group_openid[-6:]} 不在生效范围内，忽略本次点击"
-            )
-            return True
-
-        _on, perm, _limit = self._join_button_options()
-        if not self._button_operator_allowed(operator, perm):
-            self._interaction_last_result = "无权限"
-            self.logger.warning(
-                f"[按钮] 操作者 {operator[-6:]} 不在管理员名单，拒绝其审批操作"
-            )
-            await self._reply_button_result(
-                event, group_openid, platform_id,
-                self._render("msg_join_request_button_denied"),
-            )
-            return True
-
-        # 真值以本地待审批列表为准：button_data 是不可信输入，只当「意图」。
-        key = (str(action["member_openid"]), str(action["apply_at"]))
-        pending = self._pending.get(group_openid) or []
-        target = next((x for x in pending if self._req_key(x) == key), None)
-        if target is None:
-            # 缓存里没有：可能刚被指令处理掉，也可能缓存丢了 —— 主动拉一次对账
-            try:
-                fresh = await self._refresh_requests(group_openid, platform_id)
-            except Exception:
-                fresh = []
-            target = next(
-                (x for x in (fresh or []) if self._req_key(x) == key), None
-            )
-        if target is None:
-            self._interaction_last_result = "已处理/已失效"
-            self.logger.info(
-                f"[按钮] 申请已不在待审批列表（member={key[0][-6:]} apply_at={key[1]}），"
-                f"回执「已处理或已失效」"
-            )
-            await self._reply_button_result(
-                event, group_openid, platform_id,
-                self._render("msg_join_request_button_gone"),
-            )
-            return True
-
-        op = "approve" if action["op"] == button_kit.OP_APPROVE else "decline"
-        username = str(target.get("username") or key[0][-6:])
-        ok, err = await self._apply_join_decision(
-            event, group_openid, platform_id, target, op, via="按钮"
-        )
-        if not ok:
-            self._interaction_last_result = f"失败: {err}"
-            await self._reply_button_result(
-                event, group_openid, platform_id,
-                self._render("msg_join_request_button_failed", username=username, error=err),
-            )
-            return True
-
-        if op == "approve":
-            self._interaction_last_result = f"通过 {username}"
-            # 先试一次主动推送欢迎语；推不上去（@ 的成员还没真正进群、或主动消息
-            # 受限）就把它和回执合并，用 passive（event_id=互动事件 id）一次发出：
-            # 这条通道不吃主动消息配额，也不依赖 msg_id，可靠得多。
-            text = self._render("msg_join_request_button_ok", username=username)
-            welcome_left = await self._welcome_after_approve(
-                event, group_openid, platform_id,
-                str(target.get("member_openid") or ""), username,
-            )
-            if welcome_left:
-                text = f"{text}\n\n{welcome_left}"
-            await self._reply_button_result(
-                event, group_openid, platform_id, text
-            )
-        else:
-            self._interaction_last_result = f"拒绝 {username}"
-            await self._reply_button_result(
-                event, group_openid, platform_id,
-                self._render("msg_join_request_button_rejected", username=username),
-            )
-        return True
+    async def _handle_button_interaction(self, event):
+        """薄壳：见 qgm/features/approval/buttons.py。"""
+        return await approval_buttons._handle_button_interaction(self, event)
 
     # ------------------------------------------------------------------
     # Web API（WebUI）
@@ -3907,122 +3629,9 @@ class QQGroupManager(Star):
             pass
         return out[:4]
 
-    def _mod_resolve_reported(self, event: AstrMessageEvent) -> dict:
-        """解析「被举报的消息」。
-
-        沿用插件里已验证的引用解析链路（与 /撤回 同源）：
-        Reply 组件原文 -> botpy 原始 payload -> 消息缓存按原文匹配真实消息 ID。
-        返回 dict：quoted=是否带了引用，resolved=是否已定位到发送者。
-        """
-        out = {
-            "quoted": False, "resolved": False, "id": "", "text": "",
-            "sender": "", "sender_name": "", "images": [], "ts": time.time(),
-        }
-        g = event.get_group_id()
-        if not g:
-            return out
-        message_id = ""
-        quoted_content = ""
-        quoted_images = []
-        try:
-            from astrbot.api.message_components import Reply
-
-            reply = next((c for c in (event.message_obj.message or []) if isinstance(c, Reply)), None)
-            if reply is not None:
-                out["quoted"] = True
-                rid = getattr(reply, "id", None)
-                if rid:
-                    message_id = str(rid)
-                quoted_content = self._clean_quote_summary(getattr(reply, "message_str", "") or "")
-                # reply.chain 里的文本才是被引用原文；message_str 有时只剩占位标题。
-                chain_parts = []
-                for sub in (getattr(reply, "chain", None) or []):
-                    if type(sub).__name__ == "Image":
-                        u = _norm_media_url(getattr(sub, "url", "") or getattr(sub, "file", "") or "")
-                        if u.startswith("http") and u not in quoted_images:
-                            quoted_images.append(u)
-                    else:
-                        t = str(getattr(sub, "text", "") or "")
-                        if t.strip():
-                            chain_parts.append(t.strip())
-                if chain_parts:
-                    quoted_content = self._clean_quote_summary("\n".join(chain_parts))
-        except Exception:
-            pass
-        try:
-            raw = getattr(event.message_obj, "raw_message", None)
-            if raw is not None:
-                mid, mcontent = self._extract_quote_from_raw(raw)
-                if mid:
-                    message_id = message_id or str(mid)
-                    out["quoted"] = True
-                if mcontent and not quoted_content:
-                    quoted_content = str(mcontent)
-                    out["quoted"] = True
-                # 引用图片：适配器没转成 Image 组件时，直接读原始 attachments
-                for u in self._quote_attachments_from_raw(raw):
-                    if u not in quoted_images:
-                        quoted_images.append(u)
-        except Exception:
-            pass
-
-        rec = None
-        if quoted_content:
-            rec = self._find_recent_msg(g, text=quoted_content)
-        if rec is None and message_id:
-            for r in (self._recent_group_msgs.get(g) or []):
-                if str(r.get("id") or "") == message_id:
-                    rec = r
-                    break
-        if rec is None and not quoted_content.strip():
-            # 引用的是纯图片消息：摘要里没有任何正文可匹配，按最近的图片消息兜底
-            rec = self._latest_image_msg(g)
-            if rec is not None:
-                self.logger.info(
-                    f"{self._ctx('', g)}[审核] 引用的是纯图片消息，按最近缓存图片兜底："
-                    f"id={rec.get('id')} ts={rec.get('ts')}"
-                )
-        if rec is None:
-            # 兜底：被举报的是合并转发时，摘要里的 [消息内容] 行至少能拿去审核，
-            # 别把「[消息类型] 引用消息」这类噪声丢给模型。
-            items = self._quote_forward_items(quoted_content)
-            out["text"] = "\n".join(items) if items else quoted_content
-            out["images"] = quoted_images
-            # 内容有、发送者没定位到（引用的是 10 分钟以前的消息）：
-            # 不冒充已定位，但也不放弃审核——交给上层走「只判定不处罚」。
-            if out["text"].strip() or out["images"]:
-                out["unattributed"] = True
-            self.logger.debug(
-                f"{self._ctx('', g)}[审核] 引用未命中缓存: 摘要长度={len(quoted_content)} items={items[:3]} "
-                f"unattributed={bool(out.get('unattributed'))}"
-            )
-            return out
-        real_id = str(rec.get("id") or "")
-        # QQ 官方引用事件只给 REFIDX 引用索引，撤回 API 认的是缓存里的真实消息 ID
-        if real_id and (not message_id or message_id.startswith(("REFIDX", "TMP_"))):
-            message_id = real_id
-        # 命中缓存时优先用缓存里的正文：合并转发的缓存正文是完整展开版，
-        # 比引用摘要（夹着 [消息类型] 等元信息）更适合做审核判定。
-        images = list(rec.get("images") or []) or list(quoted_images)
-        if not images:
-            # 「文字 + 图片」被拆成两条投递时，图片在那条正文为空的相邻消息里，
-            # 按同发送者 ±3s 补齐；补不上就只能走纯文本，别假装有图。
-            images = self._nearby_images(g, str(rec.get("sender") or ""), float(rec.get("ts") or 0))
-            if images:
-                self.logger.info(
-                    f"{self._ctx('', g, str(rec.get('sender') or ''))}[审核] 被举报消息本身无图，按相邻缓存补齐 {len(images)} 张"
-                )
-        out.update({
-            "resolved": True,
-            "match_ambiguous": bool(rec.get("match_ambiguous")),
-            "id": message_id or real_id,
-            "text": str(rec.get("text") or "") or quoted_content,
-            "sender": str(rec.get("sender") or ""),
-            "sender_name": str(rec.get("sender_name") or ""),
-            "images": images[:4],
-            "ts": float(rec.get("ts") or time.time()),
-        })
-        return out
+    def _mod_resolve_reported(self, event: AstrMessageEvent):
+        """薄壳：见 qgm/features/audit/quotes.py。"""
+        return audit_quotes._mod_resolve_reported(self, event)
 
     # ---------------- 模型选择（不选则用当前会话的对话模型） ----------------
     def _provider_display(self, pid: str) -> str:
@@ -5037,73 +4646,8 @@ class QQGroupManager(Star):
         return await approval_web.web_join_approval_whitelist(self)
 
     def _register_web_apis(self) -> None:
-        ctx = self.context
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/status", self.web_status, ["GET"], "QQ群管-状态总览")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mutes", self.web_mutes, ["GET"], "QQ群管-禁言列表")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/history", self.web_mute_history, ["GET"], "QQ群管-禁言历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/history/clear", self.web_mute_history_clear, ["POST"], "QQ群管-清空禁言历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/history/delete", self.web_mute_history_delete, ["POST"], "QQ群管-删除单条禁言历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls", self.web_recalls, ["GET"], "QQ群管-撤回历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/clear", self.web_recalls_clear, ["POST"], "QQ群管-清空撤回历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/delete", self.web_recalls_delete, ["POST"], "QQ群管-删除单条撤回历史")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/requests", self.web_requests, ["GET"], "QQ群管-待审批列表")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/logs", self.web_logs, ["GET"], "QQ群管-日志查询")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/logs/stream", self.web_logs_stream, ["GET"], "QQ群管-日志SSE")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/logs/clear", self.web_logs_clear, ["POST"], "QQ群管-清空日志")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/poll", self.web_poll_now, ["POST"], "QQ群管-立即轮询")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/config", self.web_config_save, ["POST"], "QQ群管-保存默认禁言理由")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/config/schema", self.web_config_schema, ["GET"], "QQ群管-配置schema与当前值")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/config/save", self.web_config_bulk_save, ["POST"], "QQ群管-批量保存配置")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/templates/formats", self.web_tpl_formats, ["GET"], "QQ群管-消息模板格式")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/templates/formats/save", self.web_tpl_formats_save, ["POST"], "QQ群管-保存消息模板格式")
-        # 群规审核（已并入管理面板 tab：pages/dashboard，路由前缀 mod/...）
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/groups", self.web_mod_groups, ["GET"], "审核-群列表")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/detail", self.web_mod_detail, ["GET"], "审核-单群详情(群规/设置/话术)")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/save", self.web_mod_rules_save, ["POST"], "审核-保存群规")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/transfer", self.web_mod_rules_transfer, ["POST"], "审核-转移群规到其他群")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/settings/save", self.web_mod_settings_save, ["POST"], "审核-保存举报设置")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/templates/save", self.web_mod_templates_save, ["POST"], "审核-保存话术模板")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts", self.web_mod_verdicts, ["GET"], "审核-判定记录")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/export", self.web_mod_verdicts_export, ["GET"], "审核-导出判定记录")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/delete", self.web_mod_verdicts_delete, ["POST"], "审核-删除单条判定记录")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/clear", self.web_mod_verdicts_clear, ["POST"], "审核-清空判定记录")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/revoke", self.web_mod_verdicts_revoke, ["POST"], "审核-撤销处罚")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/prune", self.web_mod_verdicts_prune, ["POST"], "审核-按天清理判定记录")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/feedback", self.web_mod_feedback, ["POST"], "审核-误判标记")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/admins", self.web_mod_admins, ["GET"], "审核-提醒名单")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/admins/remove", self.web_mod_admins_remove, ["POST"], "审核-移出提醒名单")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/stats", self.web_mod_stats, ["GET"], "审核-统计")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/todo", self.web_mod_todo, ["GET"], "审核-待办队列")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/todo/handle", self.web_mod_todo_handle, ["POST"], "审核-处理待办")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/test", self.web_mod_test, ["POST"], "审核-试跑")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/group_rename", self.web_mod_group_rename, ["POST"], "审核-群备注名")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/group_names/refresh", self.web_mod_group_names_refresh, ["POST"], "审核-拉取群名")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members", self.web_members, ["GET"], "成员档案-列表")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/stats", self.web_members_stats, ["GET"], "成员档案-统计")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/update", self.web_members_update, ["POST"], "成员档案-改昵称/备注")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/delete", self.web_members_delete, ["POST"], "成员档案-删除")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/clear_left", self.web_members_clear_left, ["POST"], "成员档案-清理已退群")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/import", self.web_members_import, ["POST"], "成员档案-批量导入")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/members/sync", self.web_members_sync, ["POST"], "成员档案-官方接口同步")
-        # 词库（公开词库 + 上传 + 白名单 + 命中测试）
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons", self.web_lexicons, ["GET"], "词库-列表与统计")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/detail", self.web_lexicon_detail, ["GET"], "词库-详情与词条预览")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/toggle", self.web_lexicon_toggle, ["POST"], "词库-启用/停用")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/apply", self.web_lexicon_apply, ["POST"], "词库-批量启用")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/upload", self.web_lexicon_upload, ["POST"], "词库-上传/粘贴")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/fetch_upstream", self.web_lexicon_fetch_upstream, ["POST"], "词库-一键获取上游词库")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/delete", self.web_lexicon_delete, ["POST"], "词库-删除")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/rename", self.web_lexicon_rename, ["POST"], "词库-重命名")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/export", self.web_lexicon_export, ["GET"], "词库-导出")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/allow", self.web_lexicon_allow, ["POST"], "词库-白名单")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/lexicons/test", self.web_lexicon_test, ["POST"], "词库-命中测试")
-        # 入群自动审批策略（QQ 官方 /v2/groups/join_approval_strategy）
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/strategies", self.web_join_approval_list, ["GET"], "入群审批-策略列表")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/save", self.web_join_approval_save, ["POST"], "入群审批-创建/修改策略")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/toggle", self.web_join_approval_toggle, ["POST"], "入群审批-启停策略")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/delete", self.web_join_approval_delete, ["POST"], "入群审批-删除策略")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/execute", self.web_join_approval_execute, ["POST"], "入群审批-立即扫描")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/approval/whitelist", self.web_join_approval_whitelist, ["POST"], "入群审批-白名单增删")
+        """薄壳：见 qgm/web/registry.py。"""
+        return web_registry._register_web_apis(self)
 
     def _platform_list(self) -> list[dict]:
         out = []

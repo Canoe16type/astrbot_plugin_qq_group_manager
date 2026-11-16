@@ -75,3 +75,15 @@ def _purge_summary_text(summary: dict | None, empty: str = "无残留数据") ->
             n = 0
         parts.append(f"{label} {n} 条" if n > 1 else label)
     return "、".join(parts)
+
+
+def _norm_media_url(u: str) -> str:
+    """官方 attachment 的 url 有时是 // 开头或裸域名，补成 https。"""
+    u = str(u or "").strip()
+    if not u:
+        return ""
+    if u.startswith("http://") or u.startswith("https://"):
+        return u
+    if u.startswith("//"):
+        return "https:" + u
+    return "https://" + u

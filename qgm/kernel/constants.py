@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -32,3 +33,23 @@ def _read_version() -> str:
 
 
 PLUGIN_VERSION = _read_version()
+
+
+WEB_API_PREFIX = PLUGIN_NAME
+
+LEXICON_UPSTREAM_NAME = "上游词库（一键获取）"
+
+LEXICON_UPSTREAM_URL = ""
+
+LEXICON_UPSTREAM_MAX_BYTES = 2 * 1024 * 1024      # 单次下载上限 2 MB
+
+LEXICON_UPSTREAM_TIMEOUT = 15.0                   # 下载超时（秒）
+
+LEXICON_UPSTREAM_FAST_TIMEOUT = 8.0               # 配了加速地址时，直连只等这么久
+
+REGISTERED_COMMANDS = (
+    "禁言", "审批", "状态", "撤回", "审核", "群规", "撤销",
+    "管理登记", "群管", "举报", "成员", "帮助",
+)
+
+_RULE_SEP_RE = re.compile(r"\s*[｜|︱]\s*")
