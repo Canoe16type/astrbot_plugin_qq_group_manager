@@ -45,6 +45,8 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import json_response, request, stream_response
 
 from .plugin_logger import LOG_CONTEXT, PluginLogger
+from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
+from .qgm.kernel.text import short_id
 from .qq_api import QQApi, QQApiError
 from . import button_kit
 from . import member_event
@@ -149,22 +151,6 @@ def _read_plugin_version() -> str:
 
 
 PLUGIN_VERSION = _read_plugin_version()
-
-
-def _write_json_atomic(path: str, payload, *, indent: int = 1) -> None:
-    """原子写 JSON：先写临时文件，再 os.replace 顶上去。
-
-    这些文件（群列表 / 禁言历史 / 撤回历史 / 自我介绍状态）都是「整份重写」，
-    直接 open(w) 会在写一半时崩溃、掉电、磁盘写满的情况下留下被截断的 JSON，
-    下次启动 json.load 失败 → 整份数据静默清零。临时文件 + os.replace 是
-    同目录下的原子替换，最坏情况是保留旧文件，不会丢结构。
-    """
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=indent)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
 
 
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
@@ -5195,8 +5181,7 @@ class QQGroupManager(Star):
     @staticmethod
     def _lb(value, n: int = 6) -> str:
         """短标识：日志里统一取后 6 位，完整值只在 DEBUG 出现。"""
-        text = str(value or "")
-        return text[-n:] if text else "-"
+        return short_id(value, n)
 
     def _ctx(self, platform: str = "", group: str = "", member: str = "", record=None) -> str:
         """日志上下文前缀：[实例 xxx|群 yyy|成员 zzz|记录 #id]。
