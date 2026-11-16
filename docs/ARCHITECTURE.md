@@ -58,6 +58,7 @@ qgm/
 
 - 检测维度实现 `Detector`（返回 `Evidence`），pipeline 只遍历注册表；
 - 处置动作实现 `Action`（warn / recall / mute / todo）；
+- 用户侧指令矩阵固定为 `/群管 <子指令>`（解析见 `qgm/commands/parse.py`），子指令映射见 `qgm/commands/router.py`；
 - 指令与 Web API 各有一张显式注册表（路径/权限/帮助/处理函数），帮助文案由表生成；
 - 新切片模板：`features/<name>/{__init__,service,command,web}.py` + 自有测试。
 

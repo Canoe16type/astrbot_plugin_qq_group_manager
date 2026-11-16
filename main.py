@@ -58,6 +58,7 @@ from .qgm.features.status import web as status_web
 from .qgm.features.members import web as members_web
 from .qgm.features.config import web as config_web
 from .qgm.commands import router as command_router
+from .qgm.commands import parse as command_parse
 from .qgm.features.approval import web as approval_web
 from .qgm.features.mute import web as mute_web
 from .qgm.features.status.web import LOG_SSE_HEARTBEAT_SEC
@@ -2955,22 +2956,11 @@ class QQGroupManager(Star):
         # 只会清理机器人自身的 @）。这里统一剥离所有 <@...> / <@!...> 片段（替换
         # 为空格）再解析参数，免得 @ 文本混进理由之类的字段；目标成员不依赖这段
         # 文本，而是从 raw_message.mentions 读取。
-        text = re.sub(r"<@!?[0-9A-Za-z_-]+>", " ", text).strip()
-        parts = text.split()
-        if forced_cmd:
-            # 注册指令进入：指令名以注册时登记的为准，
-            # 既兼容面板重命名/别名，也保证 parts[0] 与旧行为一致。
-            cmd = forced_cmd
-            # skip=1 用于指令组：丢掉组名后面紧跟的子指令名（"/群管 禁言" 的 "禁言"）
-            rest = parts[1 + skip:] if parts else []
-            parts = [forced_cmd] + rest
-        else:
-            if not parts:
-                return
-            cmd = parts[0]
-            if not cmd.startswith("/"):
-                # 兼容不带 / 的写法（"禁言" 与 "/禁言" 等价）
-                cmd = "/" + cmd
+        cmd, parts = command_parse.parse_command(text, forced_cmd=forced_cmd, skip=skip)
+        if not cmd:
+            return
+        # 说明：用户侧矩阵是 `/群管 <子指令>`；forced_cmd 只做内部归一，
+        # 例如 `/群管 禁言 名单` → cmd=/禁言, parts=[/禁言, 名单]。
 
         if cmd == "/群管":
             await self._reply(event, self._render("msg_help", bot_name=event.get_platform_id()))
