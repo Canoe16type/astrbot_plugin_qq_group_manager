@@ -165,6 +165,20 @@ class ArchitectureGuardTest(unittest.TestCase):
                     seg = _ast.get_source_segment(src, node) or ""
                     self.assertNotIn("self", seg, f"{node.name} 是 staticmethod 却用了 self")
 
+    def test_no_file_relative_data_paths(self):
+        """qgm 内禁止用 __file__ 推导数据/资源目录：搬迁后它会指向错误层级。
+
+        统一用 kernel.constants.plugin_root()。
+        """
+        offenders = []
+        for path in (ROOT / "qgm").rglob("*.py"):
+            if path.name == "constants.py":
+                continue          # plugin_root() 的实现本身
+            src = path.read_text(encoding="utf-8")
+            if "dirname(os.path.abspath(__file__))" in src or "__file__).parent" in src:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [], f"用 __file__ 推导目录，改用 plugin_root()：{offenders}")
+
 
 if __name__ == "__main__":
     unittest.main()
