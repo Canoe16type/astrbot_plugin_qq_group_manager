@@ -43,7 +43,8 @@ class PanelHtmlStructureTest(unittest.TestCase):
 
 
 class PanelJsBehaviorTest(unittest.TestCase):
-    JS = (Path(__file__).resolve().parent.parent / "pages" / "dashboard" / "app.js").read_text(encoding="utf-8")
+    _js_dir = Path(__file__).resolve().parent.parent / "pages" / "dashboard" / "js"
+    JS = "\n".join(p.read_text(encoding="utf-8") for p in sorted(_js_dir.glob("app*.js")))
 
     def test_verdict_row_is_fully_clickable(self):
         self.assertIn("tr.onclick = () => showVerdictDetail(v);", self.JS)

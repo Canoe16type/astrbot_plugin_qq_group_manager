@@ -65,3 +65,15 @@
 - 定期清理 `data/plugin_data/` 下的历史记录（`mod_verdicts.jsonl`、`recent_msgs.json`、撤回历史），
   判定记录可用面板「删除 N 天以前的记录」手动清理，插件不会自动按时间删；
 - 导出 CSV / 贴日志到公开渠道前，先删掉成员昵称、openid、群号与消息原文。
+
+
+## 杀软 / VirusTotal 误报
+
+面板前端包含 WebUI 令牌与模型 API Key 输入框，部分启发式引擎（如 Dr.Web 的 `JS.Phishing`）会对
+「带凭据表单的 JavaScript」误报。本项目的前端**不含** `eval` / `new Function` / `atob` 解码执行 /
+动态脚本注入，且已按功能拆成多个小文件（`pages/dashboard/js/app*.js`），并有以下测试守护：
+
+- `tests/test_panel_bundle.py`：单文件行数上限、脚本顺序、禁止动态执行调用
+- `tests/test_panel_html_structure.py`：DOM 结构、页签同级、事件绑定
+
+如遇报毒，请先核对文件是否来自官方 Release / 对应 tag 的 commit，再向引擎提交误报；不要直接运行来源不明的二次打包。

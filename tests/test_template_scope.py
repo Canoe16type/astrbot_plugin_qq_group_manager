@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT.parent.parent))
 
 from plugins.astrbot_plugin_qq_group_manager import moderation  # noqa: E402
 
-JS = (ROOT / "pages/dashboard/app.js").read_text(encoding="utf-8")
+JS = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "pages" / "dashboard" / "js").glob("app*.js")))
 SCHEMA = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
 M = re.search(r"const TPL_FIELDS\s*=\s*\[(.*?)\];", JS, re.S)
 MOD_KEYS = re.findall(r'\["([a-zA-Z0-9_]+)"', M.group(1))
