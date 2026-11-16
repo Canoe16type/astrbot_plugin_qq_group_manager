@@ -170,21 +170,6 @@ class _PublicOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _read_plugin_version() -> str:
-    """从 metadata.yaml 读插件版本（面板脚注用，避免手写版本号忘了同步）。"""
-    try:
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "metadata.yaml")
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                if line.startswith("version:"):
-                    return line.split(":", 1)[1].strip().strip("'\"")
-    except Exception:
-        pass
-    return ""
-
-
-
-
 _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".heic", ".avif")
 
 
