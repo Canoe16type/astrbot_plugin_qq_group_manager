@@ -262,12 +262,14 @@ class ExportTest(unittest.TestCase):
             class _R:
                 query = _Q({"group": "g1", "limit": 10})
 
-            old = main_mod.request
-            main_mod.request = _R()
+            web_mod = importlib.import_module(
+                "plugins.astrbot_plugin_qq_group_manager.qgm.features.audit.web")
+            old = web_mod.request
+            web_mod.request = _R()
             try:
                 raw = asyncio.run(p.web_mod_verdicts_export())
             finally:
-                main_mod.request = old
+                web_mod.request = old
             out = json.loads(getattr(raw, "body", raw))
             self.assertEqual(out["total"], 1)
             self.assertEqual(out["items"][0]["group"], "g1")
