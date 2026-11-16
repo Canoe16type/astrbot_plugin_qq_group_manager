@@ -41,7 +41,7 @@ class ArchitectureGuardTest(unittest.TestCase):
     def test_main_line_budget(self):
         """棘轮：main.py 只许变短。重构时把这个数字往下调，不许往上抬。"""
         lines = len((ROOT / "main.py").read_text(encoding="utf-8").splitlines())
-        self.assertLessEqual(lines, 8600, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
+        self.assertLessEqual(lines, 8400, f"main.py 已 {lines} 行，超过预算；请拆分而不是继续堆")
 
     def test_legacy_shims_are_thin(self):
         """已迁移模块的旧路径只允许做别名转发，防止实现又搬回根目录。"""
@@ -85,6 +85,20 @@ class ArchitectureGuardTest(unittest.TestCase):
         for node in _ast.walk(tree):
             if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in (
                     "_cmd_revoke", "_revoke_verdict"):
+                self.assertLessEqual(node.end_lineno - node.lineno + 1, 12, node.name)
+
+    def test_moved_web_handlers_are_thin(self):
+        """已迁出的 Web API 在 main 里只允许是薄壳。"""
+        import ast as _ast
+        moved = {
+            "web_lexicons", "web_lexicon_detail", "web_lexicon_export",
+            "web_lexicon_rename", "web_lexicon_delete", "web_lexicon_apply",
+            "web_lexicon_toggle", "web_lexicon_fetch_upstream", "web_lexicon_upload",
+            "web_lexicon_allow", "web_lexicon_test",
+        }
+        tree = _ast.parse((ROOT / "main.py").read_text(encoding="utf-8"))
+        for node in _ast.walk(tree):
+            if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) and node.name in moved:
                 self.assertLessEqual(node.end_lineno - node.lineno + 1, 12, node.name)
 
 
