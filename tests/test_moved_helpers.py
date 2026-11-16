@@ -30,6 +30,15 @@ class MovedHelperSmokeTest(unittest.TestCase):
         self.assertEqual(main_mod.parse_duration("5分钟"), 300)
         self.assertEqual(main_mod.parse_duration("一小时"), 3600)
 
+    def test_plugin_init_accepts_context_and_config(self):
+        """AstrBot 用 context/config 关键字构造插件；缺参数会导致重载失败。"""
+        import inspect
+        from plugins.astrbot_plugin_qq_group_manager.main import QQGroupManager
+
+        params = inspect.signature(QQGroupManager.__init__).parameters
+        self.assertIn("context", params)
+        self.assertIn("config", params)
+
 
 if __name__ == "__main__":
     unittest.main()
