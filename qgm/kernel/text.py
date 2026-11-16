@@ -87,3 +87,9 @@ def _norm_media_url(u: str) -> str:
     if u.startswith("//"):
         return "https:" + u
     return "https://" + u
+
+
+def _looks_like_image_url(u: str) -> bool:
+    """按扩展名判断是不是图片地址（去 query，官方 URL 后面常带签名参数）。"""
+    path = str(u or "").split("?", 1)[0].lower()
+    return path.endswith(_IMAGE_EXTS)
