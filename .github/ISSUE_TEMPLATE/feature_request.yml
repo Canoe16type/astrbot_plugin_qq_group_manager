@@ -1,80 +1,33 @@
 name: 功能建议
-description: 想要新功能或改进现有行为
+description: 想要新能力或体验改进
 title: "[Feature] "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        提之前先看一眼 README，有些"新功能"其实是配置项。
-        讲清**场景**比直接给方案有用：先说"我在什么情况下做不到什么"。
+        当前版本 **1.7.0**（架构重构版，无新功能）。提建议前请先搜索是否已有同类 issue。
+        1.7.x 阶段以稳定性与缺陷修复优先，新功能会排期评估。
 
-        📌 `1.6.0` 已确定为正式版并进入**功能冻结**：当前只修缺陷与补测试，建议会被记录，但不保证在本版落地。
-
-        **1.5.0 起指令已按「大类 + 子命令」合并**（禁言 / 审批 / 状态 / 审核 / 群规）。
-        如果你要提的是"再加一条指令"，先看看能不能挂到现有大类下作为子命令；
-        旧指令（`/群管 解禁`、`/群管 通过`、`/群管 汇报` 等）已在 **1.6.0 移除**（1.5.x 及更早仍可用），新建议请按「大类 + 子命令」命名。
   - type: textarea
     id: problem
     attributes:
-      label: 你遇到的实际问题
-      description: 越具体越好。「我在 X 情况下做不到 Y」比「加个 Z 按钮」更有用。
-      placeholder: |
-        例：群里有人刷屏，我只能一条条手动禁言，希望能一次性处理连续多条消息。
+      label: 你遇到的问题 / 场景
+      description: 现在怎么用、哪里不方便、影响多大
     validations:
       required: true
+
   - type: textarea
-    id: proposal
+    id: solution
     attributes:
-      label: 你设想的做法（可选）
-      description: 有想法就写，没有也行，别为了填而填
+      label: 期望的方案
+      description: 如果有具体指令 / 面板交互 / 配置项，写清楚更好
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案（可选）
     validations:
       required: false
-  - type: dropdown
-    id: kind
-    attributes:
-      label: 这个建议属于
-      options:
-        - 新增能力（现在完全没有）
-        - 改进现有指令 / 子命令（含归并到某个大类）
-        - 改进面板交互
-        - 改进判定质量 / 规则写法
-        - 可观测性与排查（日志、自检、记录导出）
-        - 其他
-    validations:
-      required: true
-  - type: dropdown
-    id: area
-    attributes:
-      label: 相关模块
-      multiple: true
-      options:
-        - 禁言（禁言 / 解除 / 名单 / 历史）
-        - 消息撤回
-        - 入群审批 / 自动审批策略 / 欢迎
-        - 群规审核（/群管 举报、巡检、模型判定）
-        - 判定记录 / 详情 / 导出 CSV
-        - 模型调用（并发闸门 / 超时 / 每日预算）
-        - 状态与自检（/群管 状态）
-        - 词典 / 词库
-        - 变体检测 / 待办队列
-        - 管理面板（WebUI）
-        - 配置项
-        - 其他
-    validations:
-      required: true
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: 边界确认
-      options:
-        - label: 我理解本插件只支持 qq_official 平台，不是拿来适配其他平台的
-          required: true
-        - label: 我理解平台限制（撤回 2 分钟时限、退群通知不可用等）不算 bug
-          required: true
-        - label: 我理解新功能默认按「大类 + 子命令」组织，不再新增平级独立指令
-          required: true
-        - label: 我理解旧指令已在 1.6.0 移除，不会围绕旧写法做增强
-          required: true
-    validations:
-      required: true

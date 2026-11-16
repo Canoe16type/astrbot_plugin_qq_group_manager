@@ -1,35 +1,32 @@
 name: 功能异常
-description: 插件没按预期工作（不是安全问题）
+description: 插件没按预期工作（非安全问题）
 title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题) 和 [CHANGELOG](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/blob/main/CHANGELOG.md)。很多问题（撤回 2 分钟时限、退群通知不生效、机器人不是群管）在那里就能找到答案。
+        先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题) 与 [CHANGELOG](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/blob/main/CHANGELOG.md)。
 
-        **1.5.0 起指令已合并**：请优先用新写法——`/群管 禁言 解除`、`/群管 禁言 名单`、`/群管 禁言 历史`、`/群管 审批 通过`、`/群管 审批 拒绝`、`/群管 状态`、`/群管 状态 群`、`/群管 状态 自检`、`/群管 状态 群名`。
-        旧写法（`/群管 解禁`、`/群管 查禁言`、`/群管 禁言历史`、`/群管 通过`、`/群管 拒绝`、`/群管 汇报`、`/群管 体检`、`/群管 自检`、`/群管 群名`）**在 1.6.0 已移除**；
-        如果你还在 **1.5.x 及更早**版本，旧写法仍然可用。请在下方的「插件版本 / 指令写法」里注明，
-        方便区分「旧版本兼容」与「升级后失效」。
+        **当前版本 1.7.0**：指令统一为 `/群管 <子指令>`（如 `/群管 禁言 名单`、`/群管 审批 通过 1`、`/群管 状态 自检`）。
+        旧写法（`/群管 解禁`、`/群管 汇报` 等）自 1.6.0 起已移除。
 
-        ⚠️ **提交前请删掉日志里的 AppID / AppSecret / openid / 群号 / 成员昵称。**
+        ⚠️ 提交前删除日志中的 **AppID / AppSecret / openid / 群号 / 成员昵称**。
 
-        📌 `1.6.0` 为当前版本，处于**功能冻结**阶段：只修缺陷与补测试，新功能请用「功能建议」模板。
   - type: dropdown
     id: plugin-version
     attributes:
       label: 插件版本
-      description: AstrBot「插件管理」页或仓库 Release 里可以看到
+      description: 插件管理页或 Release 页可见
       options:
-        - 1.6.0（最新）
-        - 1.5.0
-        - 1.4.x
-        - 1.3.x
-        - 1.2.x 或更早
+        - 1.7.0（最新）
+        - 1.6.0
+        - 1.5.x
+        - 更早
         - 不确定 / 自己改过代码
     validations:
       required: true
+
   - type: input
     id: astrbot-version
     attributes:
@@ -37,91 +34,51 @@ body:
       placeholder: "4.29.4"
     validations:
       required: true
-  - type: input
-    id: python-version
-    attributes:
-      label: Python 版本
-      description: 终端执行 python -V 得到；Docker 部署填镜像自带的即可
-      placeholder: "3.12.3"
-    validations:
-      required: true
+
   - type: dropdown
     id: deploy
     attributes:
       label: 部署方式
-      options:
-        - Docker
-        - 源码 / 虚拟环境
-        - 其他（在补充说明里写明）
+      options: [Docker, 源码 / 虚拟环境, 其他]
     validations:
       required: true
-  - type: dropdown
-    id: command-style
-    attributes:
-      label: 你用的指令写法
-      description: 1.6.0 起旧写法已移除；1.5.x 及更早仍可混用。注明版本与写法能少一轮确认
-      options:
-        - 新写法（/群管 禁言 解除 …、/群管 审批 通过 …、/群管 状态 …）
-        - 1.5.x 的旧写法（/群管 解禁 …、/群管 通过 …、/群管 汇报 …；1.6.0 已移除）
-        - 两种写法都试过，结果一样
-        - 与指令无关（面板 / 自动逻辑 / 事件通知）
-    validations:
-      required: true
+
   - type: dropdown
     id: smart-penalty
     attributes:
       label: 是否开启「智能分级处罚」
-      description: 群规审核 → 设置 → 处罚策略里的 smart_penalty；判定/处罚类问题必填
-      options:
-        - 未开启（走旧逻辑）
-        - 已开启
-        - 不确定
+      description: 群规审核 → 设置 → 处罚策略；判定/处罚类问题必填
+      options: [未开启, 已开启, 不确定]
     validations:
       required: true
-  - type: input
-    id: prior-offenses
-    attributes:
-      label: 相关成员当时的前科次数（可选）
-      description: 试跑里可用「假设前科」复现；真实前科可在「撤销 列表 @某人」里看到
-      placeholder: "例如 4（或「试跑填了 5」）"
-    validations:
-      required: false
+
   - type: dropdown
     id: area
     attributes:
       label: 出问题的模块
       multiple: true
       options:
-        - 禁言（禁言 / 解除 / 名单 / 历史）
+        - 禁言 / 解除 / 名单 / 历史
         - 消息撤回
-        - 入群审批（列表 / 通过 / 拒绝 / 自动审批策略 / 欢迎）
-        - 群规审核（/群管 举报、巡检、模型判定）
-        - 智能分级（警告 / 撤回 / 禁言 / 待办）
-        - 处罚撤销与审计（/群管 撤销、解禁）
-        - 判定记录 / 存储（ID、序号、清理）
-        - 判定记录 / 详情 / 导出 CSV
-        - 模型调用（并发闸门 / 超时 / 每日预算）
-        - 状态与自检（/群管 状态）
-        - 词典 / 词库
-        - 变体检测 / 待办队列
-        - 管理面板（WebUI）
+        - 入群审批 / 欢迎
+        - 群规审核（举报 / 巡检 / 模型）
+        - 处罚撤销与判定记录
+        - 状态与自检
+        - 词典 / 词库 / 变体
+        - 管理面板
         - 配置项
         - 其他
     validations:
       required: true
+
   - type: textarea
     id: what-happened
     attributes:
       label: 实际发生了什么
-      description: 越具体越好：谁在哪个群发了什么，机器人回了什么 / 没回什么
+      description: 哪个群、谁、发了什么、机器人回了什么 / 没回什么
     validations:
       required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: 你期望的结果
-    validations:
-      required: true
+
   - type: textarea
     id: steps
     attributes:
@@ -129,54 +86,22 @@ body:
       placeholder: |
         1. 群里发 /群管 审批 通过 1
         2. 机器人回复「…」
-        3. 实际没有通过，申请还在列表里
+        3. 实际没有通过，申请仍在列表
     validations:
       required: true
+
   - type: textarea
-    id: selfcheck
+    id: expected
     attributes:
-      label: /群管 状态 自检 的输出
-      description: 在出问题的群里发 `/群管 状态 自检`，把返回整段贴进来（脱敏）。它包含开关、审核模型、今日用量、并发与最近一次模型调用；判定类问题再附「记录 ID」与详情里的「判定依据（policy_trace）」。
+      label: 你期望的结果
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 日志与自检
+      description: 贴 `/群管 状态 自检` 输出；判定类再附「记录 ID」与详情里的判定依据（policy_trace）。日志请脱敏。
       render: shell
     validations:
-      required: false
-  - type: textarea
-    id: logs
-    attributes:
-      label: 相关日志
-      description: |
-        AstrBot 控制台日志，或 `data/plugin_data/qq_group_manager/` 下的日志片段，记得脱敏。
-        审核类问题建议把日志级别调到 DEBUG 后再复现一次——1.5.0 起会打印 `[模型]` 行（provider、耗时、token、原始返回），
-        以及「没调模型」的原因（模型层关闭 / 找不到 provider / 达每日上限 / 排队已满 / 关键词命中）。
-      render: shell
-    validations:
-      required: false
-  - type: markdown
-    attributes:
-      value: |
-        「机器人判错了」类问题，面板「记录」页 → 原文列可以看完整判定详情，点「⭳ 导出 CSV」还能把记录带走，贴上关键几行比截图有用。
-  - type: input
-    id: browser
-    attributes:
-      label: 浏览器与版本（面板问题必填）
-      description: 只有「管理面板（WebUI）」相关问题需要填，其他问题可留空
-      placeholder: "Edge 141"
-    validations:
-      required: false
-  - type: checkboxes
-    id: checklist
-    attributes:
-      label: 自查
-      options:
-        - label: 我确认已删掉日志中的 AppID / AppSecret / openid / 群号 / 昵称
-          required: true
-        - label: 我确认机器人是群管理员，且群消息范围已设为「获取群内全部消息」
-          required: true
-        - label: 我已在最新版本（1.5.0）上复现，或已说明为何必须留在旧版本
-          required: true
-        - label: 我已把旧写法换成新写法（如 `/群管 禁言 解除`、`/群管 状态 自检`）重新试过一次
-          required: true
-        - label: 我使用的是 1.6.0+，旧写法（解禁 / 通过 / 汇报 等）已不再支持
-          required: true
-        - label: 判定/处罚类问题，我已附上记录 ID 或 `撤销 列表` 的截图（脱敏）
-          required: false
+      required: true
