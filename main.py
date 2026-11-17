@@ -1152,6 +1152,42 @@ class QQGroupManager(Star):
         except Exception:
             return ""
 
+    def _official_avatar_url(self, event, openid: str) -> str:
+        """从 QQ 官方群消息事件里取头像 URL（author.avatar / mentions[].avatar）。
+
+        官方 2026-11 起在消息事件下发头像链接；取不到时返回空串，
+        调用方回退到旧的 qlogo 拼接（兼容尚未透传的 AstrBot 版本）。
+        """
+        if event is None or not openid:
+            return ""
+        try:
+            raw = getattr(event.message_obj, "raw_message", None)
+        except Exception:
+            return ""
+        if raw is None:
+            return ""
+
+        def _avatar_of(u):
+            if isinstance(u, dict):
+                oid = str(u.get("member_openid") or u.get("id") or "")
+                av = u.get("avatar") or ""
+            else:
+                oid = str(getattr(u, "member_openid", "") or getattr(u, "id", "") or "")
+                av = getattr(u, "avatar", "") or ""
+            return oid, str(av)
+
+        author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", None)
+        if author is not None:
+            oid, av = _avatar_of(author)
+            if av and (not oid or oid == openid):
+                return av
+        mentions = raw.get("mentions") if isinstance(raw, dict) else getattr(raw, "mentions", None)
+        for u in mentions or []:
+            oid, av = _avatar_of(u)
+            if av and oid == openid:
+                return av
+        return ""
+
     def _expand_msg_modules(
         self, text: str, event: AstrMessageEvent | None, fmt: str,
         target: str = "", platform_id: str = "",
@@ -1205,17 +1241,22 @@ class QQGroupManager(Star):
 
             def _sub(m):
                 # 纯文本 / 图片消息里塞不进 markdown 图片，静默去掉避免露出语法
-                if not (appid and openid) or fmt != "markdown":
+                if not openid or fmt != "markdown":
                     return ""
                 try:
                     disp = int(m.group(1)) if m.group(1) else 100
                 except ValueError:
                     disp = 100
                 disp = max(24, min(disp, 320))
-                # 小图档（≤40px 展示）只取 40 的源，别为一个表情大小的头像拉 640 大图
-                src = next((t for t in self.AVATAR_SRC_TIERS if t >= disp),
-                           self.AVATAR_SRC_TIERS[-1])
-                url = self.AVATAR_URL_FMT.format(appid=appid, openid=openid, size=src)
+                # 官方事件优先提供头像 URL；旧适配器没有该字段时回退 qlogo 拼接
+                url = self._official_avatar_url(event, openid)
+                if not url:
+                    if not appid:
+                        return ""
+                    # 小图档（≤40px 展示）只取 40 的源，别为一个表情大小的头像拉 640 大图
+                    src = next((t for t in self.AVATAR_SRC_TIERS if t >= disp),
+                               self.AVATAR_SRC_TIERS[-1])
+                    url = self.AVATAR_URL_FMT.format(appid=appid, openid=openid, size=src)
                 return f"![avatar #{disp}px #{disp}px]({url})"
 
             text = self._AVATAR_PH_RE.sub(_sub, text)
