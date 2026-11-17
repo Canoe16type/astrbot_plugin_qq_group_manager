@@ -92,7 +92,12 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
         })
         ctx = host._ctx(event.get_platform_id(), group, operator)
         host.logger.warning(f"{ctx}[踢人] 失败 code={code} 目标={len(targets)}人 记录已留档 原因={str(e)[:120]}")
-        if str(code) == "11253":
-            await host._reply(event, host._render("msg_kick_no_permission"))
+        perm_key = {
+            "40103012": "msg_kick_perm_owner",
+            "40103011": "msg_kick_perm_bot",
+            "11253": "msg_kick_no_permission",
+        }.get(str(code))
+        if perm_key:
+            await host._reply(event, host._render(perm_key))
         else:
             await host._reply(event, host._render("msg_kick_fail", error=str(e)[:120]))

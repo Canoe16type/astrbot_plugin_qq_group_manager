@@ -62,6 +62,8 @@ class _Host:
             "msg_kick_usage": "用法：/群管 踢人 @成员… [理由]",
             "msg_kick_success": "已移除 {names}（记录 #{id}）",
             "msg_kick_no_permission": "踢人接口未开通（11253）",
+            "msg_kick_perm_owner": "群主关闭了操作权限（40103012）",
+            "msg_kick_perm_bot": "机器人侧关闭了操作权限（40103011）",
             "msg_kick_history_empty": "还没有踢人记录",
             "msg_kick_history_title": "踢人记录（最近 {count} 条）：{lines}",
             "msg_kick_too_many": "最多 {max} 人",
@@ -109,6 +111,13 @@ class KickTest(unittest.TestCase):
         asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "记录"]))
         self.assertTrue(any("小明" in x for x in host.replies))
         host.tmp.cleanup()
+
+    def test_permission_error_codes_have_specific_hints(self):
+        for code, needle in ((40103012, "群主关闭了操作权限"), (40103011, "机器人侧关闭了操作权限")):
+            host = _Host(_Api(QQApiError("denied", code=code))); ev = _Obj()
+            asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "@x"]))
+            self.assertTrue(any(needle in x for x in host.replies), (code, host.replies))
+            host.tmp.cleanup()
 
 
 if __name__ == "__main__":
