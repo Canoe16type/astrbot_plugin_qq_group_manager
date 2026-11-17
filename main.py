@@ -65,6 +65,7 @@ from .qgm.features.mute import commands as mute_commands
 from .qgm.features.status import commands as status_commands
 from .qgm.features.members import commands as members_commands
 from .qgm.features.kick import commands as kick_commands
+from .qgm.features.kick import web as kick_web
 from .qgm.features.members import cache as members_cache
 from .qgm.features.members import names as members_names
 from .qgm.features.audit import commands as audit_commands
@@ -1848,6 +1849,10 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # /成员：群成员档案
     # ------------------------------------------------------------------
+    async def web_kick_history(self):
+        """薄壳：踢人记录见 qgm.features.kick.web。"""
+        return await kick_web.web_kick_history(self)
+
     async def _cmd_kick(self, event: AstrMessageEvent, parts: list[str] | None = None):
         """薄壳：踢人见 qgm.features.kick.commands。"""
         return await kick_commands.cmd_kick(self, event, parts)

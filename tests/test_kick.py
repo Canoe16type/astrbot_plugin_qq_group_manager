@@ -56,6 +56,9 @@ class _Host:
 
     def _plugin_data_dir(self): return self.tmp.name
     def _get_api(self, pid): return self.api
+    def _ctx(self, *a, **k): return ""
+    logger = type("L", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None,
+                             "error": lambda *a, **k: None})()
 
     async def _reply(self, event, text): self.replies.append(text)
 

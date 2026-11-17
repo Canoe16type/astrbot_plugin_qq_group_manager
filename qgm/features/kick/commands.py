@@ -79,6 +79,8 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
             "ok": ok, "result": resp if isinstance(resp, dict) else {},
         })
         names = "、".join(t["name"] for t in targets)
+        ctx = host._ctx(event.get_platform_id(), group, operator)
+        host.logger.info(f"{ctx}[踢人] 成功 目标={names} 人数={len(targets)} 记录#{rec['id']} 理由={reason or '-'}")
         await host._reply(event, f"已移除 {names}（记录 #{rec['id']}）。")
     except Exception as e:  # noqa: BLE001
         code = getattr(e, "code", None)
@@ -87,6 +89,8 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
             "targets": targets, "reason": reason,
             "ok": False, "err_code": code, "err_msg": str(e)[:200],
         })
+        ctx = host._ctx(event.get_platform_id(), group, operator)
+        host.logger.warning(f"{ctx}[踢人] 失败 code={code} 目标={len(targets)}人 记录已留档 原因={str(e)[:120]}")
         if str(code) == "11253":
             await host._reply(event, "踢人接口暂未开通：该能力目前是 QQ 官方内邀白名单（错误码 11253），请联系平台运营申请权限。")
         else:

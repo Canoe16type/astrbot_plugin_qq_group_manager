@@ -350,6 +350,7 @@ document.querySelectorAll(".rec-tab").forEach((btn) => {
     btn.classList.add("active");
     const pane = $("rec-pane-" + btn.dataset.recTab);
     if (pane) pane.classList.add("active");
+    if (btn.dataset.recTab === "kicks") { try { loadKicks(); } catch (e) {} }
   });
 });
 // 判定记录里的「切换群 →」：直接跳到「群规审核」选群

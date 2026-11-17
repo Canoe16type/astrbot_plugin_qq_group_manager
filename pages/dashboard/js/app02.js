@@ -331,3 +331,37 @@ $("btnLogClear").addEventListener("click", async () => {
 });
 
 /* ================= 群规审核（原独立 page 的内容，已并入本页 tab） ================= */
+async function loadKicks() {
+  const box = $("kickList");
+  if (!box) return;
+  box.innerHTML = emptyBox("load", "加载中…");
+  try {
+    const r = await bridge.apiGet("mod/kick/history", { limit: 100 });
+    const list = r.items || [];
+    box.innerHTML = list.length
+      ? list.map((it) => {
+          const names = (it.targets || []).map((t) => esc(t.name || (t.openid || "").slice(-6))).join("、");
+          const op = it.operator_name || (it.operator || "").slice(0, 8);
+          const state = it.ok
+            ? `<span class="tag ok">成功</span>`
+            : `<span class="tag danger">失败${it.err_code ? " (" + esc(String(it.err_code)) + ")" : ""}</span>`;
+          return `
+        <div class="row-item">
+          <div class="left">
+            <span class="seq">#${it.id}</span>
+            ${groupTag(it.group)}
+            <span class="tag">${esc(it.time_text)}</span>
+            ${state}
+            <span class="tag">${names || "—"}</span>
+            ${it.reason ? `<span class="tag">理由：${esc(it.reason)}</span>` : ""}
+            ${it.err_msg ? `<span class="hint">${esc(it.err_msg)}</span>` : ""}
+          </div>
+          <div class="right"><span class="hint">操作人 ${esc(op)}</span></div>
+        </div>`;
+        }).join("")
+      : emptyBox("book", "本群还没有踢人记录");
+  } catch (e) {
+    box.innerHTML = emptyBox("warn", "加载失败：" + esc(e.message));
+  }
+}
+document.getElementById("btnRefreshKicks")?.addEventListener("click", loadKicks);

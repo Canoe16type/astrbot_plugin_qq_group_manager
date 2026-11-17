@@ -12,6 +12,7 @@ def _register_web_apis(host):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/history", host.web_mute_history, ["GET"], "QQ群管-禁言历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/history/clear", host.web_mute_history_clear, ["POST"], "QQ群管-清空禁言历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/history/delete", host.web_mute_history_delete, ["POST"], "QQ群管-删除单条禁言历史")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/kick/history", host.web_kick_history, ["GET"], "QQ群管-踢人记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls", host.web_recalls, ["GET"], "QQ群管-撤回历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/clear", host.web_recalls_clear, ["POST"], "QQ群管-清空撤回历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/delete", host.web_recalls_delete, ["POST"], "QQ群管-删除单条撤回历史")
