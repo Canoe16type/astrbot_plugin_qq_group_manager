@@ -47,6 +47,7 @@
 - `ci_static`：未定义名、危险调用、硬编码密钥、静默 except 统计；CI 接入 pyflakes
 - 安全核对：SSRF 防护（私网/元数据/重定向复检）、词库路径无穿越、无 eval/exec/system/pickle、无硬编码密钥
 - 性能基线：插件导入 38ms、决策 p95 0.011ms（低配环境无明显压力）
+- 日志出口统一为 `from astrbot.api import logger`：`PluginLogger` 不再自建日志系统，仅作为挂在该 logger 上的 Handler 提供面板缓冲与文件检索；词库权限提示等也改用 AstrBot logger
 - `/群管 状态 自检` 输出运行环境（Python 版本 / 插件版本），便于确认插件实际运行在 AstrBot 的解释器下
 - CI 运行时测试统一使用 Python 3.12（AstrBot 官方解释器），本机 3.11 仅用于编辑器/工具
 
@@ -927,7 +928,7 @@
     `from astrbot.api import logger`（AstrBot 会路由到 `astrbot.plugin.<插件id>`，照样进 `data/logs`）。
   - `member_event.py` 移除 `logging.getLogger(...)` 与挂在 `botpy` logger 上的自定义 `logging.Handler`，
     模块级兜底 logger 同样改用 `astrbot.api.logger`。
-  - 写日志的出口现在只有一条：`astrbot.api.logger` / 插件的 `PluginLogger`（后者仅作为 WebUI 内存环形缓冲，
+  - 写日志的出口现在只有一条：`astrbot.api.logger`；插件 `PluginLogger` 仅作为挂在其上的 Handler 提供 WebUI 缓冲，
     不再依赖 stdlib logging）。面板「日志」页面与原来一致。
 - **已知变化**：botpy 网关的 DEBUG 日志（READY / 未知事件名 / 原始消息）不再被插件钩子引流到面板日志。
   需要排查网关事件时，请在 AstrBot 平台配置里打开 botpy 的调试输出（`bot_log`），或看 AstrBot 框架日志。

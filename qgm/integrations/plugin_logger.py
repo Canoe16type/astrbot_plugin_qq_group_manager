@@ -20,6 +20,31 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+from astrbot.api import logger as astrbot_logger
+
+_ACTIVE_HANDLER = None
+
+
+class _QGMHandler(logging.Handler):
+    """挂在 astrbot.api.logger 上，把本插件日志同步进环形缓冲/文件。
+
+    不自行创建 Logger，也不改动全局级别；只做展示层缓冲。
+    """
+
+    def __init__(self, owner):
+        super().__init__()
+        self.owner = owner
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if not getattr(record, "qgm", False):
+            return
+        try:
+            self.owner._write(record.levelno, record.getMessage())
+        except Exception:
+            # noqa: silent-cleanup —— 日志缓冲自身异常不能影响主流程
+            pass
+
+
 LOG_CONTEXT = contextvars.ContextVar("qgm_log_context", default="")
 
 LEVELS = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
@@ -57,6 +82,13 @@ class PluginLogger:
         self.level = LEVELS.get(str(level).upper(), 10)
         self.buffer: deque = deque(maxlen=self.max_entries)
         self._index = 0
+        global _ACTIVE_HANDLER
+        if _ACTIVE_HANDLER is not None:
+            astrbot_logger.removeHandler(_ACTIVE_HANDLER)
+            _ACTIVE_HANDLER.close()
+        self._handler = _QGMHandler(self)
+        astrbot_logger.addHandler(self._handler)
+        _ACTIVE_HANDLER = self._handler
         # 待落盘的行缓冲：合并写、减少小文件 IO 次数
         self._pending: list[str] = []
         self._pending_bytes = 0
@@ -264,6 +296,16 @@ class PluginLogger:
             pass
 
     def close(self) -> None:
+        global _ACTIVE_HANDLER
+        try:
+            if getattr(self, "_handler", None) is not None:
+                astrbot_logger.removeHandler(self._handler)
+                self._handler.close()
+                if _ACTIVE_HANDLER is self._handler:
+                    _ACTIVE_HANDLER = None
+        except Exception:
+            # noqa: silent-cleanup —— 关闭阶段失败不影响退出
+            pass
         """插件禁用/重载时调用：停掉后台线程并补最后一次落盘。"""
         self._closed = True
         self.flush()
@@ -335,10 +377,13 @@ class PluginLogger:
             return ctx + text
         return text
 
+    def _emit(self, lv: int, msg: str, exc_info=False) -> None:
+        """统一出口：交给 astrbot.api.logger；缓冲/文件由挂载的 Handler 完成。"""
+        astrbot_logger.log(lv, msg, exc_info=exc_info, extra={"qgm": True})
+
     def debug(self, msg: str) -> None:
         if self.level <= 10:
-            with self._lock:
-                self._write(10, self._with_context(msg))
+            self._emit(10, self._with_context(msg))
 
     CONCISE_KEEP = ("决策", "已记录", "撤销", "处罚", "已警告", "已禁言", "已撤回",
                     "失败", "异常", "错误", "超时", "熔断", "清理", "迁移", "未处罚",
@@ -348,40 +393,20 @@ class PluginLogger:
         if self.level <= 20:
             if getattr(self, "concise", False) and not any(k in msg for k in self.CONCISE_KEEP):
                 return
-            with self._lock:
-                self._write(20, self._with_context(msg))
+            self._emit(20, self._with_context(msg))
 
     def warning(self, msg: str) -> None:
         if self.level <= 30:
-            with self._lock:
-                self._write(30, self._with_context(msg))
+            self._emit(30, self._with_context(msg))
 
     def error(self, msg: str) -> None:
         if self.level <= 40:
-            with self._lock:
-                self._write(40, self._with_context(msg))
+            self._emit(40, self._with_context(msg))
 
     def exception(self, msg: str) -> None:
-        """等价于 Logger.exception：ERROR 级 + 完整 traceback。
-
-        插件里多处异常兜底写的是 self.logger.exception(...)，本类早期没有这个方法，
-        结果「处理异常」这行自己又抛一个 AttributeError，把真正的异常盖成
-        "PluginLogger object has no attribute 'exception'"，日志里几乎看不出
-        原始错误。这里补上，保证异常路径永远不会二次炸。
-        """
-        import traceback
-
-        try:
-            tb = traceback.format_exc()
-        except Exception:  # pragma: no cover - 理论不可达
-            tb = ""
-        if tb and tb.strip() != "NoneType: None":
-            text = msg + chr(10) + tb
-        else:
-            text = msg
+        """等价于 Logger.exception：ERROR 级 + 当前 traceback。"""
         if self.level <= 40:
-            with self._lock:
-                self._write(40, text)
+            self._emit(40, self._with_context(msg), exc_info=True)
 
     def critical(self, msg: str) -> None:
         """对齐标准 Logger 的 critical；本插件按 ERROR 处理。"""

@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import json
-import logging
+from astrbot.api import logger
 
 from ...kernel.constants import plugin_root
 import os
@@ -514,7 +514,7 @@ def _restrict(path: str, mode: int) -> None:
     try:
         os.chmod(path, mode)
     except OSError as e:
-        logging.getLogger(__name__).warning(f"[词库] 收紧权限失败（{path} -> {oct(mode)}）：{e}")
+        logger.warning(f"[词库] 收紧权限失败（{path} -> {oct(mode)}）：{e}")
 
 
 class LexiconManager:
