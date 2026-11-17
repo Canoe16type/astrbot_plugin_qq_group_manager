@@ -301,7 +301,7 @@ class QQApi:
         """批量移除群成员（单次 ≤20）。
 
         文档: POST /v2/groups/{group_openid}/batch_remove_members（30 QPM）
-        请求体仅 member_openids；当前为内邀白名单能力，普通应用会收到 11253。
+        请求体仅 member_openids；权限错误通常为 40103012（群主关闭）/ 40103011（机器人侧关闭）。
         """
         body = {"member_openids": [str(x) for x in member_openids][:20]}
         return await self._request(

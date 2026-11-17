@@ -95,7 +95,6 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
         perm_key = {
             "40103012": "msg_kick_perm_owner",
             "40103011": "msg_kick_perm_bot",
-            "11253": "msg_kick_no_permission",
         }.get(str(code))
         if perm_key:
             await host._reply(event, host._render(perm_key))

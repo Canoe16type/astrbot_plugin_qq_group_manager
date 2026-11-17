@@ -61,7 +61,6 @@ class _Host:
         tpl = {
             "msg_kick_usage": "用法：/群管 踢人 @成员… [理由]",
             "msg_kick_success": "已移除 {names}（记录 #{id}）",
-            "msg_kick_no_permission": "踢人接口未开通（11253）",
             "msg_kick_perm_owner": "群主关闭了操作权限（40103012）",
             "msg_kick_perm_bot": "机器人侧关闭了操作权限（40103011）",
             "msg_kick_history_empty": "还没有踢人记录",
@@ -88,10 +87,10 @@ class KickTest(unittest.TestCase):
         self.assertEqual(rows[0]["reason"], "刷屏")
         host.tmp.cleanup()
 
-    def test_11253_gives_actionable_message_and_failure_record(self):
-        api = _Api(QQApiError("no permission", code=11253)); host = _Host(api); ev = _Obj()
+    def test_unknown_error_uses_generic_failure(self):
+        api = _Api(QQApiError("boom", code=50000)); host = _Host(api); ev = _Obj()
         asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "@x"]))
-        self.assertTrue(any("11253" in x for x in host.replies))
+        self.assertTrue(any("踢人失败" in x for x in host.replies))
         row = record.recent(host, "g1")[0]
         self.assertFalse(row["ok"])
         host.tmp.cleanup()

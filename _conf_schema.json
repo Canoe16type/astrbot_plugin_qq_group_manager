@@ -630,12 +630,6 @@
         "default": "踢人失败：{error}",
         "hint": "变量：{error}"
       },
-      "msg_kick_no_permission": {
-        "type": "text",
-        "description": "踢人 · 未开通提示（11253）",
-        "default": "踢人接口未开通（11253）。\n需群主在手机 QQ 操作：群聊 → 机器人头像 → 右上角齿轮 → 机器人管理员权限设置 → 勾选「移除群成员」；\n同时在 q.qq.com 开放平台开启「允许机器人使用的群管理能力 → 移除群成员」。",
-        "hint": "变量：无；默认含手机 QQ 与开放平台两处开启步骤"
-      },
       "msg_kick_history_empty": {
         "type": "text",
         "description": "踢人 · 记录为空",
