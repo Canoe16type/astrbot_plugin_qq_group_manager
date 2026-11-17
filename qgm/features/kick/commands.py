@@ -85,13 +85,16 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
         await host._reply(event, host._render("msg_kick_success", names=names, id=rec["id"]))
     except Exception as e:  # noqa: BLE001
         code = getattr(e, "code", None)
-        kick_record.add(host, {
+        failed = kick_record.add(host, {
             "group": group, "operator": operator, "operator_name": operator_name,
             "targets": targets, "reason": reason,
             "ok": False, "err_code": code, "err_msg": str(e)[:200],
         })
+        names = "、".join(t["name"] for t in targets)
         ctx = host._ctx(event.get_platform_id(), group, operator)
-        host.logger.warning(f"{ctx}[踢人] 失败 code={code} 目标={len(targets)}人 记录已留档 原因={str(e)[:120]}")
+        host.logger.warning(
+            f"{ctx}[踢人] 失败 code={code or '-'} 目标={names} 人数={len(targets)} "
+            f"记录#{failed['id']} 原因={str(e)[:120]}")
         perm_key = {
             "40103012": "msg_kick_perm_owner",
             "40103011": "msg_kick_perm_bot",

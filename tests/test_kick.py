@@ -69,8 +69,12 @@ class _Host:
             "msg_kick_fail": "踢人失败：{error}",
         }[key]
         return tpl.format(**kw)
-    logger = type("L", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None,
-                             "error": lambda *a, **k: None})()
+    class _Logger:
+        def __init__(self): self.lines = []
+        def info(self, m): self.lines.append(m)
+        def warning(self, m): self.lines.append(m)
+        def error(self, m): self.lines.append(m)
+    logger = _Logger()
 
     async def _reply(self, event, text): self.replies.append(text)
 
@@ -93,6 +97,7 @@ class KickTest(unittest.TestCase):
         self.assertTrue(any("踢人失败" in x for x in host.replies))
         row = record.recent(host, "g1")[0]
         self.assertFalse(row["ok"])
+        self.assertTrue(any(f"记录#{row['id']}" in x and "code=50000" in x for x in host.logger.lines))
         host.tmp.cleanup()
 
     def test_no_mention_shows_usage(self):
