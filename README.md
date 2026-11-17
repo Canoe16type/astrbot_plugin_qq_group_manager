@@ -3,7 +3,7 @@
 <img src="logo.png" width="96" align="right" alt="插件图标">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![version](https://img.shields.io/badge/version-1.7.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.7.1-blue.svg)](CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
 [![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
@@ -118,7 +118,7 @@
 | `/群管 举报` | 引用违规消息触发审核（全体成员可用） |
 | `/群管 帮助` | 完整指令速查（面板里也有一份可视版） |
 
-### 指令结构（1.7.0）
+### 指令结构（1.7.1）
 
 指令按「大类 + 子命令」组织：**禁言 / 审批 / 状态 / 审核 / 群规** + 撤回 / 举报 / 撤销 / 成员 / 管理登记 / 帮助。
 

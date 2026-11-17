@@ -8,7 +8,7 @@ body:
       value: |
         先看 README 的 [常见问题](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager#常见问题) 与 [CHANGELOG](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/blob/main/CHANGELOG.md)。
 
-        **当前版本 1.7.0**：指令统一为 `/群管 <子指令>`（如 `/群管 禁言 名单`、`/群管 审批 通过 1`、`/群管 状态 自检`）。
+        **当前版本 1.7.1**：指令统一为 `/群管 <子指令>`（如 `/群管 禁言 名单`、`/群管 审批 通过 1`、`/群管 状态 自检`）。
         旧写法（`/群管 解禁`、`/群管 汇报` 等）自 1.6.0 起已移除。
 
         ⚠️ 提交前删除日志中的 **AppID / AppSecret / openid / 群号 / 成员昵称**。
@@ -19,7 +19,7 @@ body:
       label: 插件版本
       description: 插件管理页或 Release 页可见
       options:
-        - 1.7.0（最新）
+        - 1.7.1（最新）
         - 1.6.0
         - 1.5.x
         - 更早
