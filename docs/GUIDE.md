@@ -6,7 +6,7 @@
 <img src="logo.png" width="96" align="right" alt="插件图标">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
-[![version](https://img.shields.io/badge/version-1.7.1-blue.svg)](../CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.8.0-blue.svg)](../CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
 [![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
@@ -245,6 +245,21 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 面板「群规审核 → 举报设置 → 变体提醒名单」也能看和移除。
 
 ---
+
+### 踢人
+
+> 官方能力 `POST /v2/groups/{group_openid}/batch_remove_members`：单次最多 20 人，可同时拉黑，30 QPM。
+> **当前是内邀白名单能力**，未开通会返回 `11253`，插件会提示而不是报错。
+
+```
+/群管 踢人 @成员A @成员B 刷屏          # 移除并记录
+/群管 踢人 拉黑 @成员A 广告            # 同时加入群黑名单
+/群管 踢人 记录 10                     # 查看本群最近 10 条
+```
+
+- 记录存 `plugin_data/kick_history.json`（最多 1000 条），包含操作人、目标、理由、结果、错误码。
+- 需要机器人为群管理员；只能移除普通成员（群主/管理员会被官方拒绝）。
+- 目标昵称优先使用 QQ 新版事件里的 `member_nickname`（群内昵称）。
 
 ### 成员档案（`/群管 成员`）
 
@@ -1490,7 +1505,7 @@ intent `1<<24`（GROUP_MEMBER_EVENT），插件通过运行时注入 `member_eve
 | 更新记录 | [CHANGELOG](../CHANGELOG.md) |
 | 开发工具（自检/基准/构建/预览） | [devtools 仓库](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools)（非插件本体，不装进 AstrBot） |
 
-当前版本 **1.7.1** 处于重构验收期：只收缺陷修复与测试补充，新功能请先开 issue 讨论。
+当前版本 **1.8.0** 处于重构验收期：只收缺陷修复与测试补充，新功能请先开 issue 讨论。
 
 ## 版本记录
 

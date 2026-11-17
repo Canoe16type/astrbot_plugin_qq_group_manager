@@ -64,6 +64,7 @@ from .qgm.commands import parse as command_parse
 from .qgm.features.mute import commands as mute_commands
 from .qgm.features.status import commands as status_commands
 from .qgm.features.members import commands as members_commands
+from .qgm.features.kick import commands as kick_commands
 from .qgm.features.members import cache as members_cache
 from .qgm.features.members import names as members_names
 from .qgm.features.audit import commands as audit_commands
@@ -1548,6 +1549,12 @@ class QQGroupManager(Star):
         """禁言 @用户 时长 [理由]｜禁言 解除 @用户｜禁言 名单｜禁言 历史"""
         await self._run_command(event, forced_cmd="/禁言", skip=1)
 
+    @qgm_group.command("踢人")
+    @_with_log_context
+    async def g_kick(self, event: AstrMessageEvent):
+        """踢人 [拉黑] @成员... [理由]｜踢人 记录 [N]（官方内邀能力）"""
+        await self._run_command(event, forced_cmd="/踢人", skip=1)
+
     @qgm_group.command("撤回")
     @_with_log_context
     async def g_recall(self, event: AstrMessageEvent):
@@ -1841,6 +1848,10 @@ class QQGroupManager(Star):
     # ------------------------------------------------------------------
     # /成员：群成员档案
     # ------------------------------------------------------------------
+    async def _cmd_kick(self, event: AstrMessageEvent, parts: list[str] | None = None):
+        """薄壳：踢人见 qgm.features.kick.commands。"""
+        return await kick_commands.cmd_kick(self, event, parts)
+
     async def _cmd_member(self, event: AstrMessageEvent, parts: list[str]):
         """薄壳：见 members_commands。"""
         return await members_commands._cmd_member(self, event, parts)

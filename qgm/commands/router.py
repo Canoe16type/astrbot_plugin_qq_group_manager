@@ -44,6 +44,8 @@ def resolve_admin(cmd: str, parts: list[str]):
         return "_cmd_recall", parts
     if cmd == "/管理登记":
         return "_cmd_admin_register", parts
+    if cmd == "/踢人":
+        return "_cmd_kick", parts
     if cmd == "/成员":
         return "_cmd_member", parts
     return None

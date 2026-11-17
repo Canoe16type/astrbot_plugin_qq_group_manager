@@ -3,7 +3,7 @@
 <img src="logo.png" width="96" align="right" alt="插件图标">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![version](https://img.shields.io/badge/version-1.7.1-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.8.0-blue.svg)](CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
 [![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
@@ -114,11 +114,12 @@
 | `/群管 群规 [列表\|添加\|设置\|删除\|清空]` | 添加示例：`/群管 群规 添加 刷屏 \| 连续刷无意义内容 \| 10分钟`（半角 / 全角竖线、纯空格均可）；面板支持**导出群规**（生成群公告文本，只含启用项）与**转移到其他群**（追加 / 覆盖，id 去重） |
 | `/群管 审核 [试跑\|巡检\|测试\|自我介绍]` | 诊断入口，看状态、切换试运行、试判一条内容 |
 | `/群管 成员` | 成员档案查询与维护 |
+| `/群管 踢人` | `[拉黑] @成员… [理由]` 移除成员；`踢人 记录 [N]` 查看记录（官方内邀能力，未开通返回 11253） |
 | `/群管 管理登记 [列表\|取消]` | 主动登记为审核提醒名单，变体累计提醒只 @ 名单内的人 |
 | `/群管 举报` | 引用违规消息触发审核（全体成员可用） |
 | `/群管 帮助` | 完整指令速查（面板里也有一份可视版） |
 
-### 指令结构（1.7.1）
+### 指令结构（1.8.0）
 
 指令按「大类 + 子命令」组织：**禁言 / 审批 / 状态 / 审核 / 群规** + 撤回 / 举报 / 撤销 / 成员 / 管理登记 / 帮助。
 

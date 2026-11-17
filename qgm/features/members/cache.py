@@ -54,6 +54,21 @@ def _save_recent_msgs(host, force=False):
         except Exception as e:
             host.logger.debug(f"[审核] 最近消息缓存写入失败（忽略）：{e}")
 
+def _sender_display_name(event) -> str:
+    """优先 QQ 1.8 事件新增的 member_nickname（群内昵称），退回 username。"""
+    raw = getattr(event.message_obj, "raw_message", None)
+    author = None
+    if raw is not None:
+        author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", None)
+    if isinstance(author, dict):
+        name = author.get("member_nickname") or author.get("username") or ""
+    elif author is not None:
+        name = getattr(author, "member_nickname", "") or getattr(author, "username", "") or ""
+    else:
+        name = ""
+    return str(name).strip() or event.get_sender_name() or ""
+
+
 def _record_recent_msg(host, event):
         """缓存当前群消息（原文 + 消息 ID + 时间），供引用撤回按原文匹配。
 
@@ -91,7 +106,7 @@ def _record_recent_msg(host, event):
                 "text": text,
                 "ts": time.time(),
                 "sender": event.get_sender_id() or "",
-                "sender_name": event.get_sender_name() or "",
+                "sender_name": _sender_display_name(event),
                 # 图片地址：仅本地留存，供 /举报 的多模态审核取用（QQ 图片
                 # URL 会过期，举报稍晚就可能取不到，所以必须提前存下来）。
                 "images": images,

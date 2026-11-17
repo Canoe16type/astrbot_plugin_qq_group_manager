@@ -48,6 +48,7 @@ class CommandRouterTest(unittest.TestCase):
             ("/审批", ["/审批", "通过", "1"]), ("/审批", ["/审批", "拒绝", "1"]),
             ("/状态", ["/状态"]), ("/撤销", ["/撤销", "3"]), ("/撤回", ["/撤回"]),
             ("/管理登记", ["/管理登记"]), ("/成员", ["/成员"]),
+            ("/踢人", ["/踢人", "@a", "理由"]),
         ]
         for cmd, parts in cases:
             route = router.resolve_admin(cmd, parts)

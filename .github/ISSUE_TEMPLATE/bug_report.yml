@@ -19,7 +19,8 @@ body:
       label: 插件版本
       description: 插件管理页或 Release 页可见
       options:
-        - 1.7.1（最新）
+        - 1.8.0（最新）
+        - 1.7.1
         - 1.6.0
         - 1.5.x
         - 更早

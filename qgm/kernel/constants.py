@@ -61,4 +61,4 @@ REGISTERED_COMMANDS = (
 _RULE_SEP_RE = re.compile(r"\s*[｜|︱]\s*")
 
 
-ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/撤销", "/管理登记", "/成员")
+ADMIN_COMMANDS = ("/禁言", "/审批", "/状态", "/撤回", "/审核", "/撤销", "/管理登记", "/成员", "/踢人")
