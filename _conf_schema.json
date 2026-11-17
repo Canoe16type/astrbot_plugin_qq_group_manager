@@ -605,6 +605,41 @@
         "type": "text",
         "default": "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人",
         "hint": "可用变量：{date} {time} {pending_count} {list} {muted_count} {group}。{list} 会自动展开成申请名单，没有申请时是一句「暂无待处理申请」"
+      },
+      "msg_kick_usage": {
+        "type": "text",
+        "description": "msg_kick_usage",
+        "default": "用法：/群管 踢人 @成员… [理由]\n查看记录：/群管 踢人 记录 [N]\n\n注意：需群主在手机 QQ 群设置里授予机器人「移除群成员」权限，并在 q.qq.com 开启对应群管理能力。"
+      },
+      "msg_kick_too_many": {
+        "type": "text",
+        "description": "msg_kick_too_many",
+        "default": "单次最多移除 {max} 人，请分批操作。"
+      },
+      "msg_kick_success": {
+        "type": "text",
+        "description": "msg_kick_success",
+        "default": "已移除 {names}（记录 #{id}）。"
+      },
+      "msg_kick_fail": {
+        "type": "text",
+        "description": "msg_kick_fail",
+        "default": "踢人失败：{error}"
+      },
+      "msg_kick_no_permission": {
+        "type": "text",
+        "description": "msg_kick_no_permission",
+        "default": "踢人接口未开通（11253）。\n需群主在手机 QQ 操作：群聊 → 机器人头像 → 右上角齿轮 → 机器人管理员权限设置 → 勾选「移除群成员」；\n同时在 q.qq.com 开放平台开启「允许机器人使用的群管理能力 → 移除群成员」。"
+      },
+      "msg_kick_history_empty": {
+        "type": "text",
+        "description": "msg_kick_history_empty",
+        "default": "本群还没有踢人记录。"
+      },
+      "msg_kick_history_title": {
+        "type": "text",
+        "description": "msg_kick_history_title",
+        "default": "踢人记录（最近 {count} 条）：\n{lines}"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

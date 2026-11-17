@@ -57,6 +57,17 @@ class _Host:
     def _plugin_data_dir(self): return self.tmp.name
     def _get_api(self, pid): return self.api
     def _ctx(self, *a, **k): return ""
+    def _render(self, key, **kw):
+        tpl = {
+            "msg_kick_usage": "用法：/群管 踢人 @成员… [理由]",
+            "msg_kick_success": "已移除 {names}（记录 #{id}）",
+            "msg_kick_no_permission": "踢人接口未开通（11253）",
+            "msg_kick_history_empty": "还没有踢人记录",
+            "msg_kick_history_title": "踢人记录（最近 {count} 条）：{lines}",
+            "msg_kick_too_many": "最多 {max} 人",
+            "msg_kick_fail": "踢人失败：{error}",
+        }[key]
+        return tpl.format(**kw)
     logger = type("L", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None,
                              "error": lambda *a, **k: None})()
 

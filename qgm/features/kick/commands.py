@@ -52,17 +52,18 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
             limit = int(args[1])
         rows = kick_record.recent(host, group, limit)
         if not rows:
-            await host._reply(event, "本群还没有踢人记录。")
+            await host._reply(event, host._render("msg_kick_history_empty"))
             return
-        await host._reply(event, "踢人记录（最近 %d 条）：\n%s" % (len(rows), "\n".join(_fmt_line(r) for r in rows)))
+        await host._reply(event, host._render("msg_kick_history_title", count=len(rows),
+                                                   lines="\n".join(_fmt_line(r) for r in rows)))
         return
 
     targets = _mentions(event)
     if not targets:
-        await host._reply(event, "用法：/群管 踢人 @成员... [理由]\n查看记录：/群管 踢人 记录 [N]")
+        await host._reply(event, host._render("msg_kick_usage"))
         return
     if len(targets) > MAX_BATCH:
-        await host._reply(event, f"单次最多移除 {MAX_BATCH} 人，请分批操作。")
+        await host._reply(event, host._render("msg_kick_too_many", max=MAX_BATCH))
         return
 
     reason = " ".join(args).strip()
@@ -81,7 +82,7 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
         names = "、".join(t["name"] for t in targets)
         ctx = host._ctx(event.get_platform_id(), group, operator)
         host.logger.info(f"{ctx}[踢人] 成功 目标={names} 人数={len(targets)} 记录#{rec['id']} 理由={reason or '-'}")
-        await host._reply(event, f"已移除 {names}（记录 #{rec['id']}）。")
+        await host._reply(event, host._render("msg_kick_success", names=names, id=rec["id"]))
     except Exception as e:  # noqa: BLE001
         code = getattr(e, "code", None)
         kick_record.add(host, {
@@ -92,6 +93,6 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
         ctx = host._ctx(event.get_platform_id(), group, operator)
         host.logger.warning(f"{ctx}[踢人] 失败 code={code} 目标={len(targets)}人 记录已留档 原因={str(e)[:120]}")
         if str(code) == "11253":
-            await host._reply(event, "踢人接口暂未开通：该能力目前是 QQ 官方内邀白名单（错误码 11253），请联系平台运营申请权限。")
+            await host._reply(event, host._render("msg_kick_no_permission"))
         else:
-            await host._reply(event, f"踢人失败：{str(e)[:120]}")
+            await host._reply(event, host._render("msg_kick_fail", error=str(e)[:120]))

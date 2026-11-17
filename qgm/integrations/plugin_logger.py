@@ -379,7 +379,7 @@ class PluginLogger:
 
     def _emit(self, lv: int, msg: str, exc_info=False) -> None:
         """统一出口：交给 astrbot.api.logger；缓冲/文件由挂载的 Handler 完成。"""
-        astrbot_logger.log(lv, msg, exc_info=exc_info, extra={"qgm": True})
+        astrbot_logger.log(lv, msg, exc_info=exc_info, extra={"qgm": True}, stacklevel=3)
 
     def debug(self, msg: str) -> None:
         if self.level <= 10:
