@@ -608,55 +608,55 @@
       },
       "msg_kick_usage": {
         "type": "text",
-        "description": "通用 · 踢人指令用法",
+        "description": "踢人 · 指令用法",
         "default": "用法：/群管 踢人 @成员… [理由]\n查看记录：/群管 踢人 记录 [N]\n\n注意：需群主在手机 QQ 群设置里授予机器人「移除群成员」权限，并在 q.qq.com 开启对应群管理能力。",
         "hint": "变量：无"
       },
       "msg_kick_too_many": {
         "type": "text",
-        "description": "通用 · 踢人超限提示",
+        "description": "踢人 · 超限提示",
         "default": "单次最多移除 {max} 人，请分批操作。",
         "hint": "变量：{max}"
       },
       "msg_kick_success": {
         "type": "text",
-        "description": "通用 · 踢人成功提示",
+        "description": "踢人 · 成功提示",
         "default": "已移除 {names}（记录 #{id}）。",
         "hint": "变量：{names} {id}"
       },
       "msg_kick_fail": {
         "type": "text",
-        "description": "通用 · 踢人失败提示",
+        "description": "踢人 · 失败提示",
         "default": "踢人失败：{error}",
         "hint": "变量：{error}"
       },
       "msg_kick_no_permission": {
         "type": "text",
-        "description": "通用 · 踢人未开通提示（11253）",
+        "description": "踢人 · 未开通提示（11253）",
         "default": "踢人接口未开通（11253）。\n需群主在手机 QQ 操作：群聊 → 机器人头像 → 右上角齿轮 → 机器人管理员权限设置 → 勾选「移除群成员」；\n同时在 q.qq.com 开放平台开启「允许机器人使用的群管理能力 → 移除群成员」。",
         "hint": "变量：无；默认含手机 QQ 与开放平台两处开启步骤"
       },
       "msg_kick_history_empty": {
         "type": "text",
-        "description": "通用 · 踢人记录为空",
+        "description": "踢人 · 记录为空",
         "default": "本群还没有踢人记录。",
         "hint": "变量：无"
       },
       "msg_kick_history_title": {
         "type": "text",
-        "description": "通用 · 踢人记录标题",
+        "description": "踢人 · 记录标题",
         "default": "踢人记录（最近 {count} 条）：\n{lines}",
         "hint": "变量：{count} {lines}"
       },
       "msg_kick_perm_owner": {
         "type": "text",
-        "description": "通用 · 踢人失败：群主关闭权限（40103012）",
+        "description": "踢人 · 群主关闭权限（40103012）",
         "hint": "变量：无；提示群主在手机 QQ 开启「移除群成员」",
         "default": "踢人失败（40103012）：群主关闭了操作权限。\n请群主在手机 QQ：群聊 → 机器人头像 → 右上角齿轮 → 机器人管理员权限设置 → 开启「移除群成员」。"
       },
       "msg_kick_perm_bot": {
         "type": "text",
-        "description": "通用 · 踢人失败：机器人侧关闭权限（40103011）",
+        "description": "踢人 · 机器人侧关闭权限（40103011）",
         "hint": "变量：无；提示到 Web 管理端/开放平台开启「移除群成员」",
         "default": "踢人失败（40103011）：机器人侧关闭了操作权限。\n请到 QQ 机器人 Web 管理端 → 群管理能力 → 开启「移除群成员」，并在 q.qq.com 勾选对应能力后重试。"
       }
