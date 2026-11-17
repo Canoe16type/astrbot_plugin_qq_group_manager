@@ -232,6 +232,7 @@ async def on_member_add(host, data: dict, platform_id: str | None = None) -> Non
                     ts=data.get("timestamp") or None,
                     count_msg=False,
                     user_openid=str(data.get("user_openid") or ""),
+                    group_nickname=str(data.get("member_nickname") or data.get("group_nickname") or ""),
                 )
                 host.logger.info(
                     f"{host._ctx(platform_id or '-', g, member)}[成员] 入群建档"

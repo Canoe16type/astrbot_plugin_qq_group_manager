@@ -248,12 +248,11 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 
 ### 踢人
 
-> 官方能力 `POST /v2/groups/{group_openid}/batch_remove_members`：单次最多 20 人，可同时拉黑，30 QPM。
+> 官方能力 `POST /v2/groups/{group_openid}/batch_remove_members`：单次最多 20 人，30 QPM。
 > **当前是内邀白名单能力**，未开通会返回 `11253`，插件会提示而不是报错。
 
 ```
 /群管 踢人 @成员A @成员B 刷屏          # 移除并记录
-/群管 踢人 拉黑 @成员A 广告            # 同时加入群黑名单
 /群管 踢人 记录 10                     # 查看本群最近 10 条
 ```
 

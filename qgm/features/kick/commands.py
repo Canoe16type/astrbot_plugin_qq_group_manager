@@ -36,7 +36,7 @@ def _fmt_line(r: dict) -> str:
     ts = time.strftime("%m-%d %H:%M", time.localtime(float(r.get("ts") or 0)))
     targets = "、".join(t.get("name") or t.get("openid", "")[-6:] for t in r.get("targets") or [])
     state = "成功" if r.get("ok") else f"失败({r.get('err_code') or '-'})"
-    extra = "，已拉黑" if r.get("add_to_blacklist") else ""
+    extra = ""
     reason = f"，理由：{r['reason']}" if r.get("reason") else ""
     return f"#{r.get('id')} {ts} {targets}｜{state}{extra}{reason}"
 
@@ -59,34 +59,32 @@ async def cmd_kick(host, event, parts: list[str] | None = None) -> None:
 
     targets = _mentions(event)
     if not targets:
-        await host._reply(event, "用法：/群管 踢人 [拉黑] @成员... [理由]\n查看记录：/群管 踢人 记录 [N]")
+        await host._reply(event, "用法：/群管 踢人 @成员... [理由]\n查看记录：/群管 踢人 记录 [N]")
         return
     if len(targets) > MAX_BATCH:
         await host._reply(event, f"单次最多移除 {MAX_BATCH} 人，请分批操作。")
         return
 
-    add_to_blacklist = "拉黑" in args
-    reason = " ".join(a for a in args if a != "拉黑").strip()
+    reason = " ".join(args).strip()
 
     operator = event.get_sender_id() or ""
     operator_name = event.get_sender_name() or operator
     try:
         api = host._get_api(event.get_platform_id())
-        resp = await api.batch_remove_members(
-            group, [t["openid"] for t in targets], add_to_blacklist=add_to_blacklist)
+        resp = await api.batch_remove_members(group, [t["openid"] for t in targets])
         ok = str((resp or {}).get("remove_members_result") or "") == "success"
         rec = kick_record.add(host, {
             "group": group, "operator": operator, "operator_name": operator_name,
-            "targets": targets, "reason": reason, "add_to_blacklist": add_to_blacklist,
+            "targets": targets, "reason": reason,
             "ok": ok, "result": resp if isinstance(resp, dict) else {},
         })
         names = "、".join(t["name"] for t in targets)
-        await host._reply(event, f"已移除 {names}（记录 #{rec['id']}）" + ("，并加入黑名单。" if add_to_blacklist else "。"))
+        await host._reply(event, f"已移除 {names}（记录 #{rec['id']}）。")
     except Exception as e:  # noqa: BLE001
         code = getattr(e, "code", None)
         kick_record.add(host, {
             "group": group, "operator": operator, "operator_name": operator_name,
-            "targets": targets, "reason": reason, "add_to_blacklist": add_to_blacklist,
+            "targets": targets, "reason": reason,
             "ok": False, "err_code": code, "err_msg": str(e)[:200],
         })
         if str(code) == "11253":

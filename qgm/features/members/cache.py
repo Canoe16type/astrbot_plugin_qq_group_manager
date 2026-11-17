@@ -54,6 +54,16 @@ def _save_recent_msgs(host, force=False):
         except Exception as e:
             host.logger.debug(f"[审核] 最近消息缓存写入失败（忽略）：{e}")
 
+def _sender_group_nickname(event) -> str:
+    raw = getattr(event.message_obj, "raw_message", None)
+    author = None
+    if raw is not None:
+        author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", None)
+    if isinstance(author, dict):
+        return str(author.get("member_nickname") or "").strip()
+    return str(getattr(author, "member_nickname", "") or "").strip() if author is not None else ""
+
+
 def _sender_display_name(event) -> str:
     """优先 QQ 1.8 事件新增的 member_nickname（群内昵称），退回 username。"""
     raw = getattr(event.message_obj, "raw_message", None)
@@ -158,7 +168,8 @@ def _record_member_seen(host, event):
                 return
             sname = str(event.get_sender_name() or "").strip()
             name = sname if (sname and sname != sid) else ""
-            host.members.seen(g, sid, name=name)
+            host.members.seen(g, sid, name=name,
+                              group_nickname=_sender_group_nickname(event))
         except Exception as e:  # noqa: BLE001
             host.logger.debug(f"[成员档案] 记录发言失败: {e}")
 

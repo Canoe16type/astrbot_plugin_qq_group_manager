@@ -181,6 +181,7 @@ class MemberRegistry:
             "openid": openid,
             "user_openid": "",      # 用户维度 openid（事件里可能带，可跨群认人）
             "nickname": DEFAULT_NAME,     # 展示用昵称（人工优先）
+            "group_nickname": "",         # 群内昵称（QQ 事件 member_nickname，随消息更新）
             "name_source": "none",        # none / manual / api / msg
             "note": "",                   # 备注（比如"活跃老群友""广告号"）
             "role": "",                   # member / admin / owner（有接口才有）
@@ -214,6 +215,7 @@ class MemberRegistry:
         name: str = "",
         user_openid: str = "",
         union_openid: str = "",
+        group_nickname: str = "",
         count_msg: bool = True,
     ) -> dict:
         """记录一次「露面」：首次出现 / 最后露面 / 发言数。
@@ -258,8 +260,14 @@ class MemberRegistry:
         uo = str(user_openid or union_openid or "")
         if uo:
             rec["user_openid"] = uo
-        if name and rec.get("name_source") in ("none", "msg", ""):
-            rec["nickname"] = str(name).strip()[:40]
+        gnick = str(group_nickname or "").strip()[:40]
+        if gnick and rec.get("group_nickname") != gnick:
+            rec["group_nickname"] = gnick
+            self._dirty = True
+        # 群内昵称优先于 QQ 昵称展示，但人工改名（manual）永远最高
+        display = gnick or str(name or "").strip()
+        if display and rec.get("name_source") in ("none", "msg", "", "api"):
+            rec["nickname"] = display[:40]
             rec["name_source"] = "msg"
         self.maybe_save()
         return rec

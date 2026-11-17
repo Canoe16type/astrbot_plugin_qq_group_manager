@@ -297,16 +297,13 @@ class QQApi:
         return out
 
     # ---------- 踢人（内邀能力） ----------
-    async def batch_remove_members(self, group_openid: str, member_openids: list[str],
-                                   add_to_blacklist: bool = False) -> dict:
-        """批量移除群成员（单次 ≤20；可同时拉黑）。
+    async def batch_remove_members(self, group_openid: str, member_openids: list[str]) -> dict:
+        """批量移除群成员（单次 ≤20）。
 
         文档: POST /v2/groups/{group_openid}/batch_remove_members（30 QPM）
-        当前为内邀白名单能力，普通应用会收到 11253（应用无接口访问权限）。
+        请求体仅 member_openids；当前为内邀白名单能力，普通应用会收到 11253。
         """
         body = {"member_openids": [str(x) for x in member_openids][:20]}
-        if add_to_blacklist:
-            body["add_to_member_blacklist"] = True
         return await self._request(
             "POST", f"/v2/groups/{group_openid}/batch_remove_members", body=body)
 

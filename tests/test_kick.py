@@ -41,8 +41,8 @@ class _Api:
         self.fail = fail
         self.calls = []
 
-    async def batch_remove_members(self, group, ids, add_to_blacklist=False):
-        self.calls.append((group, ids, add_to_blacklist))
+    async def batch_remove_members(self, group, ids):
+        self.calls.append((group, ids))
         if self.fail:
             raise self.fail
         return {"remove_members_result": "success", "add_to_member_blacklist_fail_openids": []}
@@ -65,7 +65,6 @@ class KickTest(unittest.TestCase):
         api = _Api(); host = _Host(api); ev = _Obj()
         asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "刷屏"]))
         self.assertEqual(api.calls[0][1], ["u1", "u2"], "不应包含机器人")
-        self.assertEqual(api.calls[0][2], False)
         self.assertTrue(any("已移除" in x for x in host.replies))
         rows = record.recent(host, "g1")
         self.assertEqual(len(rows), 1)
@@ -75,11 +74,10 @@ class KickTest(unittest.TestCase):
 
     def test_11253_gives_actionable_message_and_failure_record(self):
         api = _Api(QQApiError("no permission", code=11253)); host = _Host(api); ev = _Obj()
-        asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "拉黑", "@x"]))
+        asyncio.run(commands.cmd_kick(host, ev, ["/踢人", "@x"]))
         self.assertTrue(any("11253" in x for x in host.replies))
         row = record.recent(host, "g1")[0]
         self.assertFalse(row["ok"])
-        self.assertTrue(row["add_to_blacklist"])
         host.tmp.cleanup()
 
     def test_no_mention_shows_usage(self):
