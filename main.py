@@ -1115,7 +1115,8 @@ class QQGroupManager(Star):
         # 没传就保留占位符，交给 _reply() 用「消息发送者」兜底展开。
         target = str(kw.get("at") or "").strip()
         if target:
-            kw["at"] = self._at_tag(target)
+            # 已经是 @ 标签（<qqbot-at-user ...> / <@...>）就不要二次包装
+            kw["at"] = target if target.startswith("<") else self._at_tag(target)
         kw = {k: (str(v) if v is not None else "") for k, v in kw.items()}
         try:
             result = tpl.format(**kw)

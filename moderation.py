@@ -321,14 +321,16 @@ def decide_action(
         cat = str(verdict.get("category") or "")
         if cat:
             same = [r for r in usable if str(r.get("category") or "") == cat]
-            if len(same) == 1:
+            sev = str(verdict.get("severity") or "").lower()
+            exact = next((r for r in same if str(r.get("severity") or "").lower() == sev), None)
+            if exact is not None:
+                matched_rule = exact
+                match_by = "category+severity"
+            elif same and not (sev == "high" and rule_floor_high):
+                # 「其他违规」这类大类的唯一规则可能只是低档（如引人不适 10 分钟），
+                # 高危判定不能被它误标成轻罚；交给 severity 阶梯 + 严重度地板。
                 matched_rule = same[0]
                 match_by = "category"
-            elif same:
-                sev = str(verdict.get("severity") or "")
-                matched_rule = next((r for r in same if str(r.get("severity") or "") == sev), None)
-                if matched_rule is not None:
-                    match_by = "category+severity"
     if matched_rule is not None:
         seconds = _take(matched_rule)
 
@@ -413,7 +415,7 @@ def decide_action(
     # 规则时长地板：
     # 1) 只靠 category 兜底命中的规则不够精确，不能把任意档位压到极短；
     # 2) 判定为「严重」时，即使显式命中了一条短时长规则，也不能低于 high 档基础（可关）。
-    if smart and matched_rule is not None:
+    if matched_rule is not None:
         sev0 = str(verdict.get("severity") or "medium").lower()
         floor = 0
         if str(match_by).startswith("category"):
