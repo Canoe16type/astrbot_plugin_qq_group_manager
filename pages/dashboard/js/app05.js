@@ -737,6 +737,15 @@ const HELP = {
           "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code><br>" +
           "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
           "<b>Markdown 专用</b>：<code>{at}</code>（真 @）、<code>{avatar}</code> / <code>{avatar:宽度}</code>（头像）；纯文本下这些变量不生成标签/图片。" },
+    { id:"modes", term:"纯文本 / Markdown 显示对照", go:[],
+      def:"<b>同一条模板，两种格式实际发出去的样子：</b><br><br>" +
+          "<b>{at}</b>：纯文本 → <code>@小明</code>（不会真提醒）；Markdown → <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，群里显示为真实 @。<br>" +
+          "<b>{avatar}</b> / <b>{avatar:40}</b>：纯文本 → <b>空</b>（语法被去掉，不显示图片）；Markdown → 一张尺寸 40px 的头像图。<br>" +
+          "<b>{username} / {user} / {operator}</b>：两种模式都显示名字文字，样式相同。<br>" +
+          "<b>{punish} / {duration} / {category} / {category_public} / {severity_label} / {basis_detail} / {rule_name}</b>：两种模式都按文字替换，内容相同。<br>" +
+          "<b>{error} / {names} / {id} / {count} / {lines} / {max}</b>：同上，纯文字。<br>" +
+          "<b>Markdown 语法</b>：<code>**粗体**</code>、<code># 标题</code>、<code>&gt; 引用</code> 在纯文本里原样显示符号，在 Markdown 里才生效。<br>" +
+          "<b>换行</b>：两种模式都保留换行；纯文本不能加颜色/标题等富文本。" },
     { id:"at", term:"{at} · @ 某位成员", go:[],
       def:"纯文本：显示为 <code>@昵称</code>（不保证真 @）。<br>Markdown：生成 <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，群里才会真正提醒。<br>适用：警告、撤销致歉、转人工提醒。" },
     { id:"avatar", term:"{avatar} / {avatar:宽度} · 头像", go:[],

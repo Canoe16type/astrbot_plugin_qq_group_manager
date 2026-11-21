@@ -1138,6 +1138,7 @@ class QQGroupManager(Star):
     AVATAR_SRC_TIERS = (40, 100, 640)
     _AVATAR_PH_RE = re.compile(r"\{avatar(?::(\d+))?\}")
     _LEGACY_AT_RE = re.compile(r"<@!?([0-9A-Za-z_-]{8,})>")
+    _AT_TAG_RE = re.compile(r'<qqbot-at-user id="([^"]+)"\s*/>')
 
     def _at_tag(self, openid: str) -> str:
         """openid → QQ 官方 @ 标签；空值返回空串。"""
@@ -1267,6 +1268,23 @@ class QQGroupManager(Star):
             text = self._LEGACY_AT_RE.sub(lambda m: self._at_tag(m.group(1)), text)
         return text
 
+    def _plain_at_name(self, event, openid: str, group: str = "") -> str:
+        """纯文本模式下的 @ 显示：优先成员档案群昵称/昵称，其次发送者名，最后后 6 位。"""
+        name = ""
+        try:
+            rec = self.members.get(group, openid) if group else None
+            if rec:
+                name = str(rec.get("group_nickname") or rec.get("nickname") or "").strip()
+        except Exception:
+            name = ""
+        if not name and event is not None:
+            try:
+                if str(event.get_sender_id() or "") == openid:
+                    name = str(event.get_sender_name() or "").strip()
+            except Exception:
+                name = ""
+        return "@" + (name or str(openid)[-6:])
+
     async def _reply(self, event: AstrMessageEvent, text: str) -> None:
         """统一回复出口：按模板配置的格式决定怎么发。
 
@@ -1281,6 +1299,14 @@ class QQGroupManager(Star):
         content = self._expand_msg_modules(
             str(text), event, fmt, getattr(text, "tpl_target", "")
         )
+        if fmt != "markdown" and content:
+            group = ""
+            try:
+                group = str(event.get_group_id() or "") if event is not None else ""
+            except Exception:
+                group = ""
+            content = self._AT_TAG_RE.sub(
+                lambda m: self._plain_at_name(event, m.group(1), group), content)
         is_img = fmt == "image"
         img_url = ""
         if is_img:
