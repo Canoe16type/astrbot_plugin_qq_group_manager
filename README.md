@@ -3,7 +3,7 @@
 <img src="logo.png" width="96" align="right" alt="插件图标">
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![version](https://img.shields.io/badge/version-1.8.0-blue.svg)](CHANGELOG.md)
+[![version](https://img.shields.io/badge/version-1.9.0-blue.svg)](CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
 [![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
@@ -121,7 +121,7 @@
 | `/群管 举报` | 引用违规消息触发审核（全体成员可用） |
 | `/群管 帮助` | 完整指令速查（面板里也有一份可视版） |
 
-### 指令结构（1.8.0）
+### 指令结构（1.9.0）
 
 指令按「大类 + 子命令」组织：**禁言 / 审批 / 状态 / 审核 / 群规** + 撤回 / 举报 / 撤销 / 成员 / 管理登记 / 帮助。
 
@@ -188,11 +188,10 @@
 
 ### 群昵称需要 AstrBot 4.30.0+
 
-成员档案支持群内昵称（`member_nickname`），但**要求 AstrBot 4.30.0 及以上**（当前为 `4.30.0-beta.1`，正式版发布后同理）。
+成员档案支持群内昵称（`member_nickname`），但**要求 AstrBot 4.30.0 及以上**。
 
 - 4.29.4 及以前：适配器不下发该字段，档案只能显示 QQ 昵称
 - 4.30.0+：消息档案、举报对象、踢人记录会优先显示群昵称；人工备注仍最高优先
-- 升级注意：4.30.0 Beta 涉及数据库/配置迁移，**先备份，再在测试环境验证**
 
 ### 踢人权限（必须）
 
