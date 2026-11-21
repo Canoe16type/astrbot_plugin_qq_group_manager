@@ -110,8 +110,12 @@ async def report_violation(host, event, parts):
 
         result = await host._mod_execute(event, g, rep, verdict, settings)
         result["category_code"] = str(verdict.get("category_code") or "")
-        result["category_public"] = verdict.get("category_public") or host.mod.get_cat_names(g).get(
-            str(result.get("category") or ""), str(result.get("category") or "违规"))
+        result["category_public"] = (
+            verdict.get("category_public")
+            or host.mod.get_cat_names(g).get(str(result.get("category") or ""), "")
+            or str(result.get("category") or "")
+            or "未分类违规"
+        )
         result["severity_label"] = categories.severity_label(result.get("severity") or "")
         # 变体疑似：没被禁言路径处理掉的话，这里按群配置决定是否撤回（只撤回，不禁言）
         if variant and not result["executed"]:
