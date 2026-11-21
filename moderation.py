@@ -113,7 +113,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
     "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
                       "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
-    "mod_hit": "根据{basis}，符合{category}，已被禁言{duration}",
+    "mod_hit": "根据{basis_detail}，此消息符合其规定描述，属于{category}，已被禁言{duration}",
     "mod_clean": "根据多重维度评判，此消息不涉嫌违规",
     "mod_hit_general": "根据多重维度评判，符合{category}，已被禁言{duration}",
     "mod_receiving": "已收到举报，正在审核中…",
@@ -122,7 +122,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "mod_quote_lost": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报",
     "mod_layer_off": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定",
     "mod_disabled": "本群未开启举报审核",
-    "mod_dry_run": "（试运行）根据{basis}，符合{category}，本应禁言{duration}",
+    "mod_dry_run": "（试运行）根据{basis_detail}，此消息符合其规定描述，属于{category}，本应禁言{duration}",
     "mod_need_admin": "只有管理员可以修改群规",
     "mod_rules_empty": "本群还没有配置群规，审核暂时只按关键词和语义判断。管理员可以这样加一条：\n/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟\n（竖线隔开三段：规则名 | 说明 | 时长；时长不写默认 1 小时）",
     "mod_report_limit": "举报太频繁啦，请稍后再试。",

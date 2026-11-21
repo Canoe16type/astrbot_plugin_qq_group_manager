@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from . import actions as audit_actions
+from . import basis as audit_basis
 from . import detectors as audit_detectors
 
 try:
@@ -198,6 +199,8 @@ async def report_violation(host, event, parts):
             await host._reply(event, host._mod_tpl(
                 g, "mod_dry_run",
                 basis=host.mod.get_dim_names(g).get(str(result["basis"]), str(result["basis"] or "")),
+                basis_detail=audit_basis.basis_detail(host, g, result),
+                rule_name=result.get("rule_name") or "",
                 category=host.mod.get_cat_names(g).get(str(result["category"]), str(result["category"] or "")),
                 duration=result["duration"],
             ))
@@ -235,6 +238,9 @@ async def report_violation(host, event, parts):
         await host._reply(event, host._mod_tpl(
             g, "mod_hit",
             basis=host.mod.get_dim_names(g).get(str(result["basis"]), "多重维度"),
+            basis_detail=audit_basis.basis_detail(host, g, result),
+            rule_name=result.get("rule_name") or "",
+            rule_index=audit_basis.basis_detail(host, g, result),
             category=host.mod.get_cat_names(g).get(str(result["category"]), str(result["category"] or "违规")),
             duration=result["duration"],
             user=rep.get("sender_name") or "",

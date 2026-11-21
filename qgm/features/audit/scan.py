@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import basis as audit_basis
+
 import time
 
 
@@ -89,7 +91,9 @@ async def _maybe_auto_scan(host, event):
                 await host._reply(event, host._mod_tpl(
                     g, "mod_hit",
                     basis=host.mod.get_dim_names(g).get(str(result["basis"]), "多重维度"),
-                    category=host.mod.get_cat_names(g).get(str(result["category"]), "违规"),
+                    basis_detail=audit_basis.basis_detail(host, g, result),
+                    rule_name=result.get("rule_name") or "",
+                        category=host.mod.get_cat_names(g).get(str(result["category"]), "违规"),
                     duration=result["duration"], user=rep["sender_name"], reason=result["reason"],
                 ))
         except Exception as e:
