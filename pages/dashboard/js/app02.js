@@ -129,7 +129,8 @@ async function loadHistory() {
 }
 $("btnRefreshHistory").addEventListener("click", loadHistory);
 $("btnHistoryClear").addEventListener("click", async () => {
-  const g = $("histGroup").value;
+  const raw = $("histGroup").value;
+  const g = raw === "all" ? "" : raw;
   const scope = g ? "当前选中的群" : "全部群";
   if (!(await showConfirm(`确认清空${scope}的禁言历史？此操作不可恢复！`))) return;
   try {
@@ -196,7 +197,8 @@ async function loadRecalls() {
 }
 $("btnRefreshRecalls").addEventListener("click", loadRecalls);
 $("btnRecallsClear").addEventListener("click", async () => {
-  const g = $("recallGroup").value;
+  const raw = $("recallGroup").value;
+  const g = raw === "all" ? "" : raw;
   const scope = g ? "当前选中的群" : "全部群";
   if (!(await showConfirm(`确认清空${scope}的撤回历史？此操作不可恢复！`))) return;
   try {

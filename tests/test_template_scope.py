@@ -19,9 +19,11 @@ MOD_KEYS = re.findall(r'\["([a-zA-Z0-9_]+)"', M.group(1))
 
 
 class TemplateScopeTest(unittest.TestCase):
-    def test_no_duplicate_moderation_templates_in_settings(self):
-        dup = [k for k in MOD_KEYS if k in SCHEMA["templates"]["items"]]
-        self.assertEqual(dup, [], f"以下审核/举报话术不应出现在设置页：{dup}")
+    def test_moderation_templates_are_in_settings_during_migration(self):
+        """1.9.0 迁移期：审核话术必须在「设置 → 消息模板」可改；
+        旧「群规审核 → 话术模板」只展示清单。下个版本再移除旧入口。"""
+        missing = [k for k in MOD_KEYS if k not in SCHEMA["templates"]["items"]]
+        self.assertEqual(missing, [], f"设置页缺少审核话术：{missing}")
 
     def test_moderation_templates_have_defaults(self):
         missing = [k for k in MOD_KEYS if k not in moderation.DEFAULT_TEMPLATES]

@@ -653,6 +653,186 @@
         "description": "踢人 · 机器人侧关闭权限（40103011）",
         "hint": "变量：无；提示到 Web 管理端/开放平台开启「移除群成员」",
         "default": "踢人失败（40103011）：机器人侧关闭了操作权限。\n请到 QQ 机器人 Web 管理端 → 群管理能力 → 开启「移除群成员」，并在 q.qq.com 勾选对应能力后重试。"
+      },
+      "mod_hit": {
+        "type": "text",
+        "description": "审核 · 命中违规（群内回复）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "根据{basis_detail}，此消息符合其规定描述，属于{category}，已被禁言{duration}"
+      },
+      "mod_clean": {
+        "type": "text",
+        "description": "审核 · 未违规（群内回复）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "根据多重维度评判，此消息不涉嫌违规"
+      },
+      "mod_hit_general": {
+        "type": "text",
+        "description": "审核 · 综合判定违规（未对应具体规则，可留空）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "根据多重维度评判，符合{category}，已被禁言{duration}"
+      },
+      "mod_receiving": {
+        "type": "text",
+        "description": "审核 · 举报受理回执",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "已收到举报，正在审核中…"
+      },
+      "mod_failed": {
+        "type": "text",
+        "description": "审核 · 审核失败",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "审核未完成（{error}），已记入审核记录"
+      },
+      "mod_no_quote": {
+        "type": "text",
+        "description": "审核 · 未引用消息就举报",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "请先长按违规消息选择「回复」引用它，再发送 /群管 举报"
+      },
+      "mod_disabled": {
+        "type": "text",
+        "description": "审核 · 本群未开启审核",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "本群未开启举报审核"
+      },
+      "mod_dry_run": {
+        "type": "text",
+        "description": "审核 · 试运行提示",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "（试运行）根据{basis_detail}，此消息符合其规定描述，属于{category}，本应禁言{duration}"
+      },
+      "mod_need_admin": {
+        "type": "text",
+        "description": "审核 · 非管理员改群规",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "只有管理员可以修改群规"
+      },
+      "mod_rules_empty": {
+        "type": "text",
+        "description": "审核 · 本群尚无群规",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "本群还没有配置群规，审核暂时只按关键词和语义判断。管理员可以这样加一条：\n/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟\n（竖线隔开三段：规则名 | 说明 | 时长；时长不写默认 1 小时）"
+      },
+      "mod_report_limit": {
+        "type": "text",
+        "description": "审核 · 举报过于频繁",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "举报太频繁啦，请稍后再试。"
+      },
+      "mod_layer_off": {
+        "type": "text",
+        "description": "审核 · 模型层已关闭（未做语义判定）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定"
+      },
+      "mod_uncertain": {
+        "type": "text",
+        "description": "审核 · 把握不足未自动处理（只记录）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "判定把握不足，本次未自动处理，已记入审核记录"
+      },
+      "mod_quote_lost": {
+        "type": "text",
+        "description": "审核 · 引用消息失联（找不到被举报消息）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报"
+      },
+      "mod_exempt": {
+        "type": "text",
+        "description": "审核 · 被举报人处于豁免名单",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "该成员在豁免名单中，本次不做处理"
+      },
+      "mod_variant_recalled": {
+        "type": "text",
+        "description": "审核 · 变体疑似（已自动撤回）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "该消息疑似用变体写法绕过检测（{method}），已撤回并记录，请管理员复核"
+      },
+      "mod_variant_logged": {
+        "type": "text",
+        "description": "审核 · 变体疑似（仅记录，未撤回）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "该消息疑似用变体写法绕过检测（{method}），已记录待复核"
+      },
+      "mod_variant_strike_notify": {
+        "type": "text",
+        "description": "审核 · 变体累计达阈值：@ 管理员提醒",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{mentions} 疑似变体累计提醒：{user} 在近 {days} 天内已有 {count} 次疑似变体写法（本次：{method}）。已进待办，请到插件页面复核处理。"
+      },
+      "mod_variant_strike_muted": {
+        "type": "text",
+        "description": "审核 · 变体累计达阈值：已自动禁言",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{mentions} 疑似变体累计已达 {count} 次（近 {days} 天），已自动禁言 {user} {duration}。若判断有误，请解禁并在插件页面标记误判（标记后不再计入累计）。"
+      },
+      "mod_admin_registered": {
+        "type": "text",
+        "description": "审核 · 管理员登记成功（变体提醒名单）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{user} 登记成功，已加入本群审核提醒名单（当前 {count} 人）。变体累计提醒会 @ 名单内成员。"
+      },
+      "mod_admin_unregistered": {
+        "type": "text",
+        "description": "审核 · 管理员取消登记",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{user} 已从本群审核提醒名单移除（当前 {count} 人）。"
+      },
+      "mod_admin_not_registered": {
+        "type": "text",
+        "description": "审核 · 取消登记时本来就不在名单",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{user} 本来就不在审核提醒名单里（当前 {count} 人）。"
+      },
+      "msg_mod_warn": {
+        "type": "text",
+        "description": "审核 · 警告提示（智能分级：轻微/中度）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。"
+      },
+      "msg_mod_todo": {
+        "type": "text",
+        "description": "审核 · 转人工复核回执（高危但置信度不足）",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。"
+      },
+      "msg_mod_revoke": {
+        "type": "text",
+        "description": "审核 · 撤销处罚并致歉",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}"
+      },
+      "msg_mod_unattributed": {
+        "type": "text",
+        "description": "审核 · 无法定位发送者时的回执",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "⚠️ 已判定：{verdict}。\n但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。"
+      },
+      "mod_admin_list": {
+        "type": "text",
+        "description": "审核 · 查看提醒名单",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "本群审核提醒名单（{count} 人）：{admins}"
+      },
+      "mod_admin_list_empty": {
+        "type": "text",
+        "description": "审核 · 提醒名单为空时的提示",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "本群还没有人登记为审核管理员。管理员可发送「/群管 管理登记」把自己加入提醒名单。"
+      },
+      "mod_admin_register_off": {
+        "type": "text",
+        "description": "审核 · 登记成功但本群未开提醒",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "提示：本群未开启「变体累计提醒」，登记已保存，但暂时不会收到 @（可在插件页面「举报设置」里打开）。"
+      },
+      "mod_todo_muted": {
+        "type": "text",
+        "description": "审核 · 待办人工处理后的回执",
+        "hint": "变量见 docs/TEMPLATES.md 或旧页话术清单",
+        "default": "已按待办处理：禁言 {user} {duration}"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

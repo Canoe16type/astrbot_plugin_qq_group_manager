@@ -470,20 +470,20 @@ A1B2C3D4E5F6...  , 小红"></textarea>
 
  <!-- ③ 话术模板 -->
  <section class="mod-pane" id="mod-pane-templates">
- <p class="desc">
- 留空表示<b>继承全局默认</b>（占位符里显示的就是全局值）。可用变量：
- <code>{basis}</code> <code>{category}</code> <code>{duration}</code> <code>{user}</code> <code>{reason}</code>
- <br/><b>警告 / 转人工 / 撤销三条</b>另有：<code>{at}</code> <code>{rule}</code> <code>{severity}</code>
- <code>{next}</code> <code>{vid}</code> <code>{punish}</code> <code>{unmute}</code> <code>{operator}</code> <code>{reason_line}</code>
- </p>
- <div id="tpl-fields" class="grid one"></div>
+ <div class="notice warn">
+ <b>话术已迁移到「设置 → 消息模板」。</b>
+ 本页从 1.9.0 起仅展示可用话术清单，<b>在此修改不再生效</b>；请到设置页的「审核」分组统一修改（与其他话术同一套配置）。旧的本群覆盖数据保留一个版本用于回退，下个版本移除。
+ </div>
+ <p class="desc">可用变量：<code>{basis}</code> <code>{basis_detail}</code> <code>{rule_name}</code> <code>{category}</code> <code>{category_public}</code> <code>{severity_label}</code> <code>{duration}</code> <code>{user}</code> <code>{reason}</code>
+ <br/><b>警告 / 转人工 / 撤销三条</b>另有：<code>{at}</code> <code>{rule}</code> <code>{severity}</code> <code>{next}</code> <code>{vid}</code> <code>{punish}</code> <code>{unmute}</code> <code>{operator}</code> <code>{reason_line}</code>
+ <br/>纯文本与 Markdown 的变量差异见 <code>docs/TEMPLATES.md</code>（下个版本补充）。</p>
+ <div id="tpl-list" class="grid one"></div>
  <h3 class="h3">维度显示名（<code>{basis}</code> 的取值）</h3>
  <div id="dim-fields" class="grid two"></div>
  <h3 class="h3">违规类型显示名（<code>{category}</code> 的取值）</h3>
  <div id="cat-fields" class="grid two"></div>
  <div class="row-actions">
- <button class="btn btn-primary" id="btn-save-templates">保存本群话术</button>
- <button class="btn" id="btn-clear-templates">清空本群覆盖（恢复继承）</button>
+ <p class="hint">旧「保存本群话术」已停用；请到 设置 → 消息模板 修改。</p>
  </div>
  </section>
 

@@ -370,6 +370,13 @@ function collectSettings() {
 
 /* ---------------- 话术模板 ---------------- */
 function renderTemplates() {
+  const list = $("tpl-list");
+  if (list) {
+    list.innerHTML = TPL_FIELDS.map(([key, label]) =>
+      `<div class="row-item"><div class="left"><span class="tag">${esc(label)}</span>` +
+      `<span class="hint">${esc(key)} · 已迁移到设置 → 消息模板</span></div></div>`).join("");
+    return;
+  }
   const tpl = (detail && detail.templates) || {};
   const dflt = (detail && detail.default_templates) || {};
   const box = $("tpl-fields");
@@ -683,17 +690,10 @@ function showVerdictDetail(v) {
     `<div>${rows.map(([k, val]) => `<div><span style="color:var(--sub,#999)">${k}：</span>${esc(val)}</div>`).join("")}</div>` +
     `<div style="margin-top:12px;color:var(--sub,#999)">原文（${textLen} 字${v.text_truncated ? "，超出上限已截断" : ""}` +
     `${v.images ? `｜含 ${v.images} 张图片（官方链接有时效，未存档）` : ""}）：</div>` +
-    `<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(127,127,127,.14);padding:10px;border-radius:8px;margin:6px 0;font-size:12px">${esc(v.text || "（这条是旧版记录，当时只留了 200 字以内，且可能为空）")}</pre>` +
-    `<button class="btn small" id="vd-copy">复制原文</button></div>`;
+    `<pre style="white-space:pre-wrap;word-break:break-all;background:rgba(127,127,127,.14);padding:10px;border-radius:8px;margin:6px 0;font-size:12px">${esc(v.text || "（这条是旧版记录，当时只留了 200 字以内，且可能为空）")}</pre></div>`;
   wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
   document.body.appendChild(wrap);
   document.getElementById("vd-close").onclick = () => wrap.remove();
-  const cp = document.getElementById("vd-copy");
-  if (cp) cp.onclick = () => {
-    const t = v.text || "";
-    if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => showToast("已复制")).catch(() => {});
-    else toast("浏览器不允许复制，请手动选中", true);
-  };
 }
 
 /* 导出判定记录：服务端筛选，前端拼 CSV（带 BOM，Excel 打开不乱码） */
@@ -1088,8 +1088,10 @@ async function initModeration() {
   const _btnTransfer = $("btn-transfer-rules");
   if (_btnTransfer) _btnTransfer.onclick = transferRules;
   $("btn-save-settings").onclick = saveSettings;
-  $("btn-save-templates").onclick = saveTemplates;
-  $("btn-clear-templates").onclick = clearTemplates;
+  const _saveTpl = $("btn-save-templates");
+  if (_saveTpl) _saveTpl.onclick = saveTemplates;
+  const _clearTpl = $("btn-clear-templates");
+  if (_clearTpl) _clearTpl.onclick = clearTemplates;
   $("btn-test").onclick = runTest;
 
   try {

@@ -56,16 +56,17 @@ class ModTplLayeringTest(unittest.TestCase):
         plug = _fake({}, {KEY: "配置层话术"})
         self.assertEqual(str(plug._mod_tpl(GROUP, KEY)), "配置层话术")
 
-    def test_global_store_beats_config(self):
+    def test_legacy_global_store_is_ignored(self):
+        """1.9.0 迁移期：旧「群规审核」全局覆盖不再生效，设置页优先。"""
         plug = _fake({"global": {KEY: "面板全局话术"}}, {KEY: "配置层话术"})
-        self.assertEqual(str(plug._mod_tpl(GROUP, KEY)), "面板全局话术")
+        self.assertEqual(str(plug._mod_tpl(GROUP, KEY)), "配置层话术")
 
-    def test_group_override_beats_everything(self):
+    def test_legacy_group_override_is_ignored(self):
         plug = _fake(
             {"global": {KEY: "面板全局话术"}, "groups": {GROUP: {KEY: "本群话术"}}},
             {KEY: "配置层话术"},
         )
-        self.assertEqual(str(plug._mod_tpl(GROUP, KEY)), "本群话术")
+        self.assertEqual(str(plug._mod_tpl(GROUP, KEY)), "配置层话术")
 
     KW = {"basis": "B", "category": "C", "duration": "D"}
 

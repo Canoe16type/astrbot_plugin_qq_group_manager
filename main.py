@@ -2343,28 +2343,16 @@ class QQGroupManager(Star):
         所以内置模块占位符（{at} / {avatar}）必须先换成哨兵保护起来，
         渲染完再还原，否则会像写错变量一样被静默吃掉。
         """
-        # 第三步「插件配置」以前是漏的：面板「消息模板」页保存 mod_* 时写的是
-        # 插件配置（web_tpl_formats_save → _write_config_value），而这里只看
-        # moderation 存储里的全局/群覆盖，于是「改了审核话术但群里没变」。
-        store = getattr(self.mod, "templates", None)
-        if not isinstance(store, dict):
-            store = {}
-        group_override = ((store.get("groups") or {}).get(group) or {}).get(key)
-        global_override = (store.get("global") or {}).get(key)
-        if group_override:
-            tpl = group_override
-        elif global_override:
-            tpl = global_override
-        else:
-            tpl = ""
-            if hasattr(self, "config"):
-                tpl = self._read_config_value(
-                    ("templates", key), default="", legacy_keys=(key,)
-                )
-            if not str(tpl or "").strip():
-                # 回落到 moderation 自己的取法（含内置默认），保持可注入/可测试
-                tpl = ((self.mod.get_templates(group) or {}).get(key)
-                       or moderation.DEFAULT_TEMPLATES.get(key, ""))
+        # 1.9.0 迁移：审核话术统一走「设置 → 消息模板」（插件配置 templates.<key>）。
+        # 群规审核里的旧「本群覆盖 / 全局覆盖」保留数据但不再参与渲染，给一个版本迁移期。
+        tpl = ""
+        if hasattr(self, "config"):
+            tpl = self._read_config_value(
+                ("templates", key), default="", legacy_keys=(key,)
+            )
+        if not str(tpl or "").strip():
+            tpl = moderation.DEFAULT_TEMPLATES.get(key, "")
+
         target = str(kw.pop("at", "") or "")
         guards: list[str] = []
 

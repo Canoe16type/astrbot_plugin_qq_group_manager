@@ -147,7 +147,8 @@ class ModTplModuleGuardTest(unittest.TestCase):
 
     def _plugin(self, tpl):
         p = make_plugin()
-        p.mod = self._FakeMod({"mod_test": tpl})
+        p.mod = self._FakeMod({})
+        p.config = {"templates": {"mod_test": tpl}}   # 1.9.0：只认设置页全局模板
         return p
 
     def test_modules_survive_render_tpl(self):

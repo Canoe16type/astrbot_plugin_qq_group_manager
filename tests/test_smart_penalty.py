@@ -366,16 +366,17 @@ if __name__ == "__main__":
     unittest.main()
 
 class TemplateOverrideTest(unittest.TestCase):
-    """新话术必须能按群覆盖（群规审核 → 话术模板），而不是只能改全局。"""
+    """1.9.0 起话术统一在「设置 → 消息模板」覆盖；旧按群入口不再生效。"""
 
     def test_defaults_registered(self):
         for key in ("msg_mod_warn", "msg_mod_todo", "msg_mod_revoke"):
             self.assertIn(key, moderation.DEFAULT_TEMPLATES)
 
-    def test_group_override_wins(self):
+    def test_settings_template_wins(self):
         p = _plugin(_Api())
-        p.mod.templates = {"groups": {"g1": {"msg_mod_warn": "自定义警告：{rule}"}}}
-        p.mod.get_templates = lambda g: {"msg_mod_warn": "自定义警告：{rule}"}
+        p.config = {}
+        p._read_config_value = lambda keys, default="", legacy_keys=(): (
+            "自定义警告：{rule}" if str(keys[-1]) == "msg_mod_warn" else default)
         text = p._mod_tpl("g1", "msg_mod_warn", at="", rule="群规3",
                           severity="轻微", reason="", next="5分钟")
         self.assertIn("自定义警告", text)
