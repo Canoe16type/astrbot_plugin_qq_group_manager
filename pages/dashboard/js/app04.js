@@ -376,10 +376,19 @@ function renderSettings() {
 
     // 「消息模板」按描述前缀（通用 · 禁言 · 撤回 …）分子组，其余分组直接铺开
     const isTpl = group.key === "templates";
+    const TPL_SUB_ORDER = ["通用", "审核", "踢人", "禁言", "撤回", "审批", "成员", "欢迎", "其他"];
+    const tplSub = (item) => String(item.description).split("·")[0].trim() || "其他";
+    const tplRank = (item) => {
+      const i = TPL_SUB_ORDER.indexOf(tplSub(item));
+      return i < 0 ? TPL_SUB_ORDER.length : i;
+    };
+    const items = isTpl
+      ? group.items.map((it, i) => [it, i]).sort((a, b) => tplRank(a[0]) - tplRank(b[0]) || a[1] - b[1]).map(([it]) => it)
+      : group.items;
     let lastSub = null;
     let grid = null;
     let switchRow = null;      // 当前攒着的开关行
-    group.items.forEach((item) => {
+    items.forEach((item) => {
       if (isTpl) {
         const sub = String(item.description).split("·")[0].trim() || "其他";
         if (sub !== lastSub) {
@@ -585,6 +594,12 @@ if ($("btnSetDiscard")) $("btnSetDiscard").addEventListener("click", discardSett
 if ($("tplMdHelp")) $("tplMdHelp").addEventListener("click", (e) => {
   e.preventDefault();
   openHelp("md", "start");
+});
+
+// 消息模板页的「消息模板变量怎么填？」按钮：打开帮助中心模板变量页
+if ($("tplVarHelp")) $("tplVarHelp").addEventListener("click", (e) => {
+  e.preventDefault();
+  openHelp("tplvars", "start");
 });
 
 // 消息模板：子页签切换 + 编辑对话框

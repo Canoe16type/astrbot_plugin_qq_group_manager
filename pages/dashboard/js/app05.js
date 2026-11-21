@@ -725,8 +725,32 @@ const HELP = {
       doc:["发送群聊消息", DOC.msg] }
   ],
 
+  /* ── 模板变量：纯文本 / Markdown 差异与用法 ── */
+  tplvars: [
+    { id:"start", term:"模板变量怎么填（先看这条）", go:[],
+      def:"模板里用 <code>{变量名}</code> 占位，发送前由插件替换。<br><b>纯文本模式</b>：变量按普通文字替换，不解析 Markdown；<code>{at}</code> 只能显示成 @昵称，部分平台不会真的提醒。<br><b>Markdown 模式</b>：变量替换后再按 Markdown 解析；<code>{at}</code> 会生成官方 <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，<code>{avatar}</code> 才会生效。<br><b>空值</b>：变量为空时替换为空字符串；整行是否保留由模板决定。<br><b>不支持</b>：模板里不能写 <code>{</code> 原文之外的运算/条件；未知变量会原样出现，请在面板变量提示里核对。" },
+    { id:"at", term:"{at} · @ 某位成员", go:[],
+      def:"纯文本：显示为 <code>@昵称</code>（不保证真 @）。<br>Markdown：生成 <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，群里才会真正提醒。<br>适用：警告、撤销致歉、转人工提醒。" },
+    { id:"avatar", term:"{avatar} / {avatar:宽度} · 头像", go:[],
+      def:"仅 Markdown 生效。官方事件头像 URL 优先；旧 AstrBot 未透传时回退 qlogo。示例：<code>{avatar:40}</code> 小图、<code>{avatar}</code> 100px、<code>{avatar:160}</code> 大图。" },
+    { id:"punish", term:"{punish} / {duration} · 处罚描述", go:[],
+      def:"<code>{duration}</code>：纯时长（10分钟 / 1天）。<br><code>{punish}</code>：完整动作（禁言 10分钟 / 撤回并警告），纯文本与 Markdown 都可能出现，适合直接放进句子。" },
+    { id:"category", term:"{category} / {category_public} · 违规类别", go:[],
+      def:"<code>{category}</code>：群规分类名（如「其他违规」）。<br><code>{category_public}</code>：公开类别（如「C6 提示词注入／越权指令（…）」），语义判定使用；群规命中时仍用规则名。" },
+    { id:"basis", term:"{basis} / {basis_detail} / {rule_name} · 判定依据", go:[],
+      def:"<code>{basis}</code>：维度名（语义分析 / 群规匹配）。<br><code>{basis_detail}</code>：完整依据句（「群规第2条「引人不适」」/「语义分析」）。<br><code>{rule_name}</code>：命中的规则名；无规则时为空。" },
+    { id:"who", term:"{user} / {operator} · 成员与操作人", go:[],
+      def:"<code>{user}</code>：被处罚/被操作的成员显示名（群昵称优先）。<br><code>{operator}</code>：执行操作的管理员名。<br>纯文本与 Markdown 都可用；Markdown 下如需 @ 请用 <code>{at}</code>，不要手拼标签。" },
+    { id:"reason", term:"{reason} / {reason_line} · 理由", go:[],
+      def:"<code>{reason}</code>：简短理由（一般一段）。<br><code>{reason_line}</code>：已格式化的「，理由：…」片段，适合接在句尾。<br>两者都会截断过长内容；纯文本会原样显示，Markdown 下注意里面的符号可能被解析。" },
+    { id:"empty", term:"变量为空 / 未知变量", go:[],
+      def:"空值替换为空字符串；如果整句依赖它，建议在模板里保留固定措辞。<br>未知变量不会报错，会原样显示 <code>{foo}</code>——保存前请对照本页清单。" }
+  ],
+
   /* ── 常见问题：整理自 docs/GUIDE.md「常见问题（FAQ）」── */
   faq: [
+    { id:"q_tplvars", term:"消息模板变量怎么填？", go:[],
+      def:"打开右上角「帮助中心 → 模板变量」页：里面有每个变量的含义、纯文本与 Markdown 的差异、空值/未知变量行为。模板页右上角的「消息模板变量怎么填？」按钮会直接跳过去。" },
     { id:"q1", term:"插件加载失败 / WebUI 里看不到插件", go:["global","全局作用域"],
       def:"原因：目录层级不对、metadata.yaml 不完整、或 AstrBot 版本不满足。确认目录是 plugins/astrbot_plugin_qq_group_manager/（别多套一层），确认 metadata.yaml 的 name 为 astrbot_plugin_qq_group_manager 且 astrbot_version 满足当前版本，再看 AstrBot 日志里的插件报错。", doc:null },
     { id:"q2", term:"发送指令没反应 / 提示无权限", go:["judge","管理员判定"],

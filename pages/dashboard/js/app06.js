@@ -43,6 +43,7 @@ const TABMETA={
   terms:['术语词典','平台术语已核对 QQ 官方文档，插件术语整理自插件 docs/GUIDE.md'],
   cmd:['指令手册','群内发送；标「管理员指令」的需要权限'],
   md:['Markdown 大全','按 QQ 官方「Markdown 消息」核对：每条给可复制的写法，并演示渲染效果'],
+  tplvars:['模板变量','每个模板变量的含义、纯文本 / Markdown 差异与空值行为'],
   faq:['常见问题','整理自插件 docs/GUIDE.md 的 FAQ'],
   docs:['文档索引','插件文档是本地文件，QQ 文档在开放平台']
 };
