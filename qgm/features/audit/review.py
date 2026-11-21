@@ -13,6 +13,8 @@ try:
 except ImportError:  # 测试把插件目录直接加入 sys.path 时
     import moderation  # type: ignore
 
+from . import categories
+
 
 def review_fast(host, group: str, rep: dict, respect_switches: bool = True, scene: str = "举报"):
         """L0 关键词 + L1 缓存：零成本，命中直接出结果。
@@ -102,6 +104,7 @@ async def review_llm(host, event, group: str, rep: dict, context_lines: list[str
             group_rules=host.mod.get_rules(group),
             few_shot=host._mod_few_shot,
             common_ban=str(host._read_config_value(("moderation", "common_ban"), default="", legacy_keys=("common_ban",)) or ""),
+            category_block=categories.prompt_block(),
         )
         up = moderation.build_user_prompt(
             message_text=rep.get("text") or "",
@@ -224,6 +227,13 @@ async def review_llm(host, event, group: str, rep: dict, context_lines: list[str
             verdict["confidence"] = float(verdict.get("confidence", 0) or 0)
         except (TypeError, ValueError):
             verdict["confidence"] = 0.0
+        code = str(verdict.get("category_code") or "").strip().upper()
+        if not categories.valid(code):
+            code = ""
+        verdict["category_code"] = code
+        verdict["category_label"] = categories.label(code)
+        verdict["category_desc"] = categories.describe(code)
+        verdict["category_public"] = categories.public_text(code)
         verdict["model"] = pid
         verdict["from_cache"] = False
         try:
