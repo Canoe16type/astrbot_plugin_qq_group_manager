@@ -729,6 +729,14 @@ const HELP = {
   tplvars: [
     { id:"start", term:"模板变量怎么填（先看这条）", go:[],
       def:"模板里用 <code>{变量名}</code> 占位，发送前由插件替换。<br><b>纯文本模式</b>：变量按普通文字替换，不解析 Markdown；<code>{at}</code> 只能显示成 @昵称，部分平台不会真的提醒。<br><b>Markdown 模式</b>：变量替换后再按 Markdown 解析；<code>{at}</code> 会生成官方 <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，<code>{avatar}</code> 才会生效。<br><b>空值</b>：变量为空时替换为空字符串；整行是否保留由模板决定。<br><b>不支持</b>：模板里不能写 <code>{</code> 原文之外的运算/条件；未知变量会原样出现，请在面板变量提示里核对。" },
+    { id:"vars_all", term:"全量变量清单（按场景）", go:[],
+      def:"<b>没有“所有模板通用”的变量</b>：每个模板只认识自己场景的变量，未列出的变量在该模板会原样显示。<br><br>" +
+          "<b>审核 / 处罚</b>：<code>{basis_detail}</code> <code>{category}</code> <code>{category_public}</code> <code>{severity_label}</code> <code>{duration}</code> <code>{punish}</code> <code>{rule}</code> <code>{rule_name}</code> <code>{reason}</code> <code>{reason_line}</code> <code>{vid}</code> <code>{verdict}</code> <code>{method}</code> <code>{days}</code> <code>{mentions}</code> <code>{next}</code><br>" +
+          "<b>踢人</b>：<code>{names}</code> <code>{id}</code> <code>{error}</code> <code>{max}</code> <code>{count}</code> <code>{lines}</code><br>" +
+          "<b>禁言 / 撤回</b>：<code>{username}</code> <code>{duration_text}</code> <code>{openid}</code> <code>{list}</code> <code>{count}</code> <code>{error}</code><br>" +
+          "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code><br>" +
+          "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
+          "<b>Markdown 专用</b>：<code>{at}</code>（真 @）、<code>{avatar}</code> / <code>{avatar:宽度}</code>（头像）；纯文本下这些变量不生成标签/图片。" },
     { id:"at", term:"{at} · @ 某位成员", go:[],
       def:"纯文本：显示为 <code>@昵称</code>（不保证真 @）。<br>Markdown：生成 <code>&lt;qqbot-at-user id=\"member_openid\" /&gt;</code>，群里才会真正提醒。<br>适用：警告、撤销致歉、转人工提醒。" },
     { id:"avatar", term:"{avatar} / {avatar:宽度} · 头像", go:[],
