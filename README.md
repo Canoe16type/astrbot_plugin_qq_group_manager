@@ -37,7 +37,7 @@
 | --- | --- |
 | 支持平台 | `qq_official`（WebSocket）／`qq_official_webhook`（Webhook） |
 | 依赖 | AstrBot 4.16 ~ 4.x（核心实测 4.29.4）；**群昵称需 AstrBot 4.30.0+**，无需额外 pip 包 |
-| 许可 | MIT（见 [LICENSE](LICENSE)） |
+| 许可 | 代码 MIT（见 [LICENSE](LICENSE)）；内置词库按上游许可证分发，见 [lexicons/THIRD_PARTY_NOTICES.md](lexicons/THIRD_PARTY_NOTICES.md) |
 
 ---
 
@@ -337,4 +337,7 @@
 
 ## 许可证
 
-[MIT](LICENSE) © Canoe16type
+- **代码**：[MIT](LICENSE) © Canoe16type
+- **内置词库/数据**：来自第三方开源项目，按各自许可证分发；完整许可证全文与修改说明见
+  [lexicons/THIRD_PARTY_NOTICES.md](lexicons/THIRD_PARTY_NOTICES.md)
+- 再次分发时请保留 `LICENSE`、`lexicons/SOURCES.md`、`lexicons/DISCLAIMER.md` 与之上的 `THIRD_PARTY_NOTICES.md`
