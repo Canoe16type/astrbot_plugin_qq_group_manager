@@ -72,7 +72,8 @@ def _detail(row, is_admin: bool) -> str:
 
 async def _send_markdown(host, event, text: str):
     """记录表必须按 Markdown 发；失败退回纯文本，不吞消息。"""
-    from astrbot.api.message_components import MessageChain, Plain
+    from astrbot.api.event import MessageChain
+    from astrbot.api.message_components import Plain
 
     try:
         chain = MessageChain([Plain(text)])

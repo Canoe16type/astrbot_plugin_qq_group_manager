@@ -61,6 +61,11 @@ class RecordsCommandTest(unittest.TestCase):
             asyncio.run(commands.cmd_records(host, event, parts))
         return event.sent
 
+    def test_markdown_chain_send(self):
+        event = _Event()
+        asyncio.run(commands._send_markdown(_host(), event, "### hi"))
+        self.assertTrue(event.sent)
+
     def test_member_requires_mine(self):
         sent = self._run(_host(False), _Event(), ["/记录"])
         self.assertEqual(sent[0][0], "reply")
