@@ -338,7 +338,7 @@
 
 | 类型 | 怎么反馈 |
 | --- | --- |
-| 满意度调研 | [QQ官机群管满意度调研](https://docs.qq.com/form/page/DWGVkZ3B0WnhubFNX)（腾讯文档，匿名即可） |
+| 满意度调研 | [QQ官机群管满意度调研](https://docs.qq.com/form/page/DWGVkZ3B0WnhubFNX)（匿名填写，仅用于汇总满意度） |
 | 功能建议 / 使用疑问 | [新建 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) |
 | 疑似 bug | [新建 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) 选「功能异常」，附插件版本、AstrBot 版本、复现步骤、日志 |
 | 安全漏洞 | **不要开公开 Issue**：[私密报告](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/security/advisories/new) 或邮件 **oc16games@outlook.com**（见 [SECURITY.md](SECURITY.md)） |
