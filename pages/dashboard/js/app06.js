@@ -821,3 +821,117 @@ document.addEventListener('keydown',e=>{
     });
   });
 })();
+
+// ---------------- 插件处理记录（统一页） ----------------
+(function unifiedRecords() {
+  const KIND = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
+  const ACTION = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
+  let rows = [];
+
+  function groupValue() {
+    const el = $("recFilterGroup");
+    return el && el.value !== "all" ? el.value : "";
+  }
+  function targetQuery() {
+    const el = $("recFilterTarget");
+    return el ? (el.value || "").trim().toLowerCase() : "";
+  }
+  function matchTarget(row) {
+    const q = targetQuery();
+    if (!q) return true;
+    return (row.target_name || "").toLowerCase().includes(q) ||
+      (row.target_ids || []).some((x) => String(x).toLowerCase().endsWith(q));
+  }
+  function fmtRow(r) {
+    const target = r.target_name || (r.target_id ? r.target_id.slice(-6) : "-");
+    const result = r.result || (r.ok ? "成功" : "失败");
+    return `<tr data-rec-id="${esc(r.display_id)}">
+      <td><code>${esc(r.display_id)}</code></td>
+      <td class="nowrap">${esc(r.time_text || "-")}</td>
+      <td title="${esc(target)}">${esc(target)}</td>
+      <td>${esc(ACTION[r.action] || r.action)}</td>
+      <td>${esc(result)}</td>
+      <td title="${esc(r.actor_name || "")}">${esc(r.actor_name || "-")}</td>
+    </tr>`;
+  }
+  function render() {
+    const box = $("recRows");
+    if (!box) return;
+    const list = rows.filter(matchTarget);
+    box.innerHTML = list.length
+      ? list.map(fmtRow).join("")
+      : `<tr><td colspan="6"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
+    const count = $("recCount");
+    if (count) count.textContent = `共 ${list.length} 条 · 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
+  }
+  async function load() {
+    const box = $("recRows");
+    if (box) box.innerHTML = `<tr><td colspan="6"><div class="empty"><span>加载中…</span></div></td></tr>`;
+    try {
+      fillGroupSelect("recFilterGroup", "全部群");
+      const params = { limit: 50 };
+      const g = groupValue();
+      if (g) params.group = g;
+      const kind = $("recFilterKind") ? $("recFilterKind").value : "";
+      if (kind) params.kind = kind;
+      const days = $("recFilterDays") ? $("recFilterDays").value : "0";
+      if (days && days !== "0") params.days = days;
+      const r = await bridge.apiGet("records", params);
+      rows = r.items || [];
+      render();
+    } catch (e) {
+      if (box) box.innerHTML = `<tr><td colspan="6"><div class="empty"><span>加载失败：${esc(e.message || e)}</span></div></td></tr>`;
+    }
+  }
+  async function openDetail(id) {
+    try {
+      const r = await bridge.apiGet("records/detail", { id, group: groupValue() });
+      if (r.error) { showToast(r.error); return; }
+      const it = r.item;
+      $("recDetailTitle").textContent = `记录 ${it.display_id}`;
+      const lines = [
+        ["时间", it.time_text], ["类型", KIND[it.kind] || it.kind],
+        ["目标", it.target_name || it.target_id || "-"],
+        ["处理", `${ACTION[it.action] || it.action} · ${it.result || "-"}`],
+        ["操作人", it.actor_name || "-"], ["理由", it.reason || "-"],
+      ];
+      if (it.detail && it.detail.rule_name) lines.push(["依据", it.detail.rule_name]);
+      if (it.detail && it.detail.category_public) lines.push(["类别", it.detail.category_public]);
+      if (it.detail && it.detail.error_code) lines.push(["错误码", it.detail.error_code]);
+      if (it.legacy) lines.push(["备注", "历史记录缺少目标 ID，仅管理员可按群查看"]);
+      $("recDetailBody").innerHTML = lines.map(([k, v]) =>
+        `<div style="display:flex;gap:8px;padding:3px 0"><b style="min-width:56px;color:#667">${esc(k)}</b><span style="word-break:break-word">${esc(v)}</span></div>`
+      ).join("");
+      $("recDetailMask").classList.add("show");
+    } catch (e) { showToast(`详情加载失败：${e.message || e}`); }
+  }
+  function exportCsv() {
+    const head = ["记录", "时间", "类型", "目标", "处理", "结果", "操作人", "理由"];
+    const lines = [head.join(","), ...rows.filter(matchTarget).map((r) => [
+      r.display_id, r.time_text, KIND[r.kind] || r.kind, r.target_name || r.target_id,
+      ACTION[r.action] || r.action, r.result || "", r.actor_name || "", r.reason || "",
+    ].map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","))];
+    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `qgm-records-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  if ($("btnRecLoad")) $("btnRecLoad").addEventListener("click", load);
+  if ($("btnRecExport")) $("btnRecExport").addEventListener("click", exportCsv);
+  ["recFilterGroup", "recFilterKind", "recFilterDays"].forEach((id) => {
+    if ($(id)) $(id).addEventListener("change", load);
+  });
+  if ($("recFilterTarget")) $("recFilterTarget").addEventListener("input", render);
+  if ($("recRows")) $("recRows").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-rec-id]");
+    if (tr) openDetail(tr.dataset.recId);
+  });
+  if ($("recDetailClose")) $("recDetailClose").addEventListener("click", () => $("recDetailMask").classList.remove("show"));
+  if ($("recDetailMask")) $("recDetailMask").addEventListener("click", (e) => {
+    if (e.target === $("recDetailMask")) $("recDetailMask").classList.remove("show");
+  });
+  const tab = document.querySelector('.tab[data-tab="records"]');
+  if (tab) tab.addEventListener("click", () => setTimeout(load, 30));
+})();

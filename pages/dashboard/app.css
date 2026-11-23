@@ -1002,3 +1002,10 @@ select{max-width:100%}
   .tpl-dlg-head{padding:var(--s3) var(--s4)}
   .tpl-dlg-head .seg{order:3;width:100%;max-width:none}
 }
+
+/* 插件处理记录：合并页 */
+.rec-tbl tbody tr { cursor: pointer; }
+.rec-tbl tbody tr:hover { background: rgba(127,127,127,.06); }
+.rec-tbl td { vertical-align: middle; }
+.rec-detail-box { width: min(92vw, 560px); }
+.rec-detail-box .modal-msg { max-height: 60vh; overflow: auto; }

@@ -636,11 +636,51 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <p>禁言历史、撤回历史与模型判定记录；试跑用当前选中群的提示词。</p>
  </div>
  <nav class="rec-tabs">
- <button class="rec-tab active" data-rec-tab="history"> 禁言历史</button>
- <button class="rec-tab" data-rec-tab="recalls"> 撤回历史</button>
- <button class="rec-tab" data-rec-tab="verdicts"> 判定记录 / 试跑</button>
-      <button class="rec-tab" data-rec-tab="kicks">踢人记录</button>
+  <button class="rec-tab active" data-rec-tab="all"> 插件处理记录</button>
  </nav>
+
+ <div class="rec-pane active" id="rec-pane-all">
+  <div class="card">
+   <div class="card-head">
+    <h3>插件处理记录 <span class="hint">（仅记录本插件执行的操作）</span></h3>
+    <div class="log-controls">
+     <select id="recFilterGroup" class="select"><option value="all">全部群</option></select>
+     <select id="recFilterKind" class="select">
+      <option value="">全部类型</option>
+      <option value="verdict">判定</option>
+      <option value="mute">禁言</option>
+      <option value="recall">撤回</option>
+      <option value="kick">踢人</option>
+     </select>
+     <select id="recFilterDays" class="select">
+      <option value="0">全部时间</option>
+      <option value="1">今天</option>
+      <option value="7">近 7 天</option>
+      <option value="30">近 30 天</option>
+     </select>
+     <input id="recFilterTarget" class="input" placeholder="目标昵称 / openid 后 6 位" style="width:180px" />
+     <button id="btnRecLoad" class="btn ghost small">↻ 刷新</button>
+     <button id="btnRecExport" class="btn ghost small">导出 CSV</button>
+    </div>
+   </div>
+   <p class="desc">其他管理员在手机 QQ 上的撤回/禁言不在此列；「禁言名单」是当前平台状态，不是历史记录。</p>
+   <div class="table-wrap">
+    <table class="lex-tbl rec-tbl">
+     <thead><tr><th style="width:76px">记录</th><th style="width:96px">时间</th><th>目标</th><th>处理</th><th style="width:88px">结果</th><th style="width:104px">操作人</th></tr></thead>
+     <tbody id="recRows"><tr><td colspan="6"><div class="empty"><span>加载中…</span></div></td></tr></tbody>
+    </table>
+   </div>
+   <div class="hint" id="recCount"></div>
+  </div>
+ </div>
+
+ <div class="modal-mask" id="recDetailMask">
+  <div class="modal-box rec-detail-box">
+   <div class="modal-title" id="recDetailTitle">记录详情</div>
+   <div class="modal-msg" id="recDetailBody"></div>
+   <div class="modal-btns"><button class="btn btn-primary" id="recDetailClose">关闭</button></div>
+  </div>
+ </div>
 
  <div class="rec-pane active" id="rec-pane-history">
  <div class="card">
