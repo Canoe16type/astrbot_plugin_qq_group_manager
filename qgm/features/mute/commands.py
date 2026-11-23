@@ -15,6 +15,8 @@ try:
 except ImportError:
     from qq_api import QQApi, QQApiError  # type: ignore
 
+from ..members import cache as members_cache
+
 
 async def _cmd_mute(host, event, parts):
         api = host._get_api(event.get_platform_id())
@@ -310,6 +312,19 @@ async def _cmd_recall(host, event, parts):
             await host._reply(event, host._render("msg_recall_need_quote"))
             return
 
+        # 事件 ID + 目标身份：撤回 API 只需要 message_id，但记录要能反查目标。
+        # 消息缓存里保存了 sender/sender_name，优先按 message_id 命中；
+        # 直接传 ID 撤回时若缓存已过期，则只保留 event_id/message_id。
+        raw = getattr(event.message_obj, "raw_message", None)
+        event_id = str(
+            getattr(raw, "event_id", "")
+            or getattr(raw, "id", "")
+            or ""
+        )
+        hit = members_cache._lookup_recent_msg(host, g, message_id) or {}
+        target_openid = str(hit.get("sender") or "")
+        target_name = str(hit.get("sender_name") or "")
+
         try:
             await api.recall_group_message(g, message_id)
             host.logger.info(f"撤回消息成功: group={g} message_id={message_id}")
@@ -322,6 +337,9 @@ async def _cmd_recall(host, event, parts):
                 source=source,
                 operator=event.get_sender_id(),
                 operator_name=event.get_sender_name() or "",
+                event_id=event_id,
+                target_openid=target_openid,
+                target_name=target_name,
             )
             host.logger.info(
                 f"已记录撤回历史: id={rec['id']} source={source} "

@@ -129,6 +129,17 @@ def _record_recent_msg(host, event):
             # noqa: silent-cleanup —— 降级兜底，不影响主流程
             pass
 
+def _lookup_recent_msg(host, group_openid, message_id):
+        """按消息 ID 取缓存记录（sender / sender_name / event 信息）。"""
+        try:
+            for r in host._recent_group_msgs.get(group_openid) or []:
+                if str(r.get("id") or "") == str(message_id or ""):
+                    return r
+        except Exception:
+            # noqa: silent-cleanup —— 缓存查询失败按未命中处理
+            pass
+        return {}
+
 def _match_recent_msg_id(host, group_openid, text, max_age=150.0):
         """在消息缓存中按原文查找最近的消息 ID（用于引用撤回）。
 

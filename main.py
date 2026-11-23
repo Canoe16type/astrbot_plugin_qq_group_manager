@@ -837,7 +837,9 @@ class QQGroupManager(Star):
 
     def _add_recall_record(self, group_openid: str, platform_id: str,
                            message_id: str, content: str, source: str,
-                           operator: str, operator_name: str = "") -> dict:
+                           operator: str, operator_name: str = "",
+                           event_id: str = "", target_openid: str = "",
+                           target_name: str = "") -> dict:
         """记录一条撤回操作。content 为被撤回消息的原文（引用撤回时能拿到，
         直接传 message_id 时平台接口不返回内容，则留空仅保留消息 ID）。"""
         self._recall_seq += 1
@@ -846,6 +848,9 @@ class QQGroupManager(Star):
             "group_openid": group_openid,
             "platform_id": platform_id,
             "message_id": message_id,
+            "event_id": event_id or "",
+            "target_openid": target_openid or "",
+            "target_name": target_name or "",
             "content": content or "",
             "source": source,  # quote=引用撤回, message_id=传ID撤回
             "recalled_at": int(time.time()),
