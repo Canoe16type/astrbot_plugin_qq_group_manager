@@ -1115,7 +1115,8 @@ class QQGroupManager(Star):
         # 没传就保留占位符，交给 _reply() 用「消息发送者」兜底展开。
         target = str(kw.get("at") or "").strip()
         if target:
-            kw["at"] = self._at_tag(target)
+            # 已经是 @ 标签（<qqbot-at-user ...> / <@...>）就不要二次包装
+            kw["at"] = target if target.startswith("<") else self._at_tag(target)
         kw = {k: (str(v) if v is not None else "") for k, v in kw.items()}
         try:
             result = tpl.format(**kw)
@@ -1137,6 +1138,7 @@ class QQGroupManager(Star):
     AVATAR_SRC_TIERS = (40, 100, 640)
     _AVATAR_PH_RE = re.compile(r"\{avatar(?::(\d+))?\}")
     _LEGACY_AT_RE = re.compile(r"<@!?([0-9A-Za-z_-]{8,})>")
+    _AT_TAG_RE = re.compile(r'<qqbot-at-user id="([^"]+)"\s*/>')
 
     def _at_tag(self, openid: str) -> str:
         """openid → QQ 官方 @ 标签；空值返回空串。"""
@@ -1151,6 +1153,42 @@ class QQGroupManager(Star):
             return str(cfg.get("appid") or "")
         except Exception:
             return ""
+
+    def _official_avatar_url(self, event, openid: str) -> str:
+        """从 QQ 官方群消息事件里取头像 URL（author.avatar / mentions[].avatar）。
+
+        官方 2026-11 起在消息事件下发头像链接；取不到时返回空串，
+        调用方回退到旧的 qlogo 拼接（兼容尚未透传的 AstrBot 版本）。
+        """
+        if event is None or not openid:
+            return ""
+        try:
+            raw = getattr(event.message_obj, "raw_message", None)
+        except Exception:
+            return ""
+        if raw is None:
+            return ""
+
+        def _avatar_of(u):
+            if isinstance(u, dict):
+                oid = str(u.get("member_openid") or u.get("id") or "")
+                av = u.get("avatar") or ""
+            else:
+                oid = str(getattr(u, "member_openid", "") or getattr(u, "id", "") or "")
+                av = getattr(u, "avatar", "") or ""
+            return oid, str(av)
+
+        author = raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", None)
+        if author is not None:
+            oid, av = _avatar_of(author)
+            if av and (not oid or oid == openid):
+                return av
+        mentions = raw.get("mentions") if isinstance(raw, dict) else getattr(raw, "mentions", None)
+        for u in mentions or []:
+            oid, av = _avatar_of(u)
+            if av and oid == openid:
+                return av
+        return ""
 
     def _expand_msg_modules(
         self, text: str, event: AstrMessageEvent | None, fmt: str,
@@ -1205,17 +1243,22 @@ class QQGroupManager(Star):
 
             def _sub(m):
                 # 纯文本 / 图片消息里塞不进 markdown 图片，静默去掉避免露出语法
-                if not (appid and openid) or fmt != "markdown":
+                if not openid or fmt != "markdown":
                     return ""
                 try:
                     disp = int(m.group(1)) if m.group(1) else 100
                 except ValueError:
                     disp = 100
                 disp = max(24, min(disp, 320))
-                # 小图档（≤40px 展示）只取 40 的源，别为一个表情大小的头像拉 640 大图
-                src = next((t for t in self.AVATAR_SRC_TIERS if t >= disp),
-                           self.AVATAR_SRC_TIERS[-1])
-                url = self.AVATAR_URL_FMT.format(appid=appid, openid=openid, size=src)
+                # 官方事件优先提供头像 URL；旧适配器没有该字段时回退 qlogo 拼接
+                url = self._official_avatar_url(event, openid)
+                if not url:
+                    if not appid:
+                        return ""
+                    # 小图档（≤40px 展示）只取 40 的源，别为一个表情大小的头像拉 640 大图
+                    src = next((t for t in self.AVATAR_SRC_TIERS if t >= disp),
+                               self.AVATAR_SRC_TIERS[-1])
+                    url = self.AVATAR_URL_FMT.format(appid=appid, openid=openid, size=src)
                 return f"![avatar #{disp}px #{disp}px]({url})"
 
             text = self._AVATAR_PH_RE.sub(_sub, text)
@@ -1224,6 +1267,23 @@ class QQGroupManager(Star):
             # 只升级 QQ 官方通道；频道/其他平台的 <@id> 不是 openid，不能动
             text = self._LEGACY_AT_RE.sub(lambda m: self._at_tag(m.group(1)), text)
         return text
+
+    def _plain_at_name(self, event, openid: str, group: str = "") -> str:
+        """纯文本模式下的 @ 显示：优先成员档案群昵称/昵称，其次发送者名，最后后 6 位。"""
+        name = ""
+        try:
+            rec = self.members.get(group, openid) if group else None
+            if rec:
+                name = str(rec.get("group_nickname") or rec.get("nickname") or "").strip()
+        except Exception:
+            name = ""
+        if not name and event is not None:
+            try:
+                if str(event.get_sender_id() or "") == openid:
+                    name = str(event.get_sender_name() or "").strip()
+            except Exception:
+                name = ""
+        return "@" + (name or str(openid)[-6:])
 
     async def _reply(self, event: AstrMessageEvent, text: str) -> None:
         """统一回复出口：按模板配置的格式决定怎么发。
@@ -1239,6 +1299,14 @@ class QQGroupManager(Star):
         content = self._expand_msg_modules(
             str(text), event, fmt, getattr(text, "tpl_target", "")
         )
+        if fmt != "markdown" and content:
+            group = ""
+            try:
+                group = str(event.get_group_id() or "") if event is not None else ""
+            except Exception:
+                group = ""
+            content = self._AT_TAG_RE.sub(
+                lambda m: self._plain_at_name(event, m.group(1), group), content)
         is_img = fmt == "image"
         img_url = ""
         if is_img:
@@ -2301,28 +2369,16 @@ class QQGroupManager(Star):
         所以内置模块占位符（{at} / {avatar}）必须先换成哨兵保护起来，
         渲染完再还原，否则会像写错变量一样被静默吃掉。
         """
-        # 第三步「插件配置」以前是漏的：面板「消息模板」页保存 mod_* 时写的是
-        # 插件配置（web_tpl_formats_save → _write_config_value），而这里只看
-        # moderation 存储里的全局/群覆盖，于是「改了审核话术但群里没变」。
-        store = getattr(self.mod, "templates", None)
-        if not isinstance(store, dict):
-            store = {}
-        group_override = ((store.get("groups") or {}).get(group) or {}).get(key)
-        global_override = (store.get("global") or {}).get(key)
-        if group_override:
-            tpl = group_override
-        elif global_override:
-            tpl = global_override
-        else:
-            tpl = ""
-            if hasattr(self, "config"):
-                tpl = self._read_config_value(
-                    ("templates", key), default="", legacy_keys=(key,)
-                )
-            if not str(tpl or "").strip():
-                # 回落到 moderation 自己的取法（含内置默认），保持可注入/可测试
-                tpl = ((self.mod.get_templates(group) or {}).get(key)
-                       or moderation.DEFAULT_TEMPLATES.get(key, ""))
+        # 1.9.0 迁移：审核话术统一走「设置 → 消息模板」（插件配置 templates.<key>）。
+        # 群规审核里的旧「本群覆盖 / 全局覆盖」保留数据但不再参与渲染，给一个版本迁移期。
+        tpl = ""
+        if hasattr(self, "config"):
+            tpl = self._read_config_value(
+                ("templates", key), default="", legacy_keys=(key,)
+            )
+        if not str(tpl or "").strip():
+            tpl = moderation.DEFAULT_TEMPLATES.get(key, "")
+
         target = str(kw.pop("at", "") or "")
         guards: list[str] = []
 

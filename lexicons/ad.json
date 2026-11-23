@@ -134,5 +134,16 @@
    "用刀横向切腹",
    "腾讯客服电话"
   ]
- }
+ },
+ "license": "MIT",
+ "source_details": [
+  {
+   "repo": "konsheng/Sensitive-lexicon",
+   "path": "Vocabulary/广告类型.txt",
+   "license": "MIT",
+   "copyright": "Copyright (c) 2024~2099 Konsheng",
+   "commit": "68a595fb24d3",
+   "modified": "抽取词条、过滤、去重、生成 JSON"
+  }
+ ]
 }

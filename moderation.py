@@ -113,7 +113,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
     "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
                       "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
-    "mod_hit": "根据{basis}，符合{category}，已被禁言{duration}",
+    "mod_hit": "根据{basis_detail}，此消息符合其规定描述，属于{category}，已被禁言{duration}",
     "mod_clean": "根据多重维度评判，此消息不涉嫌违规",
     "mod_hit_general": "根据多重维度评判，符合{category}，已被禁言{duration}",
     "mod_receiving": "已收到举报，正在审核中…",
@@ -122,7 +122,9 @@ DEFAULT_TEMPLATES: dict[str, str] = {
     "mod_quote_lost": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报",
     "mod_layer_off": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定",
     "mod_disabled": "本群未开启举报审核",
-    "mod_dry_run": "（试运行）根据{basis}，符合{category}，本应禁言{duration}",
+    "mod_dry_run": "（试运行）根据{basis_detail}，此消息符合其规定描述，属于{category}，本应禁言{duration}",
+    "mod_hit_semantic": "根据语义分析，此消息违反「{category_public}」，属于{severity_label}，已被禁言{duration}。",
+    "mod_dry_run_semantic": "（试运行）根据语义分析，此消息违反「{category_public}」，属于{severity_label}，本应禁言{duration}。",
     "mod_need_admin": "只有管理员可以修改群规",
     "mod_rules_empty": "本群还没有配置群规，审核暂时只按关键词和语义判断。管理员可以这样加一条：\n/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟\n（竖线隔开三段：规则名 | 说明 | 时长；时长不写默认 1 小时）",
     "mod_report_limit": "举报太频繁啦，请稍后再试。",
@@ -321,14 +323,16 @@ def decide_action(
         cat = str(verdict.get("category") or "")
         if cat:
             same = [r for r in usable if str(r.get("category") or "") == cat]
-            if len(same) == 1:
+            sev = str(verdict.get("severity") or "").lower()
+            exact = next((r for r in same if str(r.get("severity") or "").lower() == sev), None)
+            if exact is not None:
+                matched_rule = exact
+                match_by = "category+severity"
+            elif same and not (sev == "high" and rule_floor_high):
+                # 「其他违规」这类大类的唯一规则可能只是低档（如引人不适 10 分钟），
+                # 高危判定不能被它误标成轻罚；交给 severity 阶梯 + 严重度地板。
                 matched_rule = same[0]
                 match_by = "category"
-            elif same:
-                sev = str(verdict.get("severity") or "")
-                matched_rule = next((r for r in same if str(r.get("severity") or "") == sev), None)
-                if matched_rule is not None:
-                    match_by = "category+severity"
     if matched_rule is not None:
         seconds = _take(matched_rule)
 
@@ -413,7 +417,7 @@ def decide_action(
     # 规则时长地板：
     # 1) 只靠 category 兜底命中的规则不够精确，不能把任意档位压到极短；
     # 2) 判定为「严重」时，即使显式命中了一条短时长规则，也不能低于 high 档基础（可关）。
-    if smart and matched_rule is not None:
+    if matched_rule is not None:
         sev0 = str(verdict.get("severity") or "medium").lower()
         floor = 0
         if str(match_by).startswith("category"):
@@ -503,6 +507,7 @@ def build_system_prompt(
     group_rules: Optional[list[dict]] = None,
     few_shot: str = "",
     common_ban: str = "",
+    category_block: str = "",
 ) -> str:
     """构建**稳定前缀**：不含时间戳/群号/消息 ID，保证跨请求命中前缀缓存。
 
@@ -517,6 +522,8 @@ def build_system_prompt(
     parts.append("\n违规类型（category 必须取下列 key 之一）：")
     for k, v in cats.items():
         parts.append(f"- {k}：{v}")
+    if category_block.strip():
+        parts.append(category_block.strip())
     parts.append(
         "\n维度显示名（仅供你理解 basis 含义，输出仍用英文 key）："
         + "；".join(f"{k}={v}" for k, v in dims.items())

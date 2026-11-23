@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 from . import actions as audit_actions
+from . import basis as audit_basis
+from . import categories
 from . import detectors as audit_detectors
 
 try:
@@ -107,6 +109,14 @@ async def report_violation(host, event, parts):
             verdict = audit_detectors.merge(verdict, evidences)
 
         result = await host._mod_execute(event, g, rep, verdict, settings)
+        result["category_code"] = str(verdict.get("category_code") or "")
+        result["category_public"] = (
+            verdict.get("category_public")
+            or host.mod.get_cat_names(g).get(str(result.get("category") or ""), "")
+            or str(result.get("category") or "")
+            or "未分类违规"
+        )
+        result["severity_label"] = categories.severity_label(result.get("severity") or "")
         # 变体疑似：没被禁言路径处理掉的话，这里按群配置决定是否撤回（只撤回，不禁言）
         if variant and not result["executed"]:
             await host._mod_variant_action(event, g, rep, settings, variant, result)
@@ -126,6 +136,9 @@ async def report_violation(host, event, parts):
             "violation": result["violation"],
             "basis": result["basis"],
             "category": result["category"],
+            "category_code": result.get("category_code") or "",
+            "category_public": result.get("category_public") or "",
+            "severity_label": result.get("severity_label") or "",
             "confidence": result["confidence"],
             "reason": result["reason"],
             "rule_name": result["rule_name"],
@@ -195,10 +208,15 @@ async def report_violation(host, event, parts):
                     "需要处理的话，请当事人重新引用原消息发一次 `/群管 举报`。",
                 )
                 return
+            dry_tpl = "mod_dry_run" if result.get("rule_name") else "mod_dry_run_semantic"
             await host._reply(event, host._mod_tpl(
-                g, "mod_dry_run",
+                g, dry_tpl,
                 basis=host.mod.get_dim_names(g).get(str(result["basis"]), str(result["basis"] or "")),
+                basis_detail=audit_basis.basis_detail(host, g, result),
+                rule_name=result.get("rule_name") or "",
                 category=host.mod.get_cat_names(g).get(str(result["category"]), str(result["category"] or "")),
+                category_public=result.get("category_public") or "",
+                severity_label=result.get("severity_label") or "违规",
                 duration=result["duration"],
             ))
             return
@@ -232,10 +250,16 @@ async def report_violation(host, event, parts):
             return
         if str(result.get("action") or "") == "warn":
             return          # 警告已经公开发过，别再补一条“已禁言”
+        hit_tpl = "mod_hit" if result.get("rule_name") else "mod_hit_semantic"
         await host._reply(event, host._mod_tpl(
-            g, "mod_hit",
+            g, hit_tpl,
             basis=host.mod.get_dim_names(g).get(str(result["basis"]), "多重维度"),
+            basis_detail=audit_basis.basis_detail(host, g, result),
+            rule_name=result.get("rule_name") or "",
+            rule_index=audit_basis.basis_detail(host, g, result),
             category=host.mod.get_cat_names(g).get(str(result["category"]), str(result["category"] or "违规")),
+            category_public=result.get("category_public") or "",
+            severity_label=result.get("severity_label") or "违规",
             duration=result["duration"],
             user=rep.get("sender_name") or "",
             reason=result["reason"],

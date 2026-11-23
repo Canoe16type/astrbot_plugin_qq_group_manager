@@ -470,20 +470,22 @@ A1B2C3D4E5F6...  , 小红"></textarea>
 
  <!-- ③ 话术模板 -->
  <section class="mod-pane" id="mod-pane-templates">
+ <div class="notice warn">
+ <b>话术已迁移到「设置 → 消息模板」。</b>
+ 本页从 1.9.0 起仅展示可用话术清单，<b>在此修改不再生效</b>；请到设置页的「审核」分组统一修改（与其他话术同一套配置）。旧的本群覆盖数据保留一个版本用于回退，下个版本移除。
+ </div>
  <p class="desc">
- 留空表示<b>继承全局默认</b>（占位符里显示的就是全局值）。可用变量：
- <code>{basis}</code> <code>{category}</code> <code>{duration}</code> <code>{user}</code> <code>{reason}</code>
- <br/><b>警告 / 转人工 / 撤销三条</b>另有：<code>{at}</code> <code>{rule}</code> <code>{severity}</code>
- <code>{next}</code> <code>{vid}</code> <code>{punish}</code> <code>{unmute}</code> <code>{operator}</code> <code>{reason_line}</code>
+ 本页只展示有哪些话术，不再提供编辑。每条话术支持的变量不同，
+ 请到 <b>设置 → 消息模板</b> 编辑；变量含义、纯文本 / Markdown 显示差异见
+ <b>右上角「帮助中心 → 模板变量」</b>（模板页的「消息模板变量怎么填？」可直接跳转）。
  </p>
- <div id="tpl-fields" class="grid one"></div>
+ <div id="tpl-list" class="grid one"></div>
  <h3 class="h3">维度显示名（<code>{basis}</code> 的取值）</h3>
  <div id="dim-fields" class="grid two"></div>
  <h3 class="h3">违规类型显示名（<code>{category}</code> 的取值）</h3>
  <div id="cat-fields" class="grid two"></div>
  <div class="row-actions">
- <button class="btn btn-primary" id="btn-save-templates">保存本群话术</button>
- <button class="btn" id="btn-clear-templates">清空本群覆盖（恢复继承）</button>
+ <p class="hint">旧「保存本群话术」已停用；请到 设置 → 消息模板 修改。</p>
  </div>
  </section>
 
@@ -783,15 +785,14 @@ A1B2C3D4E5F6...  , 小红"></textarea>
    <button data-sub="templates">消息模板</button>
  </div>
 
- <div class="row-actions" style="margin:-4px 0 10px">
-   <button class="btn ghost small" id="btnGoModTpl" title="按群保存的话术在「群规审核 → 话术模板」；本页改的是所有群共用的全局默认">→ 按群话术（群规审核）</button>
- </div>
 
  <div class="md-help-bar" id="tplMdBar" style="display:none">
  <svg class="ico s"><use href="#i-help"/></svg>
  <span>模板格式选 <b>Markdown</b> 后可用标题、加粗、链接、图片等语法；不知道怎么写就看「Markdown 大全」，每条都有可复制的写法。</span>
  <button class="btn ghost small" id="tplMdHelp" title="在帮助中心打开 Markdown 语法大全">
  <svg class="ico s"><use href="#i-book"/></svg>Markdown 怎么写？</button>
+ <button class="btn ghost small" id="tplVarHelp" title="打开帮助中心的「模板变量」页">
+ <svg class="ico s"><use href="#i-help"/></svg>消息模板变量怎么填？</button>
  </div>
 
  <div class="set-toolbar">
@@ -831,6 +832,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
       <button class="on" data-tab="terms">术语</button>
       <button data-tab="cmd">指令</button>
       <button data-tab="md">Markdown</button>
+      <button data-tab="tplvars">模板变量</button>
       <button data-tab="faq">常见问题</button>
       <button data-tab="docs">文档</button>
     </div>

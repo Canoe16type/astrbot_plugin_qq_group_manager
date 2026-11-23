@@ -179,7 +179,7 @@ async def cmd_revoke(host, event, parts: list[str]) -> None:
         await host._reply(event, host._mod_tpl(
             g, "msg_mod_revoke",
             vid=vid,
-            at=host._at_tag(target) if target else "",
+            at=target,
             punish=host._punish_text(rec),
             unmute=unmute_txt + (f"（{unmute.get('code')}）" if unmute.get("code") else ""),
             operator=event.get_sender_name() or event.get_sender_id(),

@@ -300,5 +300,16 @@
    "他妈ㄉ王八蛋",
    "我操你祖宗十八代"
   ]
- }
+ },
+ "license": "Unlicense",
+ "source_details": [
+  {
+   "repo": "censor-text/profanity-list",
+   "path": "list/zh.txt",
+   "license": "Unlicense",
+   "copyright": "public domain",
+   "commit": "fe2e5b55130f",
+   "modified": "抽取词条、过滤、去重、生成 JSON"
+  }
+ ]
 }
