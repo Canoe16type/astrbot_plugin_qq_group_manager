@@ -62,4 +62,20 @@ async def web_records_detail(host):
     row = get_record(host, str(request.query.get("id", "") or ""), group=group)
     if not row:
         return json_response({"error": "记录不存在"}, status_code=404)
-    return json_response({"item": _item(row)})
+    item = _item(row)
+    item["content"] = ""
+    # 撤回的原始文字、判定的原文只给面板详情，不进群消息/表格。
+    try:
+        if row.kind == "recall":
+            for r in (host._recall_history.get(row.group) or []):
+                if int(r.get("id") or -1) == row.id:
+                    item["content"] = str(r.get("content") or "")
+                    break
+        elif row.kind == "verdict":
+            for r in host.mod.list_verdicts(group=row.group, limit=100000):
+                if int(r.get("id") or -1) == row.id:
+                    item["content"] = str(r.get("content") or "")
+                    break
+    except Exception as e:
+        host.logger.warning(f"读取记录原文失败: {e}")
+    return json_response({"item": item})

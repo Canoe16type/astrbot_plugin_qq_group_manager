@@ -33,6 +33,20 @@ def _host():
 
 
 class RecordsWebTest(unittest.TestCase):
+    def test_recall_detail_keeps_content(self):
+        host = _host()
+        host._recall_history = {"g": [{
+            "id": 1, "group_openid": "g", "recalled_at": 100,
+            "target_openid": "u1", "target_name": "小明",
+            "content": "原始消息", "message_id": "m1", "event_id": "e1",
+        }]}
+        class Req:
+            query = _Query({"group": "g", "id": "R1"})
+        with patch.object(web, "request", Req()), \
+             patch.object(web, "json_response", lambda d, **k: d):
+            out = asyncio.run(web.web_records_detail(host))
+        self.assertEqual(out["item"]["content"], "原始消息")
+
     def test_list_returns_json(self):
         with patch.object(web, "request", _Req()), \
              patch.object(web, "json_response", lambda d, **k: d):

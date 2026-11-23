@@ -900,9 +900,24 @@ document.addEventListener('keydown',e=>{
       if (it.detail && it.detail.category_public) lines.push(["类别", it.detail.category_public]);
       if (it.detail && it.detail.error_code) lines.push(["错误码", it.detail.error_code]);
       if (it.legacy) lines.push(["备注", "历史记录缺少目标 ID，仅管理员可按群查看"]);
-      $("recDetailBody").innerHTML = lines.map(([k, v]) =>
+      let html = lines.map(([k, v]) =>
         `<div style="display:flex;gap:8px;padding:3px 0"><b style="min-width:56px;color:#667">${esc(k)}</b><span style="word-break:break-word">${esc(v)}</span></div>`
       ).join("");
+      if (r.content) {
+        html += `<div style="margin-top:10px;border-top:1px solid #eee;padding-top:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b>原文</b>
+          <button class="btn ghost small" id="recCopyContent">复制</button></div>
+          <pre style="white-space:pre-wrap;word-break:break-word;max-height:24vh;overflow:auto;background:#f7f8fa;padding:8px;border-radius:6px;margin:6px 0 0">${esc(r.content)}</pre>
+        </div>`;
+      } else if (it.kind === "recall") {
+        html += `<div style="margin-top:10px;color:#888">旧记录未保存原文</div>`;
+      }
+      $("recDetailBody").innerHTML = html;
+      const cp = $("recCopyContent");
+      if (cp) cp.onclick = async () => {
+        try { await navigator.clipboard.writeText(r.content); showToast("已复制原文"); }
+        catch (e) { showToast("复制失败，请手动选择"); }
+      };
       $("recDetailMask").classList.add("show");
     } catch (e) { showToast(`详情加载失败：${e.message || e}`); }
   }

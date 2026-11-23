@@ -1009,3 +1009,8 @@ select{max-width:100%}
 .rec-tbl td { vertical-align: middle; }
 .rec-detail-box { width: min(92vw, 560px); }
 .rec-detail-box .modal-msg { max-height: 60vh; overflow: auto; }
+
+#rec-pane-all .table-wrap { overflow-x: auto; }
+.rec-tbl { min-width: 1020px; table-layout: auto; }
+.rec-tbl th, .rec-tbl td { padding: 8px 10px; white-space: nowrap; }
+.rec-tbl td:nth-child(6) { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
