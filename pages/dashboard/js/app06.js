@@ -863,7 +863,7 @@ document.addEventListener('keydown',e=>{
       ? list.map(fmtRow).join("")
       : `<tr><td colspan="7"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
     const count = $("recCount");
-    if (count) count.textContent = `共 ${list.length} 条 · 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
+    if (count) count.textContent = `当前显示 ${list.length} 条（最多 50 条）· 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
   }
   async function load() {
     const box = $("recRows");
@@ -938,17 +938,19 @@ document.addEventListener('keydown',e=>{
   if ($("btnRecExport")) $("btnRecExport").addEventListener("click", exportCsv);
   if ($("btnRecClear")) $("btnRecClear").addEventListener("click", async () => {
     const kind = $("recFilterKind") ? $("recFilterKind").value : "";
-    if (!kind) { showToast("先在顶部选择要清空的类型（判定/禁言/撤回）"); return; }
     const g = groupValue();
     const scope = g ? "当前群" : "全部群";
-    const name = { verdict: "判定记录", mute: "禁言历史", recall: "撤回历史", kick: "踢人记录" }[kind];
-    if (kind === "kick") { showToast("踢人记录暂不支持清空"); return; }
-    if (!(await showConfirm(`确认清空${scope}的${name}？不可恢复。`))) return;
-    const body = kind === "verdict" ? { group: g } : { group_openid: g };
-    const ep = { verdict: "mod/verdicts/clear", mute: "history/clear", recall: "recalls/clear" }[kind];
+    const kindName = kind ? ({ verdict: "判定记录", mute: "禁言记录", recall: "撤回记录", kick: "踢人记录" }[kind] || "记录") : "全部类型记录";
+    if (!kind && !g) {
+      const msg = "您现在删除的是「全部群」的「全部记录」，您真的希望全部删除吗？";
+      if (!(await showConfirm(msg))) return;
+      if (!(await showConfirm("最后确认：这一操作不可恢复，确定继续删除全部群的判定、禁言、撤回、踢人记录吗？"))) return;
+    } else {
+      if (!(await showConfirm(`确认清空${scope}的${kindName}？不可恢复。`))) return;
+    }
     try {
-      const r = await bridgeNow().apiPost(ep, body);
-      showToast(r.message || `已清空 ${r.cleared || 0} 条`);
+      const r = await bridgeNow().apiPost("records/clear", { group: g, kind });
+      showToast(`已清空 ${r.cleared || 0} 条`);
       load();
     } catch (e) { showToast(`清空失败：${e.message || e}`); }
   });

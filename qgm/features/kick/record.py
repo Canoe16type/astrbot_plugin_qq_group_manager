@@ -35,6 +35,19 @@ def iter_rows(host, group: str = "") -> list[dict]:
     return [r for r in rows if not group or r.get("group") == group]
 
 
+def clear(host, group: str = "") -> int:
+    """清空踢人记录；传 group 只清该群。返回删除条数。"""
+    data = storage.read_json(str(_path(host)), default={}) or {}
+    rows = data.get("records") if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        return 0
+    keep = [r for r in rows if group and r.get("group") != group]
+    removed = len(rows) - len(keep)
+    if removed:
+        storage.write_json_atomic(str(_path(host)), {"version": 1, "records": keep})
+    return removed
+
+
 def recent(host, group: str = "", limit: int = 10) -> list[dict]:
     data = storage.read_json(str(_path(host)), default={}) or {}
     rows = data.get("records") if isinstance(data, dict) else []

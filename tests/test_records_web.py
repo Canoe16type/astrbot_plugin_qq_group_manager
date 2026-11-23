@@ -32,7 +32,30 @@ def _host():
     )
 
 
+class _ClearHost:
+    def __init__(self):
+        self.mod = SimpleNamespace(clear_verdicts=lambda group="": 2)
+        self._mute_history = {"g": [{"id": 1}]}
+        self._recall_history = {"g": [{"id": 1}]}
+        self.logger = SimpleNamespace(info=lambda *a, **k: None)
+        self._plugin_data_dir = lambda: "/tmp/nonexistent-qgm"
+    def _save_mute_history(self): pass
+    def _save_recall_history(self): pass
+
+
 class RecordsWebTest(unittest.TestCase):
+    def test_clear_all_types(self):
+        class Req:
+            query = _Query({})
+            @staticmethod
+            async def json(default=None): return {"group": "", "kind": ""}
+        with patch.object(web, "request", Req()), \
+             patch.object(web, "json_response", lambda d, **k: d):
+            out = asyncio.run(web.web_records_clear(_ClearHost()))
+        self.assertEqual(out["detail"]["verdict"], 2)
+        self.assertEqual(out["detail"]["mute"], 1)
+        self.assertEqual(out["detail"]["recall"], 1)
+
     def test_recall_detail_keeps_content(self):
         host = _host()
         host._recall_history = {"g": [{
