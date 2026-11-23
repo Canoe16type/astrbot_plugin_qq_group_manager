@@ -5,7 +5,7 @@ import time
 
 from astrbot.api.web import json_response, request
 
-from . import query as records_query
+from .query import get as get_record, query as query_records
 
 
 def _time_text(ts) -> str:
@@ -45,7 +45,7 @@ async def web_records(host):
     days = max(0, min(365, request.query.get("days", 0, type=int)))
     limit = max(1, min(50, request.query.get("limit", 20, type=int)))
     since = time.time() - days * 86400 if days else 0.0
-    rows = records_query.query(
+    rows = query_records(
         host, group=group, kinds=[kind] if kind else None,
         target_id=target, since=since, limit=limit,
     )
@@ -59,7 +59,7 @@ async def web_records(host):
 async def web_records_detail(host):
     """GET /records/detail?id=V12&group="""
     group = str(request.query.get("group", "") or "")
-    row = records_query.get(host, str(request.query.get("id", "") or ""), group=group)
+    row = get_record(host, str(request.query.get("id", "") or ""), group=group)
     if not row:
         return json_response({"error": "记录不存在"}, status_code=404)
     return json_response({"item": _item(row)})
