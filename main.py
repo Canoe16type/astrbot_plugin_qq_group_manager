@@ -3447,7 +3447,7 @@ class QQGroupManager(Star):
         设置页直接按这份 schema 渲染表单——它是 AstrBot 配置面板与插件本体
         共用的同一份定义，所以页面永远和 AstrBot 的配置项保持一致。
         """
-        if self._schema_cache is not None:
+        if getattr(self, "_schema_cache", None):
             return self._schema_cache
         path = Path(__file__).with_name("_conf_schema.json")
         try:
