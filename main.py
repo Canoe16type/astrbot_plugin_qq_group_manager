@@ -2825,10 +2825,6 @@ class QQGroupManager(Star):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_settings_save(self)
 
-    async def web_mod_templates_save(self):
-        """薄壳：审核域 API 见 qgm.features.audit.web。"""
-        return await audit_web.web_mod_templates_save(self)
-
     async def web_mod_verdicts_revoke(self):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_verdicts_revoke(self)

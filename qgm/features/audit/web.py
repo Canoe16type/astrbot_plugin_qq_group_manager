@@ -258,36 +258,6 @@ async def web_mod_settings_save(host):
             patches["whitelist"] = [str(x)[:64] for x in patches["whitelist"]][:200]
         return json_response({"saved": True, "settings": host.mod.set_settings(g, patches)})
 
-async def web_mod_templates_save(host):
-        payload = await request.json(default={})
-        scope = str(payload.get("scope") or "global")
-        values = payload.get("templates") or {}
-        if not isinstance(values, dict):
-            return json_response({"error": "invalid templates"})
-        clean = {}
-        for k, v in values.items():
-            if k not in moderation.DEFAULT_TEMPLATES and k not in ("dim_names", "cat_names", "mod_report_limit"):
-                continue
-            if k in ("dim_names", "cat_names"):
-                if isinstance(v, dict):
-                    clean[k] = {str(a)[:30]: str(b)[:60] for a, b in v.items()}
-                continue
-            clean[k] = str(v)[:400]
-        if scope == "global":
-            # 维度/分类显示名是全局的，单独存放
-            dims = clean.pop("dim_names", None)
-            cats = clean.pop("cat_names", None)
-            if dims or cats:
-                host.mod.templates["dim_names"] = {**(host.mod.templates.get("dim_names") or {}), **(dims or {})}
-                host.mod.templates["cat_names"] = {**(host.mod.templates.get("cat_names") or {}), **(cats or {})}
-                host.mod._save(host.mod._tpl_path, host.mod.templates)
-            host.mod.set_templates("global", clean)
-        else:
-            clean.pop("dim_names", None)
-            clean.pop("cat_names", None)
-            host.mod.set_templates(scope, clean)
-        return json_response({"saved": True})
-
 async def web_mod_verdicts_revoke(host):
         """POST /mod/verdicts/revoke {id, reason} — 面板撤销（操作者为当前登录管理员）。"""
         payload = await request.json(default={})
