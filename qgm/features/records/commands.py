@@ -119,6 +119,18 @@ async def cmd_records(host, event, parts):
     sender = str(event.get_sender_id() or "")
     is_admin = bool(host._is_admin(event))
 
+    if not is_admin:
+        now = time.time()
+        cd = getattr(host, "_records_cd", None)
+        if cd is None:
+            cd = {}
+            host._records_cd = cd
+        key = (group, sender)
+        if now - cd.get(key, 0) < 5:
+            await host._reply(event, "查询太频繁，请 5 秒后再试。")
+            return
+        cd[key] = now
+
     if opt["detail"] is not None:
         row = get_record(host, str(opt["detail"]), group=group)
         if not row:
@@ -156,6 +168,12 @@ async def cmd_records(host, event, parts):
     target_id = sender if opt["mine"] else ""
     if is_admin and not opt["mine"]:
         mentioned = host._mentioned_openids(event)
+        self_id = ""
+        try:
+            self_id = str(event.get_self_id() or "")
+        except Exception:
+            self_id = ""
+        mentioned = [m for m in mentioned if str(m) and str(m) != self_id]
         if mentioned:
             target_id = mentioned[0]
     since = time.time() - opt["days"] * 86400 if opt["days"] else 0.0

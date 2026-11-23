@@ -159,6 +159,7 @@ document.addEventListener('keydown',e=>{
   let current = "";
   let page = 1;
   let total = 0;
+  let loadSeq = 0;
 
   function toast(msg, isErr) {
     const el = $("modToast");
@@ -827,6 +828,8 @@ document.addEventListener('keydown',e=>{
   const KIND = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
   const ACTION = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
   let rows = [];
+  let page = 1;
+  let total = 0;
 
   function groupValue() {
     const el = $("recFilterGroup");
@@ -836,12 +839,7 @@ document.addEventListener('keydown',e=>{
     const el = $("recFilterTarget");
     return el ? (el.value || "").trim().toLowerCase() : "";
   }
-  function matchTarget(row) {
-    const q = targetQuery();
-    if (!q) return true;
-    return (row.target_name || "").toLowerCase().includes(q) ||
-      (row.target_ids || []).some((x) => String(x).toLowerCase().endsWith(q));
-  }
+  function matchTarget(row) { return true; }
   function fmtRow(r) {
     const target = r.target_name || (r.target_id ? r.target_id.slice(-6) : "-");
     const result = r.result || (r.ok ? "成功" : "失败");
@@ -858,27 +856,37 @@ document.addEventListener('keydown',e=>{
   function render() {
     const box = $("recRows");
     if (!box) return;
-    const list = rows.filter(matchTarget);
+    const list = rows;
     box.innerHTML = list.length
       ? list.map(fmtRow).join("")
       : `<tr><td colspan="7"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
     const count = $("recCount");
-    if (count) count.textContent = `当前显示 ${list.length} 条（最多 50 条）· 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
+    if (count) count.textContent = `共 ${total} 条 · 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
+    const info = $("recPageInfo");
+    const pages = Math.max(1, Math.ceil(total / 50));
+    if (info) info.textContent = total ? `第 ${page} / ${pages} 页` : "";
+    if ($("btnRecPrev")) $("btnRecPrev").disabled = page <= 1;
+    if ($("btnRecNext")) $("btnRecNext").disabled = page >= pages;
   }
   async function load() {
     const box = $("recRows");
+    const seq = ++loadSeq;
     if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载中…</span></div></td></tr>`;
     try {
       fillGroupSelect("recFilterGroup", "全部群");
-      const params = { limit: 50 };
+      const params = { limit: 50, page };
       const g = groupValue();
       if (g) params.group = g;
       const kind = $("recFilterKind") ? $("recFilterKind").value : "";
       if (kind) params.kind = kind;
       const days = $("recFilterDays") ? $("recFilterDays").value : "0";
       if (days && days !== "0") params.days = days;
+      const tq = targetQuery();
+      if (tq) params.target = tq;
       const r = await bridgeNow().apiGet("records", params);
+      if (seq !== loadSeq) return;
       rows = r.items || [];
+      total = Number(r.total || 0);
       render();
     } catch (e) {
       if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载失败：${esc(e.message || e)}</span></div></td></tr>`;
@@ -955,9 +963,18 @@ document.addEventListener('keydown',e=>{
     } catch (e) { showToast(`清空失败：${e.message || e}`); }
   });
   ["recFilterGroup", "recFilterKind", "recFilterDays"].forEach((id) => {
-    if ($(id)) $(id).addEventListener("change", load);
+    if ($(id)) $(id).addEventListener("change", () => { page = 1; load(); });
   });
-  if ($("recFilterTarget")) $("recFilterTarget").addEventListener("input", render);
+  let targetTimer = null;
+  if ($("recFilterTarget")) $("recFilterTarget").addEventListener("input", () => {
+    clearTimeout(targetTimer); targetTimer = setTimeout(() => { page = 1; load(); }, 250);
+  });
+  if ($("btnRecPrev")) $("btnRecPrev").addEventListener("click", () => {
+    if (page > 1) { page--; load(); }
+  });
+  if ($("btnRecNext")) $("btnRecNext").addEventListener("click", () => {
+    if (page * 50 < total) { page++; load(); }
+  });
   if ($("recRows")) $("recRows").addEventListener("click", (e) => {
     const tr = e.target.closest("tr[data-rec-id]");
     if (tr) openDetail(tr.dataset.recId);

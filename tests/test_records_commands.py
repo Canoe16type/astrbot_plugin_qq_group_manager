@@ -66,6 +66,13 @@ class RecordsCommandTest(unittest.TestCase):
         asyncio.run(commands._send_markdown(_host(), event, "### hi"))
         self.assertTrue(event.sent)
 
+    def test_member_cooldown(self):
+        host = _host(False)
+        event = _Event("u1")
+        self._run(host, event, ["/记录", "我的"])
+        self._run(host, event, ["/记录", "我的"])
+        self.assertIn("频繁", event.sent[-1][1])
+
     def test_member_requires_mine(self):
         sent = self._run(_host(False), _Event(), ["/记录"])
         self.assertEqual(sent[0][0], "reply")

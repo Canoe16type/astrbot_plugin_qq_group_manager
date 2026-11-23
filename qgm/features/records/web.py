@@ -6,7 +6,7 @@ import time
 from astrbot.api.web import json_response, request
 
 from ..kick import record as kick_record
-from .query import get as get_record, query as query_records
+from .query import get as get_record, query_page as query_records_page
 
 
 def _time_text(ts) -> str:
@@ -51,16 +51,20 @@ async def web_records(host):
         limit = int(request.query.get("limit", 20) or 20)
     except (TypeError, ValueError):
         limit = 20
+    try:
+        page = int(request.query.get("page", 1) or 1)
+    except (TypeError, ValueError):
+        page = 1
     days = max(0, min(365, days))
     limit = max(1, min(50, limit))
     since = time.time() - days * 86400 if days else 0.0
-    rows = query_records(
+    rows, total = query_records_page(
         host, group=group, kinds=[kind] if kind else None,
-        target_id=target, since=since, limit=limit,
+        target_text=target, since=since, page=page, per_page=limit,
     )
     return json_response({
         "items": [_item(r) for r in rows],
-        "total": len(rows),
+        "total": total, "page": max(1, page), "per_page": limit,
         "coverage": "仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。",
     })
 

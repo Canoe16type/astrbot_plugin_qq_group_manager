@@ -172,22 +172,45 @@ def iter_rows(host, group: str = "") -> Iterable[RecordRow]:
         yield _with_display(_kick_row(rec))
 
 
-def query(host, group: str = "", kinds: Optional[Iterable[str]] = None,
-          target_id: str = "", since: float = 0.0, limit: int = 50) -> list[RecordRow]:
-    """统一查询，按时间倒序；target_id 只匹配已保存的目标身份。"""
+def _filtered(host, group: str = "", kinds: Optional[Iterable[str]] = None,
+              target_id: str = "", target_text: str = "", since: float = 0.0) -> list[RecordRow]:
     want = {str(k) for k in kinds} if kinds else set(KINDS)
     want &= set(KINDS)
+    q = str(target_text or "").strip().lower()
     out = []
     for row in iter_rows(host, group=group):
         if row.kind not in want:
             continue
         if target_id and target_id not in row.target_ids:
             continue
+        if q:
+            names = str(row.target_name or "").lower()
+            if q not in names and not any(str(t).lower().endswith(q) for t in row.target_ids):
+                continue
         if since and row.ts < since:
             continue
         out.append(row)
     out.sort(key=lambda r: (r.ts, r.id), reverse=True)
-    return out[: max(1, min(50, int(limit or 50)))]
+    return out
+
+
+def query(host, group: str = "", kinds: Optional[Iterable[str]] = None,
+          target_id: str = "", target_text: str = "", since: float = 0.0,
+          limit: int = 50) -> list[RecordRow]:
+    """统一查询，按时间倒序；命令侧最多 50 条。"""
+    return _filtered(host, group, kinds, target_id, target_text, since)[: max(1, min(50, int(limit or 50)))]
+
+
+def query_page(host, group: str = "", kinds: Optional[Iterable[str]] = None,
+               target_id: str = "", target_text: str = "", since: float = 0.0,
+               page: int = 1, per_page: int = 20):
+    """分页查询，返回 (当前页记录, 总数)。"""
+    rows = _filtered(host, group, kinds, target_id, target_text, since)
+    total = len(rows)
+    per_page = max(1, min(50, int(per_page or 20)))
+    page = max(1, int(page or 1))
+    start = (page - 1) * per_page
+    return rows[start:start + per_page], total
 
 
 def get(host, display_id: str, group: str = "") -> Optional[RecordRow]:

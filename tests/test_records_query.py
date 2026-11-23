@@ -69,6 +69,14 @@ class RecordsQueryTest(unittest.TestCase):
         self.assertTrue(row.legacy)
         self.assertNotIn("R1", [r.display_id for r in query.query(self.host, group="g", target_id="u1")])
 
+    def test_page_and_target_text(self):
+        rows, total = query.query_page(self.host, group="g", target_text="小", page=1, per_page=2)
+        self.assertEqual(total, 4)
+        self.assertEqual(len(rows), 2)
+        rows, total = query.query_page(self.host, group="g", target_text="u3", page=1, per_page=2)
+        self.assertEqual([r.display_id for r in rows], ["K7"])
+        self.assertEqual(total, 1)
+
     def test_get_invalid(self):
         self.assertIsNone(query.get(self.host, "X1", group="g"))
         self.assertIsNone(query.get(self.host, "V999", group="g"))
