@@ -44,6 +44,8 @@ from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import json_response, request, stream_response
 
+from qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
+
 from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
 from .qgm.kernel.text import short_id
@@ -1045,30 +1047,7 @@ class QQGroupManager(Star):
     # 为什么需要：升级后 AstrBot 可能还没把新模板项写进配置文件，
     # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
     # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
-    TPL_FALLBACKS = {
-        "msg_mod_unattributed": "⚠️ 已判定：{verdict}。\n"
-                               "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
-                               "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
-        "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-        "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
-                          "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
-        "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n"
-                        "命中：{rule}\n判定：{severity}\n理由：{reason}\n"
-                        "后续：再次出现将禁言 {next}\n有异议请联系群管理。",
-        "msg_join_request_auto_approved": (
-            "✅ 新成员 {username} 的入群申请已由自动审批策略通过（策略 {strategy}）"
-        ),
-        "msg_join_request_button_ok": "✅ 已通过 {username} 的入群申请",
-        "msg_join_request_button_rejected": "🚫 已拒绝 {username} 的入群申请",
-        "msg_join_request_button_gone": (
-            "⚠️ 这条入群申请已处理或已失效（可能刚被其他人处理），无需重复操作"
-        ),
-        "msg_join_request_button_denied": "⛔ 你没有处理入群申请的权限，请让群主/管理员操作",
-        "msg_join_request_button_failed": "❌ 处理 {username} 的入群申请失败：{error}",
-        "msg_report_daily": (
-            "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人"
-        ),
-    }
+    TPL_FALLBACKS = TEMPLATE_DEFAULTS
 
     def _tpl_formats_path(self) -> str:
         return os.path.join(self._plugin_data_dir(), "msg_formats.json")

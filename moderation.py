@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+from qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
+
 import hashlib
 import json
 import os
@@ -105,45 +107,7 @@ def is_strike_muted(v: dict) -> bool:
 
 #: 默认话术（与用户指定的两条一致，第三条为「综合判定违规但无对应规则」兜底）
 #: 注意：插件没有「人工审核」环节，话术不得承诺人工处理；记录位置=面板「记录 → 判定记录」
-DEFAULT_TEMPLATES: dict[str, str] = {
-    "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n命中：{rule}\n判定：{severity}\n理由：{reason}\n后续：再次出现将禁言 {next}\n有异议请联系群管理。",
-    "msg_mod_unattributed": "⚠️ 已判定：{verdict}。\n"
-                            "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
-                            "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
-    "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-    "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
-                      "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
-    "mod_hit": "根据{basis_detail}，此消息符合其规定描述，属于{category}，已被禁言{duration}",
-    "mod_clean": "根据多重维度评判，此消息不涉嫌违规",
-    "mod_hit_general": "根据多重维度评判，符合{category}，已被禁言{duration}",
-    "mod_receiving": "已收到举报，正在审核中…",
-    "mod_failed": "审核未完成（{error}），已记入审核记录",
-    "mod_no_quote": "请先长按违规消息选择「回复」引用它，再发送 /群管 举报",
-    "mod_quote_lost": "没找到你引用的那条消息（可能太旧或已撤回），麻烦重新引用违规消息后再发一次 /群管 举报",
-    "mod_layer_off": "本群已关闭模型判定（仅关键词层），本次未命中词库，未做语义判定",
-    "mod_disabled": "本群未开启举报审核",
-    "mod_dry_run": "（试运行）根据{basis_detail}，此消息符合其规定描述，属于{category}，本应禁言{duration}",
-    "mod_hit_semantic": "根据语义分析，此消息违反「{category_public}」，属于{severity_label}，已被禁言{duration}。",
-    "mod_dry_run_semantic": "（试运行）根据语义分析，此消息违反「{category_public}」，属于{severity_label}，本应禁言{duration}。",
-    "mod_need_admin": "只有管理员可以修改群规",
-    "mod_rules_empty": "本群还没有配置群规，审核暂时只按关键词和语义判断。管理员可以这样加一条：\n/群管 群规 添加 刷屏 | 连续刷无意义内容 | 10分钟\n（竖线隔开三段：规则名 | 说明 | 时长；时长不写默认 1 小时）",
-    "mod_report_limit": "举报太频繁啦，请稍后再试。",
-    "mod_uncertain": "判定把握不足，本次未自动处理，已记入审核记录",
-    "mod_exempt": "该成员在豁免名单中，本次不做处理",
-    "mod_variant_recalled": "该消息疑似用变体写法绕过检测（{method}），已撤回并记录，请管理员复核",
-    "mod_variant_logged": "该消息疑似用变体写法绕过检测（{method}），已记录待复核",
-    "mod_todo_muted": "已按待办处理：禁言 {user} {duration}",
-    # ---- 变体累计升级（strike）----
-    "mod_variant_strike_notify": "{mentions} 疑似变体累计提醒：{user} 在近 {days} 天内已有 {count} 次疑似变体写法（本次：{method}）。已进待办，请到插件页面复核处理。",
-    "mod_variant_strike_muted": "{mentions} 疑似变体累计已达 {count} 次（近 {days} 天），已自动禁言 {user} {duration}。若判断有误，请解禁并在插件页面标记误判（标记后不再计入累计）。",
-    # ---- 管理员登记（变体提醒名单）----
-    "mod_admin_registered": "{user} 登记成功，已加入本群审核提醒名单（当前 {count} 人）。变体累计提醒会 @ 名单内成员。",
-    "mod_admin_unregistered": "{user} 已从本群审核提醒名单移除（当前 {count} 人）。",
-    "mod_admin_not_registered": "{user} 本来就不在审核提醒名单里（当前 {count} 人）。",
-    "mod_admin_list": "本群审核提醒名单（{count} 人）：{admins}",
-    "mod_admin_list_empty": "本群还没有人登记为审核管理员。管理员可发送「/群管 管理登记」把自己加入提醒名单。",
-    "mod_admin_register_off": "提示：本群未开启「变体累计提醒」，登记已保存，但暂时不会收到 @（可在插件页面「举报设置」里打开）。",
-}
+DEFAULT_TEMPLATES: dict[str, str] = TEMPLATE_DEFAULTS
 
 #: 内置关键词库（命中即判「根据关键词」，不调模型；可在 Page 里改）
 DEFAULT_KEYWORDS: dict[str, list[str]] = {
