@@ -1600,8 +1600,6 @@ class QQGroupManager(Star):
     # 执行仍然统一走 _run_command，权限与配置开关逻辑和以前完全一致；
     # forced_cmd 把本 handler 对应的规范指令名传给分发器，这样即使面板里
     # 改了指令名/加了别名，内部也能正确路由。
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     # 指令布局：所有指令统一收进指令组「群管」，WebUI「管理行为 → 指令」里
     # 只有一条「群管」，展开是 14 个子指令 —— 面板清爽，也不会有重复条目。
     # 写法：/群管 禁言 @用户 10分钟、/群管 撤回 …；单独发 /群管 自动列出指令树。
@@ -1682,6 +1680,12 @@ class QQGroupManager(Star):
     async def g_members(self, event: AstrMessageEvent):
         """群成员档案（列表 / 改名 / 备注 / 删除 / 拉取昵称）"""
         await self._run_command(event, forced_cmd="/成员", skip=1)
+
+    @qgm_group.command("记录")
+    @_with_log_context
+    async def g_records(self, event: AstrMessageEvent):
+        """插件处理记录（全量 / 我的 / 详情 / 汇总）"""
+        await self._run_command(event, forced_cmd="/记录", skip=1)
 
     def _ensure_member_event_injected(self):
         """薄壳：见 qgm/features/members/cache.py。"""
@@ -2952,7 +2956,6 @@ class QQGroupManager(Star):
 
     # ------------------------------------------------------------------
     # 词库：一键获取上游词库
-    # ------------------------------------------------------------------
     def _lexicon_upstream_conf(self) -> dict:
         """读「词库」分组的三个设置，缺省时回落到常量默认。"""
         url = str(self._read_config_value(("lexicon", "upstream_url"), default=LEXICON_UPSTREAM_URL) or "").strip()
@@ -3458,9 +3461,7 @@ class QQGroupManager(Star):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_verdicts_clear(self)
 
-    # ------------------------------------------------------------------
     # WebUI 设置页：配置 schema / 当前值 / 保存（与 AstrBot 配置双向同步）
-    # ------------------------------------------------------------------
     def _conf_schema(self) -> dict:
         """读取插件配置 schema（_conf_schema.json），带缓存。
 
