@@ -9,7 +9,7 @@
 | --- | --- |
 | `main.py` | **9452 行**，`QQGroupManager` 295 个方法 |
 | 最长方法 | `_cmd_report_violation` 222 行 / `_mod_review_llm` 185 行 / `_on_group_member_remove` 178 行 |
-| 测试 | 311 例，约 4 s（CI 内含全量） |
+| 测试 | 311 例（1.6.0 基线）/ 391 例（1.9.0），约 4.2 s（CI 内含全量） |
 | 依赖 | 0 第三方 |
 | 发布包 | 567 KB（slim zip，排除 docs/tests/tools/.github） |
 | 插件市场包 | tag 归档（含 docs/screenshots/tests，约 1.5 MB） |

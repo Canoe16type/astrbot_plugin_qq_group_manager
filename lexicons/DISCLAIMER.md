@@ -13,7 +13,7 @@
 
 ## 二、来源与可复现性
 
-全部词条由 [`../tools/build_lexicons.py`](../tools/build_lexicons.py) 从**公开开源项目**生成，不含自行采集、不含人工编写：
+全部词条由 devtools 仓库的 `build_lexicons.py` 从**公开开源项目**生成，不含自行采集、不含人工编写：
 
 | 上游项目 | 协议 | 地址 |
 | --- | --- | --- |
@@ -21,7 +21,7 @@
 | houbb/sensitive-word-data | Apache-2.0 | https://github.com/houbb/sensitive-word-data |
 | censor-text/profanity-list | Unlicense (public domain) | https://github.com/censor-text/profanity-list |
 
-任何人都可以用同一条命令重新生成、逐条核对：`python3 tools/build_lexicons.py`。
+任何人都可以用同一条命令重新生成、逐条核对：在 devtools 仓库运行 `build_lexicons.py`。
 
 > **随插件实际分发的只有两个库**：`ad.json`（广告引流，来自 konsheng/Sensitive-lexicon）与
 > `abuse.json`（辱骂攻击，来自 censor-text/profanity-list）。表中其余上游仅在使用者自行运行生成脚本时才会被使用。

@@ -22,7 +22,7 @@
 
 # 内置词库来源
 
-本目录下的 `*.json` **不是手写的**，全部由 `tools/build_lexicons.py` 从公开开源词库生成：
+本目录下的 `*.json` **不是手写的**，全部由 devtools 仓库的 `build_lexicons.py` 从公开开源词库生成：
 
 ```bash
 git clone https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools
@@ -54,7 +54,7 @@ QGM_PLUGIN_DIR=/path/to/astrbot_plugin_qq_group_manager python build_lexicons.py
 体积大、宽泛词多、合规边界更敏感，不随插件分发，需要时自行生成：
 
 ```bash
-python3 tools/build_lexicons.py      # 生成全部 9 类到 lexicons/（联网，缓存 7 天）
+QGM_PLUGIN_DIR=/path/to/astrbot_plugin_qq_group_manager python build_lexicons.py   # 生成全部 9 类（联网，缓存 7 天）
 ```
 
 其余 7 类（`porn` / `crime` / `drugs` / `politics` / `gambling` / `weapon` / `violence`）同样由该脚本生成，
@@ -78,7 +78,7 @@ python3 tools/build_lexicons.py      # 生成全部 9 类到 lexicons/（联网�
 - 词表仅用于**拦截、审核、过滤**本群违规内容，插件界面不展示词条内容；
 - 上游词库由社区维护，可能包含误伤词或漏词：可在管理面板「词典」页启用/停用，
   或上传自己的词库覆盖补充（同名词库按「自定义优先」合并）；
-- **除 `ad.json` / `abuse.json` 外的 7 个库都不随仓库分发**（占全部词条 94% 以上，体积与合规风险集中在这里）；需要时运行 `python3 tools/build_lexicons.py` 生成，生成后可正常加载（缺失的词库自动跳过）；
+- **除 `ad.json` / `abuse.json` 外的 7 个库都不随仓库分发**（占全部词条 94% 以上，体积与合规风险集中在这里）；需要时运行 devtools 的 `build_lexicons.py` 生成，生成后可正常加载（缺失的词库自动跳过）；
 - 协议各不相同（MIT / Apache-2.0 / Unlicense），二次分发时请保留本文件、`DISCLAIMER.md` 与 `THIRD_PARTY_NOTICES.md`（含上游许可证全文）。
 - 涉毒、暴恐、涉政、违法犯罪等词表默认关闭或按需开启，开启后请在群里先跑试运行。
 
