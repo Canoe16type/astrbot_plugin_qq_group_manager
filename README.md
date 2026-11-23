@@ -15,10 +15,29 @@
 
 > 💬 **欢迎交流**：用着不顺手、想加功能、发现了 bug，都欢迎直接
 > [提 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose)
-> 或发邮件到 **oc16games@outlook.com**。不用纠结格式，说清「做了什么、期望什么、实际什么」就够。
+> 或发邮件到 **oc16games@outlook.com**；也可以直接填 [QQ官机群管满意度调研](https://docs.qq.com/form/page/DWGVkZ3B0WnhubFNX)。不用纠结格式，说清「做了什么、期望什么、实际什么」就够。
 
 > 🤖 **AI 辅助编写声明**：本插件的代码与文档由 AI 辅助生成，经人工审核与实测后发布。
 > 如有与描述不符的表现，请按下方[反馈与交流](#反馈与交流)告知。
+
+<!-- TODO(1.11.0): 移除十版致谢与满意度问卷 -->
+## v1.10.0：第十个正式功能版本
+
+从 `1.0.0` 到 `1.10.0`，这是第十个正式功能版本（按 `1.0 → 1.10` 计，不含 `x.y.1` 这类修补）。
+
+十个版本走下来，它已经不只是最初那个“能踢人、能禁言”的小工具：有审核、审批、记录、申诉、词库、面板，也有了一套自己的测试和发布流程。这些东西能被真实群用起来，靠的不只是代码。
+
+谢谢：
+
+- 每一位下载、安装、把它放进真实群的人
+- 在误判、断连和边界情况里，愿意留下来继续用的人
+- 愿意读文档、自己改配置、自己排错的人
+- AstrBot 社区、上游词库维护者，以及所有提过建议的人
+- 即使不常说话，也一直默默用着的人
+
+也欢迎每一位愿意反馈的人：问卷、Issue、邮件都可以，形式不重要，能把问题说清楚就够了。
+
+这个节点值得单独说一声谢谢。
 
 > 📖 **想了解细节？** 本文只讲「怎么快速用起来」。完整的配置项含义、指令边界条件、四种维度的判定逻辑、
 > 九页签面板每一项的作用，都在 **[详细手册 docs/GUIDE.md](docs/GUIDE.md)** 里。
@@ -319,6 +338,7 @@
 
 | 类型 | 怎么反馈 |
 | --- | --- |
+| 满意度调研 | [QQ官机群管满意度调研](https://docs.qq.com/form/page/DWGVkZ3B0WnhubFNX)（腾讯文档，匿名即可） |
 | 功能建议 / 使用疑问 | [新建 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) |
 | 疑似 bug | [新建 Issue](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) 选「功能异常」，附插件版本、AstrBot 版本、复现步骤、日志 |
 | 安全漏洞 | **不要开公开 Issue**：[私密报告](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/security/advisories/new) 或邮件 **oc16games@outlook.com**（见 [SECURITY.md](SECURITY.md)） |
