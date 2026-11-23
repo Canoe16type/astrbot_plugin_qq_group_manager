@@ -320,7 +320,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <section id="tab-moderation" class="panel mod-scope">
  <div class="page-head">
  <h2> 群规审核</h2>
- <p>左侧选群，右侧按「群规 / 举报设置 / 话术模板」分栏配置，所有设置按群独立保存。</p>
+ <p>左侧选群，右侧按「群规 / 举报设置」分栏配置，所有设置按群独立保存；审核话术统一在「设置 → 消息模板」。</p>
  </div>
  <div class="mod-app">
  <aside class="mod-sidebar">
@@ -359,8 +359,6 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <nav class="mod-tabs">
  <button class="mod-tab active" data-mod-tab="rules">群规提示词</button>
  <button class="mod-tab" data-mod-tab="settings">举报设置</button>
- <button class="mod-tab" data-mod-tab="templates">话术模板</button>
- <button class="mod-tab" data-mod-tab="verdicts">判定与试跑</button>
  </nav>
 
  <!-- ① 群规 -->
@@ -470,89 +468,7 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  </section>
 
  <!-- ③ 话术模板 -->
- <section class="mod-pane" id="mod-pane-templates">
- <div class="notice warn">
- <b>话术已迁移到「设置 → 消息模板」。</b>
- 本页从 1.9.0 起仅展示可用话术清单，<b>在此修改不再生效</b>；请到设置页的「审核」分组统一修改（与其他话术同一套配置）。旧的本群覆盖数据保留一个版本用于回退，下个版本移除。
- </div>
- <p class="desc">
- 本页只展示有哪些话术，不再提供编辑。每条话术支持的变量不同，
- 请到 <b>设置 → 消息模板</b> 编辑；变量含义、纯文本 / Markdown 显示差异见
- <b>右上角「帮助中心 → 模板变量」</b>（模板页的「消息模板变量怎么填？」可直接跳转）。
- </p>
- <div id="tpl-list" class="grid one"></div>
- <h3 class="h3">维度显示名（<code>{basis}</code> 的取值）</h3>
- <div id="dim-fields" class="grid two"></div>
- <h3 class="h3">违规类型显示名（<code>{category}</code> 的取值）</h3>
- <div id="cat-fields" class="grid two"></div>
- <div class="row-actions">
- <p class="hint">旧「保存本群话术」已停用；请到 设置 → 消息模板 修改。</p>
- </div>
- </section>
-
-<section class="mod-pane" id="mod-pane-verdicts">
- <div class="scope-bar">
- <span> 当前作用群：<b id="recScopeGroup">未选择</b><span class="hint" id="recScopeHint">判定记录与试跑都作用于这个群</span></span>
- <button class="btn" id="btnRecScopeGo">切换群 →</button>
- </div>
- <div class="stat-row" id="stat-row"></div>
- <div class="log-controls" style="margin:10px 0 4px">
- <button class="btn ghost small" id="btnVerdictRefresh">↻ 刷新记录</button>
- <button class="btn ghost small" id="btnVerdictExport">⭳ 导出 CSV</button>
- <span class="hint" style="margin-left:10px">删除</span>
- <input type="number" id="prune-days" min="1" value="90" style="width:72px" title="只删判定记录，不动禁言/撤回记录" />
- <span class="hint">天以前的记录</span>
- <button class="btn ghost small" id="btnPruneVerdicts" title="手动清理，不会自动执行；可先导出 CSV 备份">清理</button>
- <button class="btn danger small" id="btnVerdictClearOne"> 清空本群记录</button>
- <button class="btn danger small" id="btnVerdictClearAll"> 清空全部群记录</button>
- <span class="hint" id="verdictClearMsg">删除只清本地留痕（省空间），不会撤销已执行的禁言</span>
- </div>
- <h3 class="h3">待办（人工兜底）<span class="hint" id="todo-count">—</span></h3>
- <p class="desc">三类会进这里：① 置信度不足、没自动执行的判定；② 变体检测的疑似命中；③ 变体累计达到阈值的那条记录（会标出「累计 ×N／N 天」）。变体命中只撤回、不禁言（除非另行开启「变体累计升级」的自动禁言），惩罚动作一律等人确认——误报的代价只是多看一眼，不会误踢人。<br />只摆出<b>近 7 天</b>的记录：更早的判定多半早已过了撤回时限（110 秒），摆上来也只能干看着，不如不打扰。</p>
- <div class="table-wrap">
- <table class="tbl">
- <thead>
- <tr><th>时间</th><th>类型</th><th>对象</th><th>内容</th><th>建议时长</th><th>操作</th></tr>
- </thead>
- <tbody id="todo-rows"></tbody>
- </table>
- </div>
- <div class="log-controls" style="margin:8px 0 0">
- <button class="btn ghost small" id="btnTodoRefresh">↻ 刷新待办</button>
- </div>
- <h3 class="h3">变体提醒名单<span class="hint" id="admin-count">—</span></h3>
- <p class="desc">变体累计达到阈值时，只 <b>@ 名单内的人</b>。群管理员在群里发「<b>/群管 管理登记</b>」即可把自己加进来，「/群管 管理登记 取消」退出，「/群管 管理登记 列表」查看。<b>本群没人登记 → 不发提醒</b>：既不刷群，也不消耗主动消息配额。<br />为什么不让 bot 自动识别管理员？因为 QQ 官方通道的群消息里拿不到稳定的角色字段（<code>_get_qq_role</code> 恒为 None），而"谁在线、谁愿意兜底"本来就是群自己的事。</p>
- <div class="table-wrap">
- <table class="tbl">
- <thead>
- <tr><th>昵称</th><th>openid</th><th>身份来源</th><th>登记时间</th><th>操作</th></tr>
- </thead>
- <tbody id="admin-rows"></tbody>
- </table>
- </div>
- <div class="log-controls" style="margin:8px 0 0">
- <button class="btn ghost small" id="btnAdminRefresh">↻ 刷新名单</button>
- </div>
- <h3 class="h3">试跑（用当前提示词判一条，不执行动作）</h3>
- <div class="test-box">
- <textarea id="test-text" rows="2" placeholder="粘贴一条消息内容试试判定结果…"></textarea>
- <span class="hint">假设前科</span>
- <input type="number" id="test-prior" min="0" max="99" step="1" value="0" style="width:64px"
-        title="模拟该成员已有多少次前科，用于验证升档/加刑；只影响这次试跑，不写任何数据" />
- <span class="hint">次</span>
- <button class="btn btn-primary" id="btn-test">试跑</button>
- </div>
- <pre id="test-result" class="test-result"></pre>
- <h3 class="h3">最近判定记录</h3>
- <div class="table-wrap">
- <table class="tbl">
- <thead>
- <tr><th>ID</th><th>时间</th><th>对象</th><th>原文</th><th>维度</th><th>类型</th><th>置信度</th><th>动作</th><th>缓存</th><th>操作</th></tr>
- </thead>
- <tbody id="verdict-rows"></tbody>
- </table>
- </div>
- </section>
+ 
 
  </div>
  </div>

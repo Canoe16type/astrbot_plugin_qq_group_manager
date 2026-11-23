@@ -1092,7 +1092,8 @@ async function initModeration() {
   if (_saveTpl) _saveTpl.onclick = saveTemplates;
   const _clearTpl = $("btn-clear-templates");
   if (_clearTpl) _clearTpl.onclick = clearTemplates;
-  $("btn-test").onclick = runTest;
+  const _btnTest = $("btn-test");
+  if (_btnTest) _btnTest.onclick = runTest;
 
   try {
     await loadGroups();
@@ -1105,12 +1106,8 @@ async function initModeration() {
 window.__qqgmModerationLoad = () => { initModeration().catch(() => {}); };
 // 概览页「去配置群规」：跳过来后自动选中该群
 window.__qqgmSelectGroup = (g) => initModeration().then(() => selectGroup(g)).catch(() => {});
-// 「记录」页的判定记录/试跑：需要先有「当前群」，没有就默认选第一个
-window.__qqgmRecordsLoad = () => initModeration().then(() => {
-  if (current) return null;
-  const first = bots[0] && (bots[0].groups || [])[0];
-  return first ? selectGroup(first.group) : null;
-}).catch(() => {});
+window.__qqgmRecordsLoad = () => {};
+
 })();
 
 
