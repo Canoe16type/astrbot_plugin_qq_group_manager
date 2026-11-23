@@ -85,12 +85,12 @@ function renderQQMarkdown(src) {
     x = x.replace(/!\[([^\]]*?)\s*(?:#(\d+)px)?\s*(?:#(\d+)px)?\]\(([^)\s]+)\)/g, (m, alt, w, h, url) => {
       const ww = w ? parseInt(w, 10) : 208;
       const hh = h ? parseInt(h, 10) : Math.round(ww * 1.54);
-      // 示例里的占位域名加载不出来时，换成虚线框，别让示例看着像坏了
       const box = `width:${ww}px;height:${hh}px;border:1px dashed #d7dbe3;border-radius:8px;display:none;align-items:center;justify-content:center;color:#98a2b3;font-size:12px;margin:6px 0`;
       const img = `<img src="${escAttr(url)}" alt="${escAttr(alt)}" style="width:${ww}px;height:${hh}px;object-fit:cover;border-radius:8px;display:block;margin:6px 0" onerror="this.style.display='none';var p=this.nextElementSibling;if(p){p.style.display='flex'}">`;
       return `${img}<span style="${box}">${escAttr(alt) || "图片预览"}</span>`;
     });
     x = x.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    x = x.replace(/`([^`]+)`/g, "<code>$1</code>");
     x = x.replace(/__(.+?)__/g, "<b><u>$1</u></b>");
     x = x.replace(/\*\*\*(.+?)\*\*\*/g, "<b><i>$1</i></b>");
     x = x.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
@@ -99,6 +99,7 @@ function renderQQMarkdown(src) {
     x = x.replace(/\u200B/g, "<br>");
     return x;
   };
+  const cells = (line) => line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
   const lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
   const out = [];
   let list = null;
@@ -108,11 +109,37 @@ function renderQQMarkdown(src) {
       list = null;
     }
   };
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.replace(/\s+$/, "");
+    // fenced code block
+    if (/^\s*```/.test(line)) {
+      flush();
+      const lang = (line.match(/^\s*```(.*)$/) || [])[1] || "";
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      out.push(`<pre class="pv-code"${lang ? ` data-lang="${escAttr(lang.trim())}"` : ""}><code>${escTxt(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+    // GFM table: header + |---|---| separator
+    if (line.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+      flush();
+      const head = cells(line);
+      i++;
+      const rows = [];
+      while (i + 1 < lines.length && lines[i + 1].includes("|") && !/^\s*```/.test(lines[i + 1])) {
+        i++;
+        rows.push(cells(lines[i]));
+      }
+      const th = head.map((c) => `<th>${inline(c)}</th>`).join("");
+      const tb = rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("");
+      out.push(`<table class="pv-table"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`);
+      continue;
+    }
     if (!line.trim()) { flush(); continue; }
     if (/^\s*\*\*\*\s*$/.test(line)) { flush(); out.push("<hr>"); continue; }
-    const h = line.match(/^(#{1,2})\s+(.*)$/);
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
     if (h) { flush(); out.push(`<div class="pv-h${h[1].length}">${inline(h[2])}</div>`); continue; }
     const q = line.match(/^\s*>\s?(.*)$/);
     if (q) { flush(); out.push(`<blockquote>${inline(q[1])}</blockquote>`); continue; }
@@ -124,36 +151,9 @@ function renderQQMarkdown(src) {
     out.push(`<p>${inline(line)}</p>`);
   }
   flush();
-  return out.join("") || '<span class="pv-warn">（空内容）</span>';
+  return out.join("\n");
 }
 
-let _tplCur = null;
-
-function setDlgFmt(fmt) {
-  if (!_tplCur) return;
-  _tplCur.format = fmt;
-  const seg = $("tplDlgSeg");
-  if (seg) seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
-  const row = $("tplImgRow");
-  if (row) row.style.display = fmt === "image" ? "" : "none";
-  renderTplPreview();
-}
-
-// 在光标处插入模块占位符（不覆盖已有选择内容时替换选中段，符合常规编辑器直觉）
-function insertTplModule(snippet) {
-  const ta = $("tplDlgText");
-  if (!ta) return;
-  const start = typeof ta.selectionStart === "number" ? ta.selectionStart : ta.value.length;
-  const end = typeof ta.selectionEnd === "number" ? ta.selectionEnd : start;
-  ta.value = ta.value.slice(0, start) + snippet + ta.value.slice(end);
-  const pos = start + snippet.length;
-  ta.focus();
-  try { ta.setSelectionRange(pos, pos); } catch (err) { /* 某些浏览器的老内核不支持，忽略 */ }
-  renderTplPreview();
-}
-
-// 预览里的内置模块：真机会展开成 @标签 / 头像图；面板拿不到成员 openid，
-// 这里按等效尺寸画占位块，让作者知道「会长在哪个位置、占多大」。
 function previewModules(html) {
   return String(html)
     .replace(/\{at\}/g, '<span class="md-at">@群员</span>')

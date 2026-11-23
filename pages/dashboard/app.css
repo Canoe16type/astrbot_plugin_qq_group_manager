@@ -1014,3 +1014,10 @@ select{max-width:100%}
 .rec-tbl { min-width: 1020px; table-layout: auto; }
 .rec-tbl th, .rec-tbl td { padding: 8px 10px; white-space: nowrap; }
 .rec-tbl td:nth-child(6) { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+
+/* 模板预览：表格与代码块 */
+.pv-table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: .92em; }
+.pv-table th, .pv-table td { border: 1px solid #e3e6ec; padding: 5px 8px; text-align: left; vertical-align: top; }
+.pv-table th { background: #f7f8fa; font-weight: 700; }
+.pv-code { margin: 8px 0; padding: 10px 12px; background: #f7f8fa; border: 1px solid #e3e6ec; border-radius: 8px; overflow: auto; white-space: pre; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+.pv-code code { background: none; padding: 0; }
