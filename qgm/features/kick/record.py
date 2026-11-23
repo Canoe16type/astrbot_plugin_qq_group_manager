@@ -26,6 +26,15 @@ def add(host, record: dict) -> dict:
     return rec
 
 
+def iter_rows(host, group: str = "") -> list[dict]:
+    """全部记录（可选按群过滤），供统一记录查询层使用。"""
+    data = storage.read_json(str(_path(host)), default={}) or {}
+    rows = data.get("records") if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        return []
+    return [r for r in rows if not group or r.get("group") == group]
+
+
 def recent(host, group: str = "", limit: int = 10) -> list[dict]:
     data = storage.read_json(str(_path(host)), default={}) or {}
     rows = data.get("records") if isinstance(data, dict) else []
