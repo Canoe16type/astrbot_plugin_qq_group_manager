@@ -29,6 +29,8 @@ def _host():
         mod=SimpleNamespace(list_verdicts=lambda group="", limit=100: []),
         _mute_history={"g": []}, _recall_history={"g": []},
         _plugin_data_dir=lambda: "/tmp/nonexistent-qgm",
+        logger=SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None,
+                               debug=lambda *a, **k: None),
     )
 
 
@@ -39,6 +41,8 @@ class _ClearHost:
         self._recall_history = {"g": [{"id": 1}]}
         self.logger = SimpleNamespace(info=lambda *a, **k: None)
         self._plugin_data_dir = lambda: "/tmp/nonexistent-qgm"
+        self.logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None,
+                                     debug=lambda *a, **k: None)
     def _save_mute_history(self): pass
     def _save_recall_history(self): pass
 

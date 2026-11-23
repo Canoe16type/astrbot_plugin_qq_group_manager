@@ -58,10 +58,15 @@ async def web_records(host):
     days = max(0, min(365, days))
     limit = max(1, min(50, limit))
     since = time.time() - days * 86400 if days else 0.0
+    host.logger.debug(
+        f"records.list group={group or '*'} kind={kind or '*'} target={target or '-'} "
+        f"days={days} page={page} limit={limit}"
+    )
     rows, total = query_records_page(
         host, group=group, kinds=[kind] if kind else None,
         target_text=target, since=since, page=page, per_page=limit,
     )
+    host.logger.info(f"records.list -> {len(rows)}/{total} group={group or '*'} kind={kind or '*'}")
     return json_response({
         "items": [_item(r) for r in rows],
         "total": total, "page": max(1, page), "per_page": limit,
@@ -107,7 +112,9 @@ async def web_records_detail(host):
     """GET /records/detail?id=V12&group="""
     group = str(request.query.get("group", "") or "")
     row = get_record(host, str(request.query.get("id", "") or ""), group=group)
+    host.logger.debug(f"records.detail id={request.query.get('id', '')} group={group or '*'}")
     if not row:
+        host.logger.info(f"records.detail miss id={request.query.get('id', '')} group={group or '*'}")
         return json_response({"error": "记录不存在"}, status_code=404)
     item = _item(row)
     item["content"] = ""
@@ -124,5 +131,5 @@ async def web_records_detail(host):
                     item["content"] = str(r.get("content") or "")
                     break
     except Exception as e:
-        host.logger.warning(f"读取记录原文失败: {e}")
+        host.logger.warning(f"读取记录原文失败: id={row.display_id} kind={row.kind}: {e}")
     return json_response({"item": item})

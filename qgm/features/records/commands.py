@@ -118,6 +118,11 @@ async def cmd_records(host, event, parts):
     group = str(event.get_group_id() or "")
     sender = str(event.get_sender_id() or "")
     is_admin = bool(host._is_admin(event))
+    host.logger.info(
+        f"cmd.records user={(sender or '-')[-6:]} group={group or '-'} admin={is_admin} "
+        f"mine={opt['mine']} detail={opt['detail'] or '-'} summary={opt['summary']} "
+        f"kind={opt['kind'] or '*'} days={opt['days']} limit={opt['limit']}"
+    )
 
     if not is_admin:
         now = time.time()
@@ -134,9 +139,11 @@ async def cmd_records(host, event, parts):
     if opt["detail"] is not None:
         row = get_record(host, str(opt["detail"]), group=group)
         if not row:
+            host.logger.info(f"cmd.records.detail miss id={opt['detail']}")
             await host._reply(event, "没有找到这条记录。")
             return
         if not is_admin and sender not in row.target_ids:
+            host.logger.warning(f"cmd.records.detail deny id={row.display_id} user={(sender or '-')[-6:]}")
             await host._reply(event, "你只能查看自己的记录。")
             return
         await _send_markdown(host, event, _detail(row, is_admin))
@@ -162,6 +169,7 @@ async def cmd_records(host, event, parts):
         return
 
     if not is_admin and not opt["mine"]:
+        host.logger.warning(f"cmd.records deny non-mine user={(sender or '-')[-6:]}")
         await host._reply(event, "普通成员请用：/群管 记录 我的 [类型] [N]")
         return
 
@@ -182,6 +190,14 @@ async def cmd_records(host, event, parts):
         host, group=group, kinds=kinds, target_id=target_id, since=since, limit=opt["limit"]
     )
     if not rows:
+        host.logger.info(
+            f"cmd.records empty group={group or '-'} kind={opt['kind'] or '*'} "
+            f"target={(target_id or '-')[-6:]} days={opt['days']}"
+        )
         await host._reply(event, f"没有找到记录。\n\n{_COVERAGE}")
         return
+    host.logger.info(
+        f"cmd.records result rows={len(rows)} group={group or '-'} kind={opt['kind'] or '*'} "
+        f"target={(target_id or '-')[-6:]} days={opt['days']}"
+    )
     await _send_markdown(host, event, _table(rows))

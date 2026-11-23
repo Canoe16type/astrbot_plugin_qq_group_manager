@@ -42,6 +42,8 @@ def _host(admin=False):
     h._mute_history = {"g": []}
     h._recall_history = {"g": []}
     h._plugin_data_dir = lambda: "/tmp/nonexistent-qgm"
+    h.logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None,
+                               debug=lambda *a, **k: None)
     return h
 
 
