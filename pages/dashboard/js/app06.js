@@ -851,6 +851,7 @@ document.addEventListener('keydown',e=>{
       <td title="${esc(target)}">${esc(target)}</td>
       <td>${esc(ACTION[r.action] || r.action)}</td>
       <td>${esc(result)}</td>
+      <td title="${esc(r.reason || "")}">${esc((r.reason || "-").slice(0, 36))}</td>
       <td title="${esc(r.actor_name || "")}">${esc(r.actor_name || "-")}</td>
     </tr>`;
   }
@@ -860,13 +861,13 @@ document.addEventListener('keydown',e=>{
     const list = rows.filter(matchTarget);
     box.innerHTML = list.length
       ? list.map(fmtRow).join("")
-      : `<tr><td colspan="6"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
+      : `<tr><td colspan="7"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
     const count = $("recCount");
     if (count) count.textContent = `共 ${list.length} 条 · 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
   }
   async function load() {
     const box = $("recRows");
-    if (box) box.innerHTML = `<tr><td colspan="6"><div class="empty"><span>加载中…</span></div></td></tr>`;
+    if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载中…</span></div></td></tr>`;
     try {
       fillGroupSelect("recFilterGroup", "全部群");
       const params = { limit: 50 };
@@ -876,16 +877,16 @@ document.addEventListener('keydown',e=>{
       if (kind) params.kind = kind;
       const days = $("recFilterDays") ? $("recFilterDays").value : "0";
       if (days && days !== "0") params.days = days;
-      const r = await bridge.apiGet("records", params);
+      const r = await bridgeNow().apiGet("records", params);
       rows = r.items || [];
       render();
     } catch (e) {
-      if (box) box.innerHTML = `<tr><td colspan="6"><div class="empty"><span>加载失败：${esc(e.message || e)}</span></div></td></tr>`;
+      if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载失败：${esc(e.message || e)}</span></div></td></tr>`;
     }
   }
   async function openDetail(id) {
     try {
-      const r = await bridge.apiGet("records/detail", { id, group: groupValue() });
+      const r = await bridgeNow().apiGet("records/detail", { id, group: groupValue() });
       if (r.error) { showToast(r.error); return; }
       const it = r.item;
       $("recDetailTitle").textContent = `记录 ${it.display_id}`;
@@ -920,6 +921,22 @@ document.addEventListener('keydown',e=>{
 
   if ($("btnRecLoad")) $("btnRecLoad").addEventListener("click", load);
   if ($("btnRecExport")) $("btnRecExport").addEventListener("click", exportCsv);
+  if ($("btnRecClear")) $("btnRecClear").addEventListener("click", async () => {
+    const kind = $("recFilterKind") ? $("recFilterKind").value : "";
+    if (!kind) { showToast("先在顶部选择要清空的类型（判定/禁言/撤回）"); return; }
+    const g = groupValue();
+    const scope = g ? "当前群" : "全部群";
+    const name = { verdict: "判定记录", mute: "禁言历史", recall: "撤回历史", kick: "踢人记录" }[kind];
+    if (kind === "kick") { showToast("踢人记录暂不支持清空"); return; }
+    if (!(await showConfirm(`确认清空${scope}的${name}？不可恢复。`))) return;
+    const body = kind === "verdict" ? { group: g } : { group_openid: g };
+    const ep = { verdict: "mod/verdicts/clear", mute: "history/clear", recall: "recalls/clear" }[kind];
+    try {
+      const r = await bridgeNow().apiPost(ep, body);
+      showToast(r.message || `已清空 ${r.cleared || 0} 条`);
+      load();
+    } catch (e) { showToast(`清空失败：${e.message || e}`); }
+  });
   ["recFilterGroup", "recFilterKind", "recFilterDays"].forEach((id) => {
     if ($(id)) $(id).addEventListener("change", load);
   });
