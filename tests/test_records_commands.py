@@ -50,6 +50,10 @@ async def _capture(event, text):
 
 
 class RecordsCommandTest(unittest.TestCase):
+    def test_router_handler_exists(self):
+        from plugins.astrbot_plugin_qq_group_manager.main import QQGroupManager
+        self.assertTrue(hasattr(QQGroupManager, "_cmd_records"))
+
     def _run(self, host, event, parts):
         async def fake_send(h, e, text):
             e.sent.append(("md", text))

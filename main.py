@@ -124,7 +124,6 @@ from . import variant as variant_lib
 _BUTTON_ACTION_DECORATOR = getattr(filter, "button_action", None)
 _BUTTON_ACTION_SUPPORTED = callable(_BUTTON_ACTION_DECORATOR)
 
-
 class _TplText(str):
     """带模板 key 的字符串。
 
@@ -414,9 +413,7 @@ class QQGroupManager(Star):
         """装配：见 qgm/setup.py。"""
         return init_plugin(self, context, config)
 
-    # ------------------------------------------------------------------
     # 路径 / 持久化
-    # ------------------------------------------------------------------
     def _plugin_data_dir(self) -> str:
         # 走 AstrBot 公开接口 StarTools.get_data_dir()：落点 data/plugin_data/<插件id>，
         # 与卸载清理、WebUI 一致。取不到时退回 AstrBot 工作目录下的同一相对路径。
@@ -471,7 +468,6 @@ class QQGroupManager(Star):
         except Exception as e:
             self.logger.warning(f"保存已知群列表失败: {e}")
 
-    # ------------------------------------------------------------------
     # 群管自我介绍（GROUP_ADD_ROBOT 事件优先，首条消息欢迎兜底）
     #   done    : 已经发过的群 -> 发送途径（event / message / manual）
     #   pending : 收到过入群事件、但发送没成功确认的群（留给旧方案兜底）
@@ -1686,6 +1682,10 @@ class QQGroupManager(Star):
     async def g_records(self, event: AstrMessageEvent):
         """插件处理记录（全量 / 我的 / 详情 / 汇总）"""
         await self._run_command(event, forced_cmd="/记录", skip=1)
+
+    async def _cmd_records(self, event: AstrMessageEvent, parts: list[str]):
+        from qgm.features.records import commands as records_commands
+        return await records_commands.cmd_records(self, event, parts)
 
     def _ensure_member_event_injected(self):
         """薄壳：见 qgm/features/members/cache.py。"""
