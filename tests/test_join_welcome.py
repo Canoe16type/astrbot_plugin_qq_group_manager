@@ -114,7 +114,7 @@ class JoinWelcomeTest(unittest.IsolatedAsyncioTestCase):
             api.calls[0]["content"],
             f'🎉 欢迎 <qqbot-at-user id="{MEMBER}" /> 加入本群！',
         )
-        self.assertFalse(api.calls[0]["markdown"])
+        self.assertTrue(api.calls[0]["markdown"])
 
     async def test_disabled_config_sends_nothing(self):
         api = _Api()

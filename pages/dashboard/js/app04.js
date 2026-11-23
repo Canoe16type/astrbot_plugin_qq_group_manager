@@ -163,6 +163,15 @@ function previewModules(html) {
     });
 }
 
+function setDlgFmt(fmt) {
+  if (_tplCur) _tplCur.format = fmt;
+  const seg = $("tplDlgSeg");
+  if (seg) seg.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+  const row = $("tplImgRow");
+  if (row) row.style.display = fmt === "image" ? "" : "none";
+  renderTplPreview();
+}
+
 function renderTplPreview() {
   const box = $("tplPreview");
   if (!box) return;

@@ -1075,11 +1075,8 @@ class QQGroupManager(Star):
 
     def _tpl_format(self, key: str) -> str:
         meta = self._tpl_formats.get(key) or {}
-        kind = str(meta.get("type") or "text").strip().lower()
-        if not meta and key in ("msg_mod_warn", "msg_mod_revoke"):
-            # 两条都带 @：纯文本通道不解析 <qqbot-at-user>，必须走 markdown
-            return "markdown"
-        return kind if kind in self.TPL_FORMAT_KINDS else "text"
+        kind = str(meta.get("type") or "markdown").strip().lower()
+        return kind if kind in self.TPL_FORMAT_KINDS else "markdown"
 
     def _tpl_keys(self) -> set[str]:
         schema = self._conf_schema()
