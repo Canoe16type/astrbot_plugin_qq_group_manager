@@ -44,7 +44,7 @@ from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import json_response, request, stream_response
 
-from qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
+from .qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
 
 from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
@@ -1663,7 +1663,7 @@ class QQGroupManager(Star):
         await self._run_command(event, forced_cmd="/记录", skip=1)
 
     async def _cmd_records(self, event: AstrMessageEvent, parts: list[str]):
-        from qgm.features.records import commands as records_commands
+        from .qgm.features.records import commands as records_commands
         return await records_commands.cmd_records(self, event, parts)
 
     def _ensure_member_event_injected(self):

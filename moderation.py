@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
+from .qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
 
 import hashlib
 import json
