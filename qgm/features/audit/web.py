@@ -597,6 +597,7 @@ async def web_tpl_formats(host):
                 "value": "" if value is None else str(value),
                 "default": "" if ischema.get("default") is None else str(ischema.get("default")),
                 "format": host._tpl_format(key),
+                "explicit": key in getattr(host, "_tpl_formats", {}),
                 "url": str(meta.get("url") or ""),
                 "width": int(meta.get("width") or 0),
                 "height": int(meta.get("height") or 0),

@@ -175,7 +175,7 @@ function setDlgFmt(fmt) {
 function renderTplPreview() {
   const box = $("tplPreview");
   if (!box) return;
-  const fmt = _tplCur ? _tplCur.format : "text";
+  const fmt = _tplCur ? _tplCur.format : "markdown";
   const text = $("tplDlgText").value;
   if (fmt === "image") {
     const url = $("tplImgUrl").value.trim();
@@ -197,7 +197,7 @@ function openTplDialog(key) {
   const meta = setState.tplFormats[key] || {};
   const field = setState.fields.find((f) => f.key === "templates." + key);
   const item = field ? field.item : { description: key, default: "", hint: "" };
-  _tplCur = { key, item, format: meta.format || "markdown" };
+  _tplCur = { key, item, format: meta.explicit === false ? "markdown" : (meta.format || "markdown") };
   $("tplDlgTitle").textContent = item.description || key;
   $("tplDlgHint").textContent = (item.hint ? item.hint + " · " : "") +
     "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）" +
@@ -324,8 +324,8 @@ function buildItem(item, group) {
     bar.className = "tpl-fmtbar";
     bar.innerHTML = `
       <div class="seg sm tpl-fmtseg">
-        <button data-fmt="text" class="${fmtMeta.format === "text" ? "on" : ""}">纯文本</button>
-        <button data-fmt="markdown" class="${fmtMeta.format === "markdown" ? "on" : ""}">Markdown</button>
+        <button data-fmt="text" class="${(fmtMeta.explicit === false ? "markdown" : fmtMeta.format) === "text" ? "on" : ""}">纯文本</button>
+        <button data-fmt="markdown" class="${(fmtMeta.explicit === false ? "markdown" : fmtMeta.format) === "markdown" ? "on" : ""}">Markdown</button>
         <button data-fmt="image" class="${fmtMeta.format === "image" ? "on" : ""}">图片</button>
       </div>
       <button class="btn ghost small tpl-editbtn">✎ 编辑与预览</button>`;
