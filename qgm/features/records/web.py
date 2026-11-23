@@ -42,8 +42,16 @@ async def web_records(host):
     group = str(request.query.get("group", "") or "")
     kind = str(request.query.get("kind", "") or "")
     target = str(request.query.get("target", "") or "")
-    days = max(0, min(365, request.query.get("days", 0, type=int)))
-    limit = max(1, min(50, request.query.get("limit", 20, type=int)))
+    try:
+        days = int(request.query.get("days", 0) or 0)
+    except (TypeError, ValueError):
+        days = 0
+    try:
+        limit = int(request.query.get("limit", 20) or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    days = max(0, min(365, days))
+    limit = max(1, min(50, limit))
     since = time.time() - days * 86400 if days else 0.0
     rows = query_records(
         host, group=group, kinds=[kind] if kind else None,

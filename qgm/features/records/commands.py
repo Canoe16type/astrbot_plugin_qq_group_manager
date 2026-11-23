@@ -113,7 +113,7 @@ def _parse(args):
 
 
 async def cmd_records(host, event, parts):
-    args = list(parts[1:]) if parts and str(parts[0]).startswith("/") else list(parts)
+    args = list(parts[1:]) if parts and str(parts[0]).startswith("/") else list(parts or [])
     opt = _parse(args)
     group = str(event.get_group_id() or "")
     sender = str(event.get_sender_id() or "")
@@ -143,7 +143,7 @@ async def cmd_records(host, event, parts):
         for r in rows:
             counts[r.kind] = counts.get(r.kind, 0) + 1
         names = {"verdict": "判定", "mute": "禁言", "recall": "撤回", "kick": "踢人"}
-        lines = [f"### 近 {opt['days'] or '全部'} 天插件处理记录"]
+        lines = [f"### 近 {opt['days']} 天插件处理记录" if opt["days"] else "### 全部插件处理记录"]
         lines += [f"- {names.get(k, k)}：{v} 条" for k, v in counts.items()] or ["- 暂无记录"]
         lines.append(f"\n> {_COVERAGE}")
         await _send_markdown(host, event, "\n".join(lines))

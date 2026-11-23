@@ -964,6 +964,7 @@ document.addEventListener('keydown',e=>{
   if ($("recDetailMask")) $("recDetailMask").addEventListener("click", (e) => {
     if (e.target === $("recDetailMask")) $("recDetailMask").classList.remove("show");
   });
+  window.__qgmUnifiedRecordsLoad = load;
   const tab = document.querySelector('.tab[data-tab="records"]');
   if (tab) tab.addEventListener("click", () => setTimeout(load, 30));
 })();

@@ -970,6 +970,7 @@ async function initModeration() {
       document.querySelectorAll("#tab-moderation .mod-pane").forEach((p) => p.classList.remove("active"));
       btn.classList.add("active");
       $("mod-pane-" + btn.dataset.modTab).classList.add("active");
+      if (btn.dataset.modTab === "verdicts" && window.__qqgmRecordsLoad) window.__qqgmRecordsLoad();
     };
   });
   $("btn-refresh").onclick = () => loadGroups().catch((e) => toast("刷新失败：" + e.message, true));
@@ -1008,7 +1009,7 @@ async function initModeration() {
 window.__qqgmModerationLoad = () => { initModeration().catch(() => {}); };
 // 概览页「去配置群规」：跳过来后自动选中该群
 window.__qqgmSelectGroup = (g) => initModeration().then(() => selectGroup(g)).catch(() => {});
-window.__qqgmRecordsLoad = () => {};
+window.__qqgmRecordsLoad = () => { if (typeof loadRecords === "function") loadRecords(); };
 
 })();
 
