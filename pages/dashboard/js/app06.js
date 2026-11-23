@@ -159,7 +159,6 @@ document.addEventListener('keydown',e=>{
   let current = "";
   let page = 1;
   let total = 0;
-  let loadSeq = 0;
 
   function toast(msg, isErr) {
     const el = $("modToast");
@@ -830,6 +829,7 @@ document.addEventListener('keydown',e=>{
   let rows = [];
   let page = 1;
   let total = 0;
+  let loadSeq = 0;
 
   function groupValue() {
     const el = $("recFilterGroup");
