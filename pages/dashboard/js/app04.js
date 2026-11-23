@@ -188,7 +188,7 @@ function openTplDialog(key) {
   const meta = setState.tplFormats[key] || {};
   const field = setState.fields.find((f) => f.key === "templates." + key);
   const item = field ? field.item : { description: key, default: "", hint: "" };
-  _tplCur = { key, item, format: meta.format || "text" };
+  _tplCur = { key, item, format: meta.format || "markdown" };
   $("tplDlgTitle").textContent = item.description || key;
   $("tplDlgHint").textContent = (item.hint ? item.hint + " · " : "") +
     "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）" +
@@ -299,8 +299,14 @@ function buildItem(item, group) {
   });
   box.querySelector(".set-reset").addEventListener("click", () => {
     set(item.default);
+    if (fmtMeta) {
+      fmtMeta.format = "markdown";
+      setState.tplFormats[item.key] = fmtMeta;
+      box.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === "markdown"));
+      bridge.apiPost("templates/formats/save", { name: item.key, type: "markdown" }).catch(() => {});
+    }
     refresh();
-    showToast(`已填回默认值（还没保存）：${item.description}`);
+    showToast(`已填回默认值（Markdown，还没保存）：${item.description}`);
   });
   // 消息模板这一组额外挂「格式拨杆 + 编辑预览」，格式本身存侧车文件
   const fmtMeta = group.key === "templates" ? setState.tplFormats[item.key] : null;
@@ -636,6 +642,7 @@ if (_setSubSeg) _setSubSeg.addEventListener("click", (e) => {
   if (reset) reset.addEventListener("click", () => {
     if (!_tplCur) return;
     $("tplDlgText").value = _tplCur.item.default || "";
+    setDlgFmt("markdown");
     renderTplPreview();
     showToast("已填回默认值（还没保存）");
   });
