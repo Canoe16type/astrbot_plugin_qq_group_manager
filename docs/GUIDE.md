@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![version](https://img.shields.io/badge/version-1.10.0-blue.svg)](../CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
-[![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
+[![AstrBot](https://img.shields.io/badge/AstrBot-4.24.1%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
 [![CI](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/actions/workflows/ci.yml/badge.svg)](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/actions/workflows/ci.yml)
 
@@ -24,7 +24,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 支持平台 | `qq_official`（QQ 官方机器人平台） |
-| 依赖 | AstrBot 4.16 ~ 4.x（核心实测 4.30.0）；群昵称需 **4.30.0+**、QQ 官方机器人平台适配器 |
+| 依赖 | AstrBot 4.24.1 ~ 4.x（插件页面最低 4.24.1，核心实测 4.30.0）；群昵称需 **4.30.0+**、QQ 官方机器人平台适配器 |
 | 许可 | MIT License（见 [LICENSE](../LICENSE)） |
 
 不修改 AstrBot 本体代码；AppID / AppSecret 从当前平台自动获取。

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![version](https://img.shields.io/badge/version-1.10.0-blue.svg)](CHANGELOG.md)
 [![platform](https://img.shields.io/badge/platform-qq__official-1f72c4.svg)](#快速开始)
-[![AstrBot](https://img.shields.io/badge/AstrBot-4.16%20~%204.x-6f42c1.svg)](#快速开始)
+[![AstrBot](https://img.shields.io/badge/AstrBot-4.24.1%20~%204.x-6f42c1.svg)](#快速开始)
 [![deps](https://img.shields.io/badge/dependencies-0-brightgreen.svg)](#安装与升级)
 [![CI](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/actions/workflows/ci.yml/badge.svg)](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/actions/workflows/ci.yml)
 
@@ -55,7 +55,7 @@
 | 项目 | 说明 |
 | --- | --- |
 | 支持平台 | `qq_official`（WebSocket）／`qq_official_webhook`（Webhook） |
-| 依赖 | AstrBot 4.16 ~ 4.x（核心实测 4.30.0）；**群昵称需 AstrBot 4.30.0+**，无需额外 pip 包 |
+| 依赖 | AstrBot 4.24.1 ~ 4.x（插件页面最低 4.24.1，核心实测 4.30.0）；**群昵称需 4.30.0+**，无需额外 pip 包 |
 | 许可 | 代码 MIT（见 [LICENSE](LICENSE)）；内置词库按上游许可证分发，见 [lexicons/THIRD_PARTY_NOTICES.md](lexicons/THIRD_PARTY_NOTICES.md) |
 
 ---
