@@ -7,7 +7,7 @@
         "description": "启用禁言指令",
         "type": "bool",
         "default": true,
-        "hint": "关闭后 /群管 禁言、/群管 解禁、/群管 查禁言 不生效"
+        "hint": "关闭后 /群管 禁言、/群管 禁言 解除、/群管 禁言 名单 不生效"
       },
       "default_mute_reason": {
         "description": "默认禁言理由",
@@ -43,7 +43,7 @@
         "description": "机器人被移出群·自动清理数据",
         "type": "bool",
         "default": true,
-        "hint": "收到官方 GROUP_DEL_ROBOT 事件时，自动删除该群的成员档案、群规、审核设置、判定记录、禁言/撤回历史与群名备注。关闭后只记日志不删数据；也可随时用 /群管 体检 清理 手动清"
+        "hint": "收到官方 GROUP_DEL_ROBOT 事件时，自动删除该群的成员档案、群规、审核设置、判定记录、禁言/撤回历史与群名备注。关闭后只记日志不删数据；也可随时用 /群管 状态 群 清理 手动清"
       }
     },
     "hint": "所有指令先经过这里的开关与群范围过滤"
@@ -387,7 +387,7 @@
         "hint": "变量：{duration_text}、{reason}、{username}"
       },
       "msg_unmute_success": {
-        "description": "禁言 · 解禁成功",
+        "description": "禁言 · 解除成功",
         "type": "text",
         "default": "**已解除** {username} 的禁言",
         "hint": "变量：{username}"
@@ -429,33 +429,33 @@
         "hint": "变量：无（按原文发送）"
       },
       "msg_mute_history_list": {
-        "description": "禁言 · 历史列表",
+        "description": "禁言 · 记录列表",
         "type": "text",
-        "default": "### 禁言历史\n\n最近 {count} 条（最新在前）：\n{list}",
+        "default": "### 禁言记录\n\n最近 {count} 条（最新在前）：\n{list}",
         "hint": "变量：{count}、{list}"
       },
       "msg_mute_history_summary": {
-        "description": "禁言 · 历史汇总",
+        "description": "禁言 · 记录汇总",
         "type": "string",
-        "default": "### 禁言历史 · 汇总\n\n共 {count} 条记录：\n{list}",
+        "default": "### 禁言记录 · 汇总\n\n共 {count} 条记录：\n{list}",
         "hint": "变量：{count}、{list}"
       },
       "msg_mute_history_empty": {
-        "description": "禁言 · 历史为空",
+        "description": "禁言 · 记录为空",
         "type": "text",
-        "default": "本群还没有禁言历史记录",
+        "default": "本群还没有禁言记录",
         "hint": "变量：无（按原文发送）"
       },
       "msg_mute_history_user": {
-        "description": "禁言 · 单用户历史",
+        "description": "禁言 · 单用户记录",
         "type": "text",
-        "default": "### 禁言历史 · {openid}\n\n最近 {count} 条：\n{list}",
+        "default": "### 禁言记录 · {openid}\n\n最近 {count} 条：\n{list}",
         "hint": "变量：{count}、{list}、{openid}"
       },
       "msg_mute_history_user_summary": {
         "description": "禁言 · 单用户汇总",
         "type": "text",
-        "default": "### 禁言历史 · {openid} 汇总\n\n共 {count} 条：\n{list}",
+        "default": "### 禁言记录 · {openid} 汇总\n\n共 {count} 条：\n{list}",
         "hint": "变量：{count}、{list}、{openid}"
       },
       "msg_mute_history_user_empty": {
@@ -780,7 +780,7 @@
         "type": "text",
         "description": "审核 · 变体累计达阈值：已自动禁言",
         "hint": "变量：{count}、{days}、{duration}、{mentions}、{user}",
-        "default": "{mentions} 疑似变体累计已达 {count} 次（近 {days} 天），已自动禁言 {user} {duration}。若判断有误，请解禁并在插件页面标记误判（标记后不再计入累计）。"
+        "default": "{mentions} 疑似变体累计已达 {count} 次（近 {days} 天），已自动禁言 {user} {duration}。若判断有误，请解除禁言并在插件页面标记误判（标记后不再计入累计）。"
       },
       "mod_admin_registered": {
         "type": "text",
