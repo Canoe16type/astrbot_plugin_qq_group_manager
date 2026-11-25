@@ -82,7 +82,6 @@ def build_plan(*, verdict: dict, settings: dict, prior: float, rules, default_se
         prior_bump_at=int(st.get("smart_tier_bump_at") or 2),
         force_mute_priors=int(st.get("smart_force_mute_priors") or 0),
         rule_floor_high=bool(st.get("rule_floor_high", True)),
-        semantic_high_manual=bool(st.get("semantic_high_manual", True)),
     )
     kind = str(dec.get("action") or "mute")
     plan.update({
