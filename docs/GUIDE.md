@@ -866,7 +866,7 @@ AstrBot 平台设置里那个 id，例如 `qq_official_main:ABC123...`）；不�
 | 群管自我介绍状态（已发 / 待兜底） | `group_intro_state.json` |
 | 禁言历史 / 撤回历史 | `mute_history.json` / `recall_history.json` |
 | 成员档案（含人工昵称、备注、退群记录） | `members.json` |
-| 群规 / 审核设置 / 判定记录 / 群名备注 / 提醒名单 / 群话术覆盖 | `mod_*.json` |
+| 群规 / 审核设置 / 判定记录 / 群名备注 / 提醒名单 | `mod_*.json` |
 | 入群欢迎去重、昵称缓存、申请缓存、待推送通知任务 | 内存 |
 
 **只删本群**：其他群的同名结构一条不动（单测 `test_purge_removes_only_that_group` 锁定）。
