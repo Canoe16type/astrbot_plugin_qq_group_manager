@@ -5,7 +5,7 @@ contact_links:
     about: 安装、指令矩阵、审核与面板说明，先看这里。
   - name: 更新日志
     url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/blob/main/CHANGELOG.md
-    about: 升级前后的行为变化（含 1.7.1 架构重构说明）。
+    about: 升级前后的行为变化与版本记录。
   - name: 开发工具仓库（自检 / 基准 / 打包）
     url: https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools
     about: 非插件本体，不要装进 AstrBot。
