@@ -300,21 +300,6 @@ def decide_action(
     if matched_rule is not None:
         seconds = _take(matched_rule)
 
-    # P0：C1–C6 通用高危必须自动处罚；只有类别异常/缺失的高危语义才转人工。
-    pub = str(verdict.get("category_public") or "")
-    pub_code = pub.split()[0] if pub else ""
-    common_high = pub_code in {f"C{i}" for i in range(1, 7)}
-    if (str(verdict.get("basis") or "") == DIM_SEMANTIC
-            and str(verdict.get("severity") or "").lower() == "high"
-            and matched_rule is None and not common_high):
-        return {
-            "action": "todo", "seconds": 0, "recall": True,
-            "rule_name": "", "rule_id": "", "match_by": "none",
-            "source": "semantic_high_manual", "severity": "high",
-            "basis": DIM_SEMANTIC,
-            "skipped_reason": "高危语义判定默认转人工复核",
-        }
-
     # ---- 智能分级（默认关闭）----
     # 原则仍然是「AI 只定性质，代码定罚」：这里只把 severity 映射成动作类型，
     # 时长依旧来自群规或 severity 阶梯，模型永远拿不到写秒数的权力。
