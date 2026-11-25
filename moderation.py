@@ -243,6 +243,7 @@ def decide_action(
     prior_bump_at: int = 2,
     force_mute_priors: int = 0,
     rule_floor_high: bool = True,
+    semantic_high_manual: bool = True,
 ) -> dict:
     """把 AI（或关键词层）的判定翻译成可执行动作 + 时长。
 
@@ -301,7 +302,8 @@ def decide_action(
         seconds = _take(matched_rule)
 
     # P0：高危语义判定默认转人工，不直接处罚；命中明确群规的除外。
-    if (str(verdict.get("basis") or "") == DIM_SEMANTIC
+    if (semantic_high_manual
+            and str(verdict.get("basis") or "") == DIM_SEMANTIC
             and str(verdict.get("severity") or "").lower() == "high"
             and matched_rule is None):
         return {
@@ -1015,6 +1017,9 @@ class ModerationStore:
         "warn_confidence_threshold": 0.6,
         "recall_max_age_seconds": 110,   # 超过官方 2 分钟撤回时限就别白费力气（0=总是尝试）
         "smart_penalty": False,
+        # P0：高危语义（basis=semantic + severity=high）未命中具体群规时，默认撤回+转人工。
+        # 关闭后恢复旧行为：按 high 档时长自动禁言。
+        "semantic_high_manual": True,
         "smart_tier_bump_at": 2,      # 智能分级：每满几次前科升一档（最多两档）
         "smart_force_mute_priors": 0,  # 前科达到 N 次直接禁言（0=不启用）
         "smart_max_multiplier": 3.0,   # 智能分级：累犯加刑倍率上限（默认 3×）

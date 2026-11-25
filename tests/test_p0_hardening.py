@@ -45,6 +45,10 @@ class HighSemanticManualTest(unittest.TestCase):
         self.assertEqual(dec["action"], "todo")
         self.assertTrue(dec["recall"])
 
+    def test_high_semantic_manual_can_be_disabled(self):
+        dec = decide_action(self._v(), rules=[], smart=False, semantic_high_manual=False)
+        self.assertEqual(dec["action"], "mute")
+
     def test_high_semantic_with_matched_rule_still_mutes(self):
         rules = [{"id": 1, "name": "人身攻击", "desc": "", "enabled": True,
                   "category": "harassment", "severity": "high", "seconds": 600}]
