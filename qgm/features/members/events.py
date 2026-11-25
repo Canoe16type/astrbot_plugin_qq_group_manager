@@ -47,6 +47,13 @@ async def on_member_remove(host, data: dict, platform_id: str | None = None) -> 
                 host.logger.info(f"{ctx}[成员] 退群事件早于清理记录，跳过重建")
                 return
 
+            leave_today = 0
+            if host._members_on():
+                try:
+                    leave_today = host.members.bump_leave_today(g, ev_ts)
+                except Exception as e:  # noqa: BLE001
+                    host.logger.debug(f"{ctx}[成员] 记录当日退群序号失败: {e}")
+
             # 1) 先查档案（此时 status 还是 active，能算在群时长）
             rec = host.members.get(g, member)
             joined_at = float((rec or {}).get("first_seen") or 0)
@@ -123,13 +130,26 @@ async def on_member_remove(host, data: dict, platform_id: str | None = None) -> 
             )):
                 return
 
+            counts = {}
+            if host._members_on():
+                try:
+                    counts = host.members.get_counts(g, member)
+                except Exception:  # noqa: BLE001
+                    counts = {}
+            leave_count = int(counts.get("leave_count") or 0)
+            join_count = int(counts.get("join_count") or 0)
+            host.logger.info(
+                f"{ctx}[成员] 退群统计 join={join_count} leave={leave_count} today={leave_today}"
+            )
+
             # 4) 组通知文案
             days = int(max(0, now - joined_at) // 86400) if joined_at else 0
             extra = ""
             if joined_at:
                 extra = f"\n在群 {days} 天 · 共发言 {msgs} 条"
+            tpl_key = "msg_member_leave_rejoin" if leave_count > 1 else "msg_member_remove_notify"
             text = host._render(
-                "msg_member_remove_notify",
+                tpl_key,
                 username=username or "某位成员",
                 short=member_registry_lib.short_id(member),
                 openid=member,
@@ -137,6 +157,9 @@ async def on_member_remove(host, data: dict, platform_id: str | None = None) -> 
                 days=days,
                 msgs=msgs,
                 extra=extra,
+                leave_today=leave_today,
+                leave_count=leave_count,
+                join_count=join_count,
                 group=(host.mod.get_group_meta(g).get("name") or g),
             )
             if not str(text or "").strip():
@@ -442,12 +465,23 @@ async def _welcome_member_on_join(host, group_openid, member_openid, platform_id
         except Exception:  # noqa: BLE001
             group_name = group_openid
 
+        counts = {}
+        if host._members_on():
+            try:
+                counts = host.members.get_counts(group_openid, member_openid)
+            except Exception:  # noqa: BLE001
+                counts = {}
+        join_count = int(counts.get("join_count") or 1)
+        leave_count = int(counts.get("leave_count") or 0)
+        tpl_key = "msg_welcome_rejoin" if join_count > 1 else "msg_welcome_after_approve"
         text = host._render(
-            "msg_welcome_after_approve",
+            tpl_key,
             username=username or "新朋友",
             group_name=group_name,
             bot_name=platform_id or "",
             at=member_openid,
+            join_count=join_count,
+            leave_count=leave_count,
         )
         if not str(text or "").strip():
             host.logger.info("[入群欢迎] 欢迎语模板为空，跳过")

@@ -26,7 +26,7 @@ decide_action = moderation.decide_action
 
 def _verdict(sev="low", conf=0.9, cat="abuse", rid=""):
     return {"violation": True, "severity": sev, "confidence": conf, "category": cat,
-            "basis": "semantic", "reason": "测试理由", "matched_rule_id": rid}
+            "basis": "keyword", "reason": "测试理由", "matched_rule_id": rid}
 
 
 class DecideActionSmartTest(unittest.TestCase):

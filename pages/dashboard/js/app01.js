@@ -301,7 +301,7 @@ const TAB_LOADERS = {
   moderation: () => { if (window.__qqgmModerationLoad) window.__qqgmModerationLoad(); },
   members: () => { if (window.__qqgmMembersLoad) window.__qqgmMembersLoad(); },
   lexicons: () => loadLexicons(),
-  records: () => { loadHistory(); loadRecalls(); if (window.__qqgmRecordsLoad) window.__qqgmRecordsLoad(); },
+  records: () => { if (window.__qgmUnifiedRecordsLoad) window.__qgmUnifiedRecordsLoad(); },
   logs: () => loadLogHistory(),
   settings: () => loadSettings(),
   approval: () => loadApprovalStrategies(),
@@ -312,7 +312,7 @@ const TAB_HEAD = {
   status: ["概览", "机器人平台、功能开关与全局设置一览"],
   settings: ["插件设置", "表单由 _conf_schema.json 自动生成，与 AstrBot 配置面板读写同一份配置"],
   ops: ["群管", "入群申请与当前禁言状态一览；同意 / 拒绝请在群内用管理员指令处理"],
-  moderation: ["群规审核", "左侧选群，右侧按「群规 / 举报设置 / 话术模板」分栏配置，按群独立保存"],
+  moderation: ["群规审核", "左侧选群，右侧按「群规 / 举报设置 / 判定与试跑」分栏配置，按群独立保存；话术统一在设置 → 消息模板"],
   members: ["成员档案", "openid ↔ 昵称/备注 对照表；官方事件只给 openid，名字靠这里维护，退群通知也从这里取名"],
   lexicons: ["词典", "关键词维度用的词库：内置开源词库 + 本地自传词库，改动立即生效"],
   records: ["记录", "禁言历史、撤回历史与模型判定记录；试跑用当前选中群的提示词"],
@@ -350,7 +350,6 @@ document.querySelectorAll(".rec-tab").forEach((btn) => {
     btn.classList.add("active");
     const pane = $("rec-pane-" + btn.dataset.recTab);
     if (pane) pane.classList.add("active");
-    if (btn.dataset.recTab === "kicks") { try { loadKicks(); } catch (e) {} }
   });
 });
 // 判定记录里的「切换群 →」：直接跳到「群规审核」选群
@@ -497,8 +496,6 @@ async function loadStatus() {
   else { badge.classList.add("hidden"); }
 
   // 记录 tab 的群筛选下拉（撤回历史那份以前漏了填充）
-  fillHistoryGroupSelect();
-  fillRecallGroupSelect();
   } catch (e) {
     console.error("[qqgm] status render failed", e);
     ["platformList", "featureList", "adminInfo", "groupList"].forEach((id) => {

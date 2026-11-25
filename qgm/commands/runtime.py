@@ -6,6 +6,7 @@ import re
 import time
 import traceback
 
+from ..features.records import commands as records_commands
 from ..kernel.constants import ADMIN_COMMANDS
 from . import parse as command_parse, router as command_router
 
@@ -33,6 +34,13 @@ async def _handle_command(host, event, text, forced_cmd=None, skip=0):
         # /群规：查看对所有人生效；增删改在 _cmd_rules 内部单独校验管理员
         if cmd == "/群规":
             await host._cmd_rules(event, parts)
+            return
+
+        # /记录：普通成员可用「我的」，全量/汇总在命令内部再校验管理员
+        if cmd == "/记录":
+            if not host._target_group_allowed(event.get_group_id(), event.get_platform_id()):
+                return
+            await records_commands.cmd_records(host, event, parts)
             return
 
         if cmd not in ADMIN_COMMANDS:
@@ -108,7 +116,7 @@ async def _run_command(host, event, forced_cmd=None, skip=0):
                 if not host._is_mentioned_bot(event):
                     return
                 if first not in ("禁言", "审批", "状态", "撤回", "群管", "举报", "群规", "审核",
-                                 "管理登记", "成员", "帮助", "撤销"):
+                                 "管理登记", "成员", "帮助", "撤销", "记录"):
                     return
             await host._handle_command(event, text, forced_cmd=forced_cmd, skip=skip)
         except Exception as e:

@@ -1002,3 +1002,35 @@ select{max-width:100%}
   .tpl-dlg-head{padding:var(--s3) var(--s4)}
   .tpl-dlg-head .seg{order:3;width:100%;max-width:none}
 }
+
+/* 插件处理记录：合并页 */
+.rec-tbl tbody tr { cursor: pointer; }
+.rec-tbl tbody tr:hover { background: rgba(127,127,127,.06); }
+.rec-tbl td { vertical-align: middle; }
+.rec-detail-box { width: min(92vw, 560px); }
+.rec-detail-box .modal-msg { max-height: 60vh; overflow: auto; }
+
+#rec-pane-all .table-wrap { overflow-x: auto; }
+.rec-tbl { min-width: 1020px; table-layout: auto; }
+.rec-tbl th, .rec-tbl td { padding: 8px 10px; white-space: nowrap; }
+.rec-tbl td:nth-child(6) { max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+
+/* 模板预览：表格与代码块 */
+.pv-table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: .92em; }
+.pv-table th, .pv-table td { border: 1px solid #e3e6ec; padding: 5px 8px; text-align: left; vertical-align: top; }
+.pv-table th { background: #f7f8fa; font-weight: 700; }
+.pv-code { margin: 8px 0; padding: 10px 12px; background: #f7f8fa; border: 1px solid #e3e6ec; border-radius: 8px; overflow: auto; white-space: pre; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+.pv-code code { background: none; padding: 0; }
+
+/* 设置分区与模板折叠 */
+.settings-title { margin: 18px 0 8px; padding-top: 10px; font-size: 14px; color: var(--text); border-top: 1px solid var(--line); }
+.settings-title:first-of-type { border-top: 0; margin-top: 8px; padding-top: 0; }
+.settings-advanced { margin-top: 16px; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; background: rgba(127,127,127,.02); }
+.settings-advanced > summary { cursor: pointer; padding: 11px 0; font-weight: 700; font-size: 13px; color: var(--muted); }
+.settings-advanced[open] > summary { color: var(--text); border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.set-sub-details { margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.set-sub-details > summary { cursor: pointer; list-style: none; padding: 8px 10px; background: rgba(127,127,127,.04); font-size: 12px; font-weight: 700; color: var(--muted); }
+.set-sub-details > summary::-webkit-details-marker { display: none; }
+.set-sub-details > summary::before { content: "▶"; display: inline-block; margin-right: 6px; font-size: 9px; transition: transform .15s; }
+.set-sub-details[open] > summary::before { transform: rotate(90deg); }
+.set-sub-details .set-items { padding: 8px 10px 4px; }

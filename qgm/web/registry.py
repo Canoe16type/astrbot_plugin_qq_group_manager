@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from functools import partial
+
+from ..features.records import web as records_web
 from ..kernel.constants import WEB_API_PREFIX
 
 
@@ -13,6 +16,8 @@ def _register_web_apis(host):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/history/clear", host.web_mute_history_clear, ["POST"], "QQ群管-清空禁言历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/history/delete", host.web_mute_history_delete, ["POST"], "QQ群管-删除单条禁言历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/kick/history", host.web_kick_history, ["GET"], "QQ群管-踢人记录")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/records", partial(records_web.web_records, host), ["GET"], "QQ群管-插件处理记录")
+        ctx.register_web_api(f"/{WEB_API_PREFIX}/records/detail", partial(records_web.web_records_detail, host), ["GET"], "QQ群管-记录详情")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls", host.web_recalls, ["GET"], "QQ群管-撤回历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/clear", host.web_recalls_clear, ["POST"], "QQ群管-清空撤回历史")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/recalls/delete", host.web_recalls_delete, ["POST"], "QQ群管-删除单条撤回历史")
@@ -32,7 +37,6 @@ def _register_web_apis(host):
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/save", host.web_mod_rules_save, ["POST"], "审核-保存群规")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/rules/transfer", host.web_mod_rules_transfer, ["POST"], "审核-转移群规到其他群")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/settings/save", host.web_mod_settings_save, ["POST"], "审核-保存举报设置")
-        ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/templates/save", host.web_mod_templates_save, ["POST"], "审核-保存话术模板")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts", host.web_mod_verdicts, ["GET"], "审核-判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/export", host.web_mod_verdicts_export, ["GET"], "审核-导出判定记录")
         ctx.register_web_api(f"/{WEB_API_PREFIX}/mod/verdicts/delete", host.web_mod_verdicts_delete, ["POST"], "审核-删除单条判定记录")

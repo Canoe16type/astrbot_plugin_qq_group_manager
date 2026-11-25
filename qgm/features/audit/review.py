@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 
 try:
@@ -14,6 +15,13 @@ except ImportError:  # 测试把插件目录直接加入 sys.path 时
     import moderation  # type: ignore
 
 from . import categories
+
+
+def evidence_matches(text: str, evidence: str) -> bool:
+    """证据是否确实来自原文；空白差异容忍，语义改写不算。"""
+    norm = lambda x: re.sub(r"\s+", " ", str(x or "")).strip()
+    ev = norm(evidence)
+    return bool(ev) and ev in norm(text)
 
 
 def review_fast(host, group: str, rep: dict, respect_switches: bool = True, scene: str = "举报"):
@@ -236,6 +244,19 @@ async def review_llm(host, event, group: str, rep: dict, context_lines: list[str
         verdict["category_public"] = categories.public_text(code)
         verdict["model"] = pid
         verdict["from_cache"] = False
+        # P0：高危语义判定必须带原文证据；证据不在原文中则按未违规处理，避免注入/幻觉直接处罚。
+        evidence = str(verdict.get("evidence") or "")
+        if verdict["violation"] and basis == moderation.DIM_SEMANTIC and str(verdict.get("severity") or "").lower() == "high":
+            if not evidence_matches(rep.get("text") or "", evidence):
+                verdict["violation"] = False
+                verdict["evidence_valid"] = False
+                verdict["skipped_reason"] = "evidence_mismatch"
+                host.logger.warning(
+                    f"{ctx}[{scene}][模型] 高危语义证据未命中原文，按未违规处理: "
+                    f"evidence={evidence[:80]!r}"
+                )
+            else:
+                verdict["evidence_valid"] = True
         try:
             dim_name = host.mod.get_dim_names(group).get(basis, basis)
             cat_name = host.mod.get_cat_names(group).get(str(verdict.get("category") or ""), verdict.get("category") or "-")

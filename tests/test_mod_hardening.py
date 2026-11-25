@@ -59,7 +59,7 @@ class _Usage:
 
 class _Resp:
     completion_text = '{"violation": true, "basis": "semantic", "category": "ad", ' \
-                      '"severity": "high", "confidence": 0.9, "reason": "广告"}'
+                      '"severity": "high", "confidence": 0.9, "reason": "广告", "evidence": "加我vx进群领福利"}'
     usage = _Usage()
 
 

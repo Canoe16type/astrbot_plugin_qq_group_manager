@@ -821,3 +821,169 @@ document.addEventListener('keydown',e=>{
     });
   });
 })();
+
+// ---------------- 插件处理记录（统一页） ----------------
+(function unifiedRecords() {
+  const KIND = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
+  const ACTION = { verdict: "判定", mute: "禁言", recall: "撤回", kick: "踢人" };
+  let rows = [];
+  let page = 1;
+  let total = 0;
+  let loadSeq = 0;
+
+  function groupValue() {
+    const el = $("recFilterGroup");
+    return el && el.value !== "all" ? el.value : "";
+  }
+  function targetQuery() {
+    const el = $("recFilterTarget");
+    return el ? (el.value || "").trim().toLowerCase() : "";
+  }
+  function matchTarget(row) { return true; }
+  function fmtRow(r) {
+    const target = r.target_name || (r.target_id ? r.target_id.slice(-6) : "-");
+    const result = r.result || (r.ok ? "成功" : "失败");
+    return `<tr data-rec-id="${esc(r.display_id)}">
+      <td><code>${esc(r.display_id)}</code></td>
+      <td class="nowrap">${esc(r.time_text || "-")}</td>
+      <td title="${esc(target)}">${esc(target)}</td>
+      <td>${esc(ACTION[r.action] || r.action)}</td>
+      <td>${esc(result)}</td>
+      <td title="${esc(r.reason || "")}">${esc((r.reason || "-").slice(0, 36))}</td>
+      <td title="${esc(r.actor_name || "")}">${esc(r.actor_name || "-")}</td>
+    </tr>`;
+  }
+  function render() {
+    const box = $("recRows");
+    if (!box) return;
+    const list = rows;
+    box.innerHTML = list.length
+      ? list.map(fmtRow).join("")
+      : `<tr><td colspan="7"><div class="empty"><span>没有找到记录</span></div></td></tr>`;
+    const count = $("recCount");
+    if (count) count.textContent = `共 ${total} 条 · 仅记录本插件执行的操作；其他管理员的撤回/禁言不在此列。`;
+    const info = $("recPageInfo");
+    const pages = Math.max(1, Math.ceil(total / 50));
+    if (info) info.textContent = total ? `第 ${page} / ${pages} 页` : "";
+    if ($("btnRecPrev")) $("btnRecPrev").disabled = page <= 1;
+    if ($("btnRecNext")) $("btnRecNext").disabled = page >= pages;
+  }
+  async function load() {
+    const box = $("recRows");
+    const seq = ++loadSeq;
+    if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载中…</span></div></td></tr>`;
+    try {
+      fillGroupSelect("recFilterGroup", "全部群");
+      const params = { limit: 50, page };
+      const g = groupValue();
+      if (g) params.group = g;
+      const kind = $("recFilterKind") ? $("recFilterKind").value : "";
+      if (kind) params.kind = kind;
+      const days = $("recFilterDays") ? $("recFilterDays").value : "0";
+      if (days && days !== "0") params.days = days;
+      const tq = targetQuery();
+      if (tq) params.target = tq;
+      const r = await bridgeNow().apiGet("records", params);
+      if (seq !== loadSeq) return;
+      rows = r.items || [];
+      total = Number(r.total || 0);
+      render();
+    } catch (e) {
+      if (box) box.innerHTML = `<tr><td colspan="7"><div class="empty"><span>加载失败：${esc(e.message || e)}</span></div></td></tr>`;
+    }
+  }
+  async function openDetail(id) {
+    try {
+      const r = await bridgeNow().apiGet("records/detail", { id, group: groupValue() });
+      if (r.error) { showToast(r.error); return; }
+      const it = r.item;
+      $("recDetailTitle").textContent = `记录 ${it.display_id}`;
+      const lines = [
+        ["时间", it.time_text], ["类型", KIND[it.kind] || it.kind],
+        ["目标", it.target_name || it.target_id || "-"],
+        ["处理", `${ACTION[it.action] || it.action} · ${it.result || "-"}`],
+        ["操作人", it.actor_name || "-"], ["理由", it.reason || "-"],
+      ];
+      if (it.detail && it.detail.rule_name) lines.push(["依据", it.detail.rule_name]);
+      if (it.detail && it.detail.category_public) lines.push(["类别", it.detail.category_public]);
+      if (it.detail && it.detail.error_code) lines.push(["错误码", it.detail.error_code]);
+      if (it.legacy) lines.push(["备注", "历史记录缺少目标 ID，仅管理员可按群查看"]);
+      let html = lines.map(([k, v]) =>
+        `<div style="display:flex;gap:8px;padding:3px 0"><b style="min-width:56px;color:#667">${esc(k)}</b><span style="word-break:break-word">${esc(v)}</span></div>`
+      ).join("");
+      if (r.content) {
+        html += `<div style="margin-top:10px;border-top:1px solid #eee;padding-top:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center"><b>原文</b>
+          <button class="btn ghost small" id="recCopyContent">复制</button></div>
+          <pre style="white-space:pre-wrap;word-break:break-word;max-height:24vh;overflow:auto;background:#f7f8fa;padding:8px;border-radius:6px;margin:6px 0 0">${esc(r.content)}</pre>
+        </div>`;
+      } else if (it.kind === "recall") {
+        html += `<div style="margin-top:10px;color:#888">旧记录未保存原文</div>`;
+      }
+      $("recDetailBody").innerHTML = html;
+      const cp = $("recCopyContent");
+      if (cp) cp.onclick = async () => {
+        try { await navigator.clipboard.writeText(r.content); showToast("已复制原文"); }
+        catch (e) { showToast("复制失败，请手动选择"); }
+      };
+      $("recDetailMask").classList.add("show");
+    } catch (e) { showToast(`详情加载失败：${e.message || e}`); }
+  }
+  function exportCsv() {
+    const head = ["记录", "时间", "类型", "目标", "处理", "结果", "操作人", "理由"];
+    const lines = [head.join(","), ...rows.filter(matchTarget).map((r) => [
+      r.display_id, r.time_text, KIND[r.kind] || r.kind, r.target_name || r.target_id,
+      ACTION[r.action] || r.action, r.result || "", r.actor_name || "", r.reason || "",
+    ].map((v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","))];
+    const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `qgm-records-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(a.href);
+  }
+
+  if ($("btnRecLoad")) $("btnRecLoad").addEventListener("click", load);
+  if ($("btnRecExport")) $("btnRecExport").addEventListener("click", exportCsv);
+  if ($("btnRecClear")) $("btnRecClear").addEventListener("click", async () => {
+    const kind = $("recFilterKind") ? $("recFilterKind").value : "";
+    const g = groupValue();
+    const scope = g ? "当前群" : "全部群";
+    const kindName = kind ? ({ verdict: "判定记录", mute: "禁言记录", recall: "撤回记录", kick: "踢人记录" }[kind] || "记录") : "全部类型记录";
+    if (!kind && !g) {
+      const msg = "您现在删除的是「全部群」的「全部记录」，您真的希望全部删除吗？";
+      if (!(await showConfirm(msg))) return;
+      if (!(await showConfirm("最后确认：这一操作不可恢复，确定继续删除全部群的判定、禁言、撤回、踢人记录吗？"))) return;
+    } else {
+      if (!(await showConfirm(`确认清空${scope}的${kindName}？不可恢复。`))) return;
+    }
+    try {
+      const r = await bridgeNow().apiPost("records/clear", { group: g, kind });
+      showToast(`已清空 ${r.cleared || 0} 条`);
+      load();
+    } catch (e) { showToast(`清空失败：${e.message || e}`); }
+  });
+  ["recFilterGroup", "recFilterKind", "recFilterDays"].forEach((id) => {
+    if ($(id)) $(id).addEventListener("change", () => { page = 1; load(); });
+  });
+  let targetTimer = null;
+  if ($("recFilterTarget")) $("recFilterTarget").addEventListener("input", () => {
+    clearTimeout(targetTimer); targetTimer = setTimeout(() => { page = 1; load(); }, 250);
+  });
+  if ($("btnRecPrev")) $("btnRecPrev").addEventListener("click", () => {
+    if (page > 1) { page--; load(); }
+  });
+  if ($("btnRecNext")) $("btnRecNext").addEventListener("click", () => {
+    if (page * 50 < total) { page++; load(); }
+  });
+  if ($("recRows")) $("recRows").addEventListener("click", (e) => {
+    const tr = e.target.closest("tr[data-rec-id]");
+    if (tr) openDetail(tr.dataset.recId);
+  });
+  if ($("recDetailClose")) $("recDetailClose").addEventListener("click", () => $("recDetailMask").classList.remove("show"));
+  if ($("recDetailMask")) $("recDetailMask").addEventListener("click", (e) => {
+    if (e.target === $("recDetailMask")) $("recDetailMask").classList.remove("show");
+  });
+  window.__qgmUnifiedRecordsLoad = load;
+  const tab = document.querySelector('.tab[data-tab="records"]');
+  if (tab) tab.addEventListener("click", () => setTimeout(load, 30));
+})();

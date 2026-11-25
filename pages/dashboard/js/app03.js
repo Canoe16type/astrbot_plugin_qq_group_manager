@@ -368,66 +368,6 @@ function collectSettings() {
   return out;
 }
 
-/* ---------------- 话术模板 ---------------- */
-function renderTemplates() {
-  const list = $("tpl-list");
-  if (list) {
-    list.innerHTML = TPL_FIELDS.map(([key, label]) =>
-      `<div class="row-item"><div class="left"><span class="tag">${esc(label)}</span>` +
-      `<span class="hint">${esc(key)} · 已迁移到设置 → 消息模板</span></div></div>`).join("");
-    return;
-  }
-  const tpl = (detail && detail.templates) || {};
-  const dflt = (detail && detail.default_templates) || {};
-  const box = $("tpl-fields");
-  box.innerHTML = "";
-  TPL_FIELDS.forEach(([key, label]) => {
-    const el = document.createElement("label");
-    el.className = "field block";
-    const overridden = detail && detail.templates_override && detail.templates_override[key] !== undefined;
-    el.innerHTML =
-      `<span>${esc(label)}${overridden ? ' <b style="color:var(--primary)">（本群已覆盖）</b>' : ""}</span>` +
-      `<textarea rows="2" data-tpl="${key}" placeholder="全局默认：${esc(dflt[key] || "")}"></textarea>`;
-    box.appendChild(el);
-    el.querySelector("textarea").value = tpl[key] || "";
-  });
-
-  const dims = Object.assign({}, DIM_LABELS, (detail && detail.dim_names) || {});
-  const dimBox = $("dim-fields");
-  dimBox.innerHTML = "";
-  Object.keys(DIM_LABELS).forEach((k) => {
-    const el = document.createElement("label");
-    el.className = "field";
-    el.innerHTML = `<span style="min-width:70px">${k}</span><input type="text" data-dim="${k}" value="${esc(dims[k] || "")}" />`;
-    dimBox.appendChild(el);
-  });
-
-  const cats = Object.assign({}, CAT_LABELS, (detail && detail.cat_names) || {});
-  const catBox = $("cat-fields");
-  catBox.innerHTML = "";
-  Object.keys(CAT_LABELS).forEach((k) => {
-    const el = document.createElement("label");
-    el.className = "field";
-    el.innerHTML = `<span style="min-width:70px">${k}</span><input type="text" data-cat="${k}" value="${esc(cats[k] || "")}" />`;
-    catBox.appendChild(el);
-  });
-}
-
-function collectTemplates() {
-  const t = {};
-  document.querySelectorAll("[data-tpl]").forEach((el) => {
-    const v = el.value.trim();
-    if (v !== "") t[el.dataset.tpl] = v;
-  });
-  const dims = {};
-  document.querySelectorAll("[data-dim]").forEach((el) => { dims[el.dataset.dim] = el.value.trim(); });
-  const cats = {};
-  document.querySelectorAll("[data-cat]").forEach((el) => { cats[el.dataset.cat] = el.value.trim(); });
-  t.dim_names = dims;
-  t.cat_names = cats;
-  return t;
-}
-
 /* ---------------- 统计 / 记录 / 试跑 ---------------- */
 const btnVerdictRefresh = $("btnVerdictRefresh");
 if (btnVerdictRefresh) btnVerdictRefresh.addEventListener("click", () => { loadRecords(); loadTodo(); });
@@ -741,16 +681,7 @@ async function exportVerdicts() {
 }
 const btnVerdictExport = document.getElementById("btnVerdictExport");
 if (btnVerdictExport) btnVerdictExport.addEventListener("click", exportVerdicts);
-const _goModTpl = document.getElementById("btnGoModTpl");
-if (_goModTpl) _goModTpl.onclick = () => {
-  switchTabSafe("moderation");
-  const mt = document.querySelector('.mod-tab[data-mod-tab="templates"]');
-  if (mt) mt.click();
-  setTimeout(() => {
-    const f = document.querySelector("#tpl-fields");
-    if (f) f.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, 60);
-};
+
 const _btnPrune = document.getElementById("btnPruneVerdicts");
 if (_btnPrune) _btnPrune.addEventListener("click", pruneVerdicts);
 
@@ -1013,31 +944,6 @@ async function saveSettings() {
   }
 }
 
-async function saveTemplates() {
-  if (!current) return toast("先选一个群", true);
-  try {
-    await bridge.apiPost("mod/templates/save", { scope: current, templates: collectTemplates() });
-    toast("已保存本群话术");
-    await selectGroup(current);
-  } catch (e) {
-    toast("保存失败：" + e.message, true);
-  }
-}
-
-async function clearTemplates() {
-  if (!current) return toast("先选一个群", true);
-  const empty = { dim_names: {}, cat_names: {} };
-  TPL_FIELDS.forEach(([k]) => { empty[k] = ""; });
-  try {
-    await bridge.apiPost("mod/templates/save", { scope: current, templates: empty });
-    toast("已清空本群覆盖，恢复继承全局");
-    await selectGroup(current);
-  } catch (e) {
-    toast("操作失败：" + e.message, true);
-  }
-}
-
-
 /* ---------------- 初始化（并入 dashboard 页：点 tab 才拉数据，懒加载） ---------------- */
 let modInited = false;
 
@@ -1064,6 +970,7 @@ async function initModeration() {
       document.querySelectorAll("#tab-moderation .mod-pane").forEach((p) => p.classList.remove("active"));
       btn.classList.add("active");
       $("mod-pane-" + btn.dataset.modTab).classList.add("active");
+      if (btn.dataset.modTab === "verdicts" && window.__qqgmRecordsLoad) window.__qqgmRecordsLoad();
     };
   });
   $("btn-refresh").onclick = () => loadGroups().catch((e) => toast("刷新失败：" + e.message, true));
@@ -1088,11 +995,8 @@ async function initModeration() {
   const _btnTransfer = $("btn-transfer-rules");
   if (_btnTransfer) _btnTransfer.onclick = transferRules;
   $("btn-save-settings").onclick = saveSettings;
-  const _saveTpl = $("btn-save-templates");
-  if (_saveTpl) _saveTpl.onclick = saveTemplates;
-  const _clearTpl = $("btn-clear-templates");
-  if (_clearTpl) _clearTpl.onclick = clearTemplates;
-  $("btn-test").onclick = runTest;
+  const _btnTest = $("btn-test");
+  if (_btnTest) _btnTest.onclick = runTest;
 
   try {
     await loadGroups();
@@ -1105,12 +1009,8 @@ async function initModeration() {
 window.__qqgmModerationLoad = () => { initModeration().catch(() => {}); };
 // 概览页「去配置群规」：跳过来后自动选中该群
 window.__qqgmSelectGroup = (g) => initModeration().then(() => selectGroup(g)).catch(() => {});
-// 「记录」页的判定记录/试跑：需要先有「当前群」，没有就默认选第一个
-window.__qqgmRecordsLoad = () => initModeration().then(() => {
-  if (current) return null;
-  const first = bots[0] && (bots[0].groups || [])[0];
-  return first ? selectGroup(first.group) : null;
-}).catch(() => {});
+window.__qqgmRecordsLoad = () => { if (typeof loadRecords === "function") loadRecords(); };
+
 })();
 
 

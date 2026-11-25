@@ -48,4 +48,6 @@ def resolve_admin(cmd: str, parts: list[str]):
         return "_cmd_kick", parts
     if cmd == "/成员":
         return "_cmd_member", parts
+    if cmd == "/记录":
+        return "_cmd_records", parts
     return None

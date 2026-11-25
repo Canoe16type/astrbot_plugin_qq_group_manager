@@ -54,6 +54,7 @@ LEXICON_UPSTREAM_TIMEOUT = 15.0                   # 下载超时（秒）
 LEXICON_UPSTREAM_FAST_TIMEOUT = 8.0               # 配了加速地址时，直连只等这么久
 
 REGISTERED_COMMANDS = (
+    "/记录",
     "禁言", "审批", "状态", "撤回", "审核", "群规", "撤销",
     "管理登记", "群管", "举报", "成员", "帮助",
 )

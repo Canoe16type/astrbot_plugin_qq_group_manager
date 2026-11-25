@@ -102,7 +102,7 @@ class ArchitectureGuardTest(unittest.TestCase):
             "web_config_save", "web_config_schema", "web_config_bulk_save",
             "web_mod_groups", "web_mod_group_rename", "web_mod_group_names_refresh",
             "web_mod_detail", "web_mod_rules_save", "web_mod_rules_transfer",
-            "web_mod_settings_save", "web_mod_templates_save", "web_mod_verdicts_revoke",
+            "web_mod_settings_save", "web_mod_verdicts_revoke",
             "web_mod_verdicts_prune", "web_mod_verdicts_export", "web_mod_verdicts",
             "web_mod_feedback", "web_mod_admins", "web_mod_admins_remove", "web_mod_todo",
             "web_mod_todo_handle", "web_mod_stats", "web_mod_test", "web_mod_verdicts_delete",

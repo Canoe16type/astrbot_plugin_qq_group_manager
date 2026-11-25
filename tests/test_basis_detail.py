@@ -43,8 +43,9 @@ class BasisDetailTest(unittest.TestCase):
     def test_default_template_uses_basis_detail(self):
         txt = moderation.DEFAULT_TEMPLATES["mod_hit"].format(
             basis_detail="群规第2条「引人不适」", category="其他违规", duration="10分钟")
-        self.assertIn("根据群规第2条「引人不适」", txt)
-        self.assertIn("属于其他违规", txt)
+        self.assertIn("依据", txt)
+        self.assertIn("群规第2条「引人不适」", txt)
+        self.assertIn("其他违规", txt)
 
 
 if __name__ == "__main__":

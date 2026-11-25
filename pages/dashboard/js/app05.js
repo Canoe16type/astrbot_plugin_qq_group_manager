@@ -716,8 +716,12 @@ const HELP = {
       def:"Markdown 里单个换行会被合并成一行，想分段就空一行。要在同一段里连续空出几行（比如列表后接正文），官方给的办法是零宽空格 <code>\\u200B</code>，写一个多一行。" },
     { id:"at", term:"@某位成员 / 头像", sample:"{at} 欢迎加入！\n{avatar:160}\n有问题 @ 管理员",
       def:"官方标签是 <code>&lt;qqbot-at-user id=\"openid\" /&gt;</code>，旧写法 <code>&lt;@openid&gt;</code> 官方已标注即将弃用。模板里直接写 <code>{at}</code> 最省事：插件会自动换成「这条消息相关的成员」，头像用 <code>{avatar:40}</code> 小图 / <code>{avatar}</code> 100px / <code>{avatar:160}</code> 大图（仅 Markdown 格式生效，源图按尺寸自动取档）。上面预览里的 @群员 是示意，真实发送才展开成真人。" },
-    { id:"no", term:"哪些写了不生效", sample:"| 表格 | 不支持 |\n```\n代码块 不支持\n```",
-      def:"官方「支持格式」里没有<strong>表格</strong>和<strong>代码块</strong>（三个反引号），写了会原样显示；也不建议塞 HTML 标签。表情请直接打 emoji，不要用 <code>:smile:</code> 这种简码。" },
+    { id:"table", term:"表格（GFM）", sample:"| 记录 | 目标 | 结果 |\n| --- | --- | --- |\n| V26 | 小明 | 成功 |\n| K03 | 小刚 | 失败 |",
+      def:"表头下一行必须是 <code>| --- | --- |</code> 分隔行，否则不会识别成表格；列数保持一致。QQ 群聊、私聊都支持，面板预览与群内渲染一致。" },
+    { id:"code", term:"代码块（围栏）", sample:'```python\nprint("hello")\n```',
+      def:"用三个反引号包住，开头可写语言名；围栏要单独成行。QQ 群聊、私聊都支持，面板预览会显示为可滚动代码块。" },
+    { id:"no", term:"哪些写了不生效", sample:"<div>HTML 标签</div>\n:smile:",
+      def:"不建议塞 HTML 标签；表情请直接打 emoji，不要用 <code>:smile:</code> 这类简码。表格与围栏代码块已经支持，不再属于“写了不生效”。" },
     { id:"var", term:"和 {变量} 混用", sample:"## 欢迎 {username}\n本群已开群管：[指令大全](https://q.qq.com)",
       def:"模板渲染顺序是「先替换 {变量}，再按 Markdown 解析」，所以变量值里不要带 <code>*</code> <code>#</code> <code>[</code> 这类符号（昵称里真有也没事，只是偶尔会歪）。Markdown 里要写花括号原文，请用 <code>{{</code> 转义成一对。" },
     { id:"err", term:"Markdown 相关报错码", sample:"",
@@ -734,8 +738,8 @@ const HELP = {
           "<b>审核 / 处罚</b>：<code>{basis_detail}</code> <code>{category}</code> <code>{category_public}</code> <code>{severity_label}</code> <code>{duration}</code> <code>{punish}</code> <code>{rule}</code> <code>{rule_name}</code> <code>{reason}</code> <code>{reason_line}</code> <code>{vid}</code> <code>{verdict}</code> <code>{method}</code> <code>{days}</code> <code>{mentions}</code> <code>{next}</code><br>" +
           "<b>踢人</b>：<code>{names}</code> <code>{id}</code> <code>{error}</code> <code>{max}</code> <code>{count}</code> <code>{lines}</code><br>" +
           "<b>禁言 / 撤回</b>：<code>{username}</code> <code>{duration_text}</code> <code>{openid}</code> <code>{list}</code> <code>{count}</code> <code>{error}</code><br>" +
-          "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code><br>" +
-          "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
+          "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code> <code>{join_count}</code> <code>{leave_count}</code><br>" +
+          "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{join_count}</code> <code>{leave_count}</code> <code>{leave_today}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
           "<b>Markdown 专用</b>：<code>{at}</code>（真 @）、<code>{avatar}</code> / <code>{avatar:宽度}</code>（头像）；纯文本下这些变量不生成标签/图片。" },
     { id:"modes", term:"纯文本 / Markdown 显示对照", go:[],
       def:"<b>同一条模板，两种格式实际发出去的样子：</b><br><br>" +

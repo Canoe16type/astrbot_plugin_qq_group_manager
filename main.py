@@ -44,6 +44,8 @@ from astrbot.api.message_components import At, Image, Plain
 from astrbot.api.star import Context, Star, StarTools
 from astrbot.api.web import json_response, request, stream_response
 
+from .qgm.kernel.template_defaults import TEMPLATE_DEFAULTS
+
 from .plugin_logger import LOG_CONTEXT, PluginLogger
 from .qgm.kernel.storage import write_json_atomic as _write_json_atomic
 from .qgm.kernel.text import short_id
@@ -123,7 +125,6 @@ from . import variant as variant_lib
 # 免得出现「点得动但服务端毫无反应」的死按钮。
 _BUTTON_ACTION_DECORATOR = getattr(filter, "button_action", None)
 _BUTTON_ACTION_SUPPORTED = callable(_BUTTON_ACTION_DECORATOR)
-
 
 class _TplText(str):
     """带模板 key 的字符串。
@@ -414,9 +415,7 @@ class QQGroupManager(Star):
         """装配：见 qgm/setup.py。"""
         return init_plugin(self, context, config)
 
-    # ------------------------------------------------------------------
     # 路径 / 持久化
-    # ------------------------------------------------------------------
     def _plugin_data_dir(self) -> str:
         # 走 AstrBot 公开接口 StarTools.get_data_dir()：落点 data/plugin_data/<插件id>，
         # 与卸载清理、WebUI 一致。取不到时退回 AstrBot 工作目录下的同一相对路径。
@@ -471,7 +470,6 @@ class QQGroupManager(Star):
         except Exception as e:
             self.logger.warning(f"保存已知群列表失败: {e}")
 
-    # ------------------------------------------------------------------
     # 群管自我介绍（GROUP_ADD_ROBOT 事件优先，首条消息欢迎兜底）
     #   done    : 已经发过的群 -> 发送途径（event / message / manual）
     #   pending : 收到过入群事件、但发送没成功确认的群（留给旧方案兜底）
@@ -837,7 +835,9 @@ class QQGroupManager(Star):
 
     def _add_recall_record(self, group_openid: str, platform_id: str,
                            message_id: str, content: str, source: str,
-                           operator: str, operator_name: str = "") -> dict:
+                           operator: str, operator_name: str = "",
+                           event_id: str = "", target_openid: str = "",
+                           target_name: str = "") -> dict:
         """记录一条撤回操作。content 为被撤回消息的原文（引用撤回时能拿到，
         直接传 message_id 时平台接口不返回内容，则留空仅保留消息 ID）。"""
         self._recall_seq += 1
@@ -846,6 +846,9 @@ class QQGroupManager(Star):
             "group_openid": group_openid,
             "platform_id": platform_id,
             "message_id": message_id,
+            "event_id": event_id or "",
+            "target_openid": target_openid or "",
+            "target_name": target_name or "",
             "content": content or "",
             "source": source,  # quote=引用撤回, message_id=传ID撤回
             "recalled_at": int(time.time()),
@@ -1044,30 +1047,7 @@ class QQGroupManager(Star):
     # 为什么需要：升级后 AstrBot 可能还没把新模板项写进配置文件，
     # 这时 _render 读到的模板是空串，消息会被静默丢掉。留一份兜底，
     # 老配置升级上来也能正常发（用户可在配置里改成自己的话术）。
-    TPL_FALLBACKS = {
-        "msg_mod_unattributed": "⚠️ 已判定：{verdict}。\n"
-                               "但这条消息不在消息缓存里（可能是机器人重载前发送、或当时没有收到），"
-                               "无法定位发送者，本次未处罚。需要处理的话请让当事人重新引用后举报。",
-        "msg_mod_todo": "⚠️ 这条内容被判为疑似严重违规，但模型置信度不足，已转人工复核，暂不处罚。",
-        "msg_mod_revoke": "✅ 已撤销处罚记录 #{vid}\n{at} 非常抱歉，LLM 审核对您做出了错误的处罚，我们深感歉意！\n"
-                          "原处罚：{punish}\n禁言状态：{unmute}\n撤销人：{operator}{reason_line}",
-        "msg_mod_warn": "{at} ⚠️ 本消息已记录（警告，不撤回）\n"
-                        "命中：{rule}\n判定：{severity}\n理由：{reason}\n"
-                        "后续：再次出现将禁言 {next}\n有异议请联系群管理。",
-        "msg_join_request_auto_approved": (
-            "✅ 新成员 {username} 的入群申请已由自动审批策略通过（策略 {strategy}）"
-        ),
-        "msg_join_request_button_ok": "✅ 已通过 {username} 的入群申请",
-        "msg_join_request_button_rejected": "🚫 已拒绝 {username} 的入群申请",
-        "msg_join_request_button_gone": (
-            "⚠️ 这条入群申请已处理或已失效（可能刚被其他人处理），无需重复操作"
-        ),
-        "msg_join_request_button_denied": "⛔ 你没有处理入群申请的权限，请让群主/管理员操作",
-        "msg_join_request_button_failed": "❌ 处理 {username} 的入群申请失败：{error}",
-        "msg_report_daily": (
-            "【群管日报】{date} {time}\n待处理入群申请：{pending_count} 条\n{list}\n当前禁言：{muted_count} 人"
-        ),
-    }
+    TPL_FALLBACKS = TEMPLATE_DEFAULTS
 
     def _tpl_formats_path(self) -> str:
         return os.path.join(self._plugin_data_dir(), "msg_formats.json")
@@ -1095,11 +1075,8 @@ class QQGroupManager(Star):
 
     def _tpl_format(self, key: str) -> str:
         meta = self._tpl_formats.get(key) or {}
-        kind = str(meta.get("type") or "text").strip().lower()
-        if not meta and key in ("msg_mod_warn", "msg_mod_revoke"):
-            # 两条都带 @：纯文本通道不解析 <qqbot-at-user>，必须走 markdown
-            return "markdown"
-        return kind if kind in self.TPL_FORMAT_KINDS else "text"
+        kind = str(meta.get("type") or "markdown").strip().lower()
+        return kind if kind in self.TPL_FORMAT_KINDS else "markdown"
 
     def _tpl_keys(self) -> set[str]:
         schema = self._conf_schema()
@@ -1595,8 +1572,6 @@ class QQGroupManager(Star):
     # 执行仍然统一走 _run_command，权限与配置开关逻辑和以前完全一致；
     # forced_cmd 把本 handler 对应的规范指令名传给分发器，这样即使面板里
     # 改了指令名/加了别名，内部也能正确路由。
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     # 指令布局：所有指令统一收进指令组「群管」，WebUI「管理行为 → 指令」里
     # 只有一条「群管」，展开是 14 个子指令 —— 面板清爽，也不会有重复条目。
     # 写法：/群管 禁言 @用户 10分钟、/群管 撤回 …；单独发 /群管 自动列出指令树。
@@ -1677,6 +1652,16 @@ class QQGroupManager(Star):
     async def g_members(self, event: AstrMessageEvent):
         """群成员档案（列表 / 改名 / 备注 / 删除 / 拉取昵称）"""
         await self._run_command(event, forced_cmd="/成员", skip=1)
+
+    @qgm_group.command("记录")
+    @_with_log_context
+    async def g_records(self, event: AstrMessageEvent):
+        """插件处理记录（全量 / 我的 / 详情 / 汇总）"""
+        await self._run_command(event, forced_cmd="/记录", skip=1)
+
+    async def _cmd_records(self, event: AstrMessageEvent, parts: list[str]):
+        from .qgm.features.records import commands as records_commands
+        return await records_commands.cmd_records(self, event, parts)
 
     def _ensure_member_event_injected(self):
         """薄壳：见 qgm/features/members/cache.py。"""
@@ -2840,10 +2825,6 @@ class QQGroupManager(Star):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_settings_save(self)
 
-    async def web_mod_templates_save(self):
-        """薄壳：审核域 API 见 qgm.features.audit.web。"""
-        return await audit_web.web_mod_templates_save(self)
-
     async def web_mod_verdicts_revoke(self):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_verdicts_revoke(self)
@@ -2947,7 +2928,6 @@ class QQGroupManager(Star):
 
     # ------------------------------------------------------------------
     # 词库：一键获取上游词库
-    # ------------------------------------------------------------------
     def _lexicon_upstream_conf(self) -> dict:
         """读「词库」分组的三个设置，缺省时回落到常量默认。"""
         url = str(self._read_config_value(("lexicon", "upstream_url"), default=LEXICON_UPSTREAM_URL) or "").strip()
@@ -3453,16 +3433,14 @@ class QQGroupManager(Star):
         """薄壳：审核域 API 见 qgm.features.audit.web。"""
         return await audit_web.web_mod_verdicts_clear(self)
 
-    # ------------------------------------------------------------------
     # WebUI 设置页：配置 schema / 当前值 / 保存（与 AstrBot 配置双向同步）
-    # ------------------------------------------------------------------
     def _conf_schema(self) -> dict:
         """读取插件配置 schema（_conf_schema.json），带缓存。
 
         设置页直接按这份 schema 渲染表单——它是 AstrBot 配置面板与插件本体
         共用的同一份定义，所以页面永远和 AstrBot 的配置项保持一致。
         """
-        if self._schema_cache is not None:
+        if getattr(self, "_schema_cache", None):
             return self._schema_cache
         path = Path(__file__).with_name("_conf_schema.json")
         try:

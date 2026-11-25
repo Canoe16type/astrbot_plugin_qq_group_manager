@@ -8,7 +8,7 @@
 > 本机是 3.11 只影响编辑器/工具，不要用它跑插件测试或部署。
 
 
-> **当前版本（1.9.0）**：**只接受缺陷修复与测试补充**（重点：消息模板迁移、判定类别、记录存储、许可证/来源标注）。
+> **当前版本（1.10.0）**：**只接受缺陷修复与测试补充**（重点：消息模板迁移、判定类别、记录存储、许可证/来源标注）。
 > 新功能建议先开 issue 讨论，不直接提 PR。
 
 ```bash
@@ -26,7 +26,7 @@ python3 tools/check_metadata.py          # 元数据 / 配置 / 版本号一致�
 # 开发工具已拆到独立仓库（https://github.com/Canoe16type/astrbot_plugin_qq_group_manager_devtools）：
 #   git clone 后设置 QGM_PLUGIN_DIR 指向本插件目录，再跑 selftest_lexicon / selftest_variant / ...
 # 本仓库只保留 tools/check_metadata.py（版本/徽章/实测版本校验）
-python -m unittest discover -s tests -v     # 当前 391 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
+python -m unittest discover -s tests -v     # 当前 419 例：指令别名 / 审核加固 / 撤销 / 存储 / 智能分级 / 话术 / 缓存
 node --check pages/dashboard/app.js         # 动过面板必跑
 ```
 
@@ -81,12 +81,12 @@ node --check pages/dashboard/app.js         # 动过面板必跑
 - 中文注释、中文用户话术；面向用户的话术走 `_conf_schema.json` 的 `templates`，别硬编码在逻辑里。
 - **判定与处罚必须走 `_mod_plan()`**：它是真实执行与试跑的唯一决策来源，不要在别处再拼一份参数
   （历史上两份逻辑漂移导致过「试跑说警告、实际不处罚」）。
-- **用户可见文案一律走模板**：全局默认在 `_conf_schema.json` 的 `templates`，按群覆盖在
-  `moderation.DEFAULT_TEMPLATES`（面板「群规审核 → 话术模板」）。不要硬编码在逻辑里；
+- **用户可见文案一律走模板**：全局默认在 `qgm/kernel/template_defaults.py`，
+  `_conf_schema.json` 与面板「设置 → 消息模板」使用同一来源；按群覆盖已移除。不要硬编码在逻辑里；
   带 `@` 的模板默认走 markdown，否则 `<qqbot-at-user>` 不会被解析。
 - **新增群级配置**要同时改四处：`moderation.DEFAULT_SETTINGS`、面板 `index.html` 的 `s-<key>`、
   `app.js` 的 `S_KEYS` 与数值裁剪、`docs/GUIDE.md` 配置说明；插件级配置改 `_conf_schema.json`。
-- 涉及审核判定 / 变体检测 / 撤销 / 存储的改动，**必须**补 `tests/` 用例（见上表），并跑全量 391 例。
+- 涉及审核判定 / 变体检测 / 撤销 / 存储的改动，**必须**补 `tests/` 用例（见上表），并跑全量 419 例。
 - 改存储层时注意：记录**不常驻内存**、写盘要节流/摊还、序号在「清空后归零、有记录时单调」。
 - 不引入构建步骤（面板保持单文件 HTML 可直接打开）。
 
@@ -94,7 +94,7 @@ node --check pages/dashboard/app.js         # 动过面板必跑
 
 - 提交信息用 `type: 摘要` 形式（`feat` / `fix` / `docs` / `chore` / `refactor`），一条提交做一件事。
 - PR 描述里写清：**改了什么、为什么、怎么验证的**（跑了哪些自检）。
-- 涉及行为的改动请在 `CHANGELOG.md` 对应版本（当前为 `1.9.0`）里按「新增 / 修复 / 调整」加条目；
+- 涉及行为的改动请在 `CHANGELOG.md` 对应版本（当前为 `1.10.0`）里按「新增 / 修复 / 调整」加条目；
   文档改动同步 README（简洁）、`docs/GUIDE.md`（详细）、`CHANGELOG`（变更记录）三处。
 - PR 描述请附：变更摘要、影响面（判定/处罚/面板/存储）、跑过的测试与结果、需要人工验证的点
   （例如 markdown `@` 在真实群的渲染）。

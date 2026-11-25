@@ -85,12 +85,12 @@ function renderQQMarkdown(src) {
     x = x.replace(/!\[([^\]]*?)\s*(?:#(\d+)px)?\s*(?:#(\d+)px)?\]\(([^)\s]+)\)/g, (m, alt, w, h, url) => {
       const ww = w ? parseInt(w, 10) : 208;
       const hh = h ? parseInt(h, 10) : Math.round(ww * 1.54);
-      // 示例里的占位域名加载不出来时，换成虚线框，别让示例看着像坏了
       const box = `width:${ww}px;height:${hh}px;border:1px dashed #d7dbe3;border-radius:8px;display:none;align-items:center;justify-content:center;color:#98a2b3;font-size:12px;margin:6px 0`;
       const img = `<img src="${escAttr(url)}" alt="${escAttr(alt)}" style="width:${ww}px;height:${hh}px;object-fit:cover;border-radius:8px;display:block;margin:6px 0" onerror="this.style.display='none';var p=this.nextElementSibling;if(p){p.style.display='flex'}">`;
       return `${img}<span style="${box}">${escAttr(alt) || "图片预览"}</span>`;
     });
     x = x.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    x = x.replace(/`([^`]+)`/g, "<code>$1</code>");
     x = x.replace(/__(.+?)__/g, "<b><u>$1</u></b>");
     x = x.replace(/\*\*\*(.+?)\*\*\*/g, "<b><i>$1</i></b>");
     x = x.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
@@ -99,6 +99,7 @@ function renderQQMarkdown(src) {
     x = x.replace(/\u200B/g, "<br>");
     return x;
   };
+  const cells = (line) => line.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map((c) => c.trim());
   const lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
   const out = [];
   let list = null;
@@ -108,11 +109,37 @@ function renderQQMarkdown(src) {
       list = null;
     }
   };
-  for (const raw of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
     const line = raw.replace(/\s+$/, "");
+    // fenced code block
+    if (/^\s*```/.test(line)) {
+      flush();
+      const lang = (line.match(/^\s*```(.*)$/) || [])[1] || "";
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      out.push(`<pre class="pv-code"${lang ? ` data-lang="${escAttr(lang.trim())}"` : ""}><code>${escTxt(buf.join("\n"))}</code></pre>`);
+      continue;
+    }
+    // GFM table: header + |---|---| separator
+    if (line.includes("|") && i + 1 < lines.length && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) {
+      flush();
+      const head = cells(line);
+      i++;
+      const rows = [];
+      while (i + 1 < lines.length && lines[i + 1].includes("|") && !/^\s*```/.test(lines[i + 1])) {
+        i++;
+        rows.push(cells(lines[i]));
+      }
+      const th = head.map((c) => `<th>${inline(c)}</th>`).join("");
+      const tb = rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("");
+      out.push(`<table class="pv-table"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table>`);
+      continue;
+    }
     if (!line.trim()) { flush(); continue; }
     if (/^\s*\*\*\*\s*$/.test(line)) { flush(); out.push("<hr>"); continue; }
-    const h = line.match(/^(#{1,2})\s+(.*)$/);
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
     if (h) { flush(); out.push(`<div class="pv-h${h[1].length}">${inline(h[2])}</div>`); continue; }
     const q = line.match(/^\s*>\s?(.*)$/);
     if (q) { flush(); out.push(`<blockquote>${inline(q[1])}</blockquote>`); continue; }
@@ -124,36 +151,9 @@ function renderQQMarkdown(src) {
     out.push(`<p>${inline(line)}</p>`);
   }
   flush();
-  return out.join("") || '<span class="pv-warn">（空内容）</span>';
+  return out.join("\n");
 }
 
-let _tplCur = null;
-
-function setDlgFmt(fmt) {
-  if (!_tplCur) return;
-  _tplCur.format = fmt;
-  const seg = $("tplDlgSeg");
-  if (seg) seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
-  const row = $("tplImgRow");
-  if (row) row.style.display = fmt === "image" ? "" : "none";
-  renderTplPreview();
-}
-
-// 在光标处插入模块占位符（不覆盖已有选择内容时替换选中段，符合常规编辑器直觉）
-function insertTplModule(snippet) {
-  const ta = $("tplDlgText");
-  if (!ta) return;
-  const start = typeof ta.selectionStart === "number" ? ta.selectionStart : ta.value.length;
-  const end = typeof ta.selectionEnd === "number" ? ta.selectionEnd : start;
-  ta.value = ta.value.slice(0, start) + snippet + ta.value.slice(end);
-  const pos = start + snippet.length;
-  ta.focus();
-  try { ta.setSelectionRange(pos, pos); } catch (err) { /* 某些浏览器的老内核不支持，忽略 */ }
-  renderTplPreview();
-}
-
-// 预览里的内置模块：真机会展开成 @标签 / 头像图；面板拿不到成员 openid，
-// 这里按等效尺寸画占位块，让作者知道「会长在哪个位置、占多大」。
 function previewModules(html) {
   return String(html)
     .replace(/\{at\}/g, '<span class="md-at">@群员</span>')
@@ -163,10 +163,19 @@ function previewModules(html) {
     });
 }
 
+function setDlgFmt(fmt) {
+  if (_tplCur) _tplCur.format = fmt;
+  const seg = $("tplDlgSeg");
+  if (seg) seg.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+  const row = $("tplImgRow");
+  if (row) row.style.display = fmt === "image" ? "" : "none";
+  renderTplPreview();
+}
+
 function renderTplPreview() {
   const box = $("tplPreview");
   if (!box) return;
-  const fmt = _tplCur ? _tplCur.format : "text";
+  const fmt = _tplCur ? _tplCur.format : "markdown";
   const text = $("tplDlgText").value;
   if (fmt === "image") {
     const url = $("tplImgUrl").value.trim();
@@ -188,7 +197,7 @@ function openTplDialog(key) {
   const meta = setState.tplFormats[key] || {};
   const field = setState.fields.find((f) => f.key === "templates." + key);
   const item = field ? field.item : { description: key, default: "", hint: "" };
-  _tplCur = { key, item, format: meta.format || "text" };
+  _tplCur = { key, item, format: meta.explicit === false ? "markdown" : (meta.format || "markdown") };
   $("tplDlgTitle").textContent = item.description || key;
   $("tplDlgHint").textContent = (item.hint ? item.hint + " · " : "") +
     "变量用花括号包裹，如 {user}；{at} 会 @ 该成员，{avatar} 带头像（需 Markdown 格式）" +
@@ -256,7 +265,11 @@ function buildItem(item, group) {
   box.className = "set-item";
   box.dataset.group = group.key;
   box.dataset.key = item.key;
-  const desc = item.description;
+  let desc = item.description;
+  if (group.key === "templates") {
+    const parts = String(desc).split("·");
+    if (parts.length > 1) desc = parts.slice(1).join("·").trim();
+  }
   const hint = item.hint || "";
   box.dataset.search = (item.description + " " + desc + " " + item.key + " " + (item.hint || "") + " " + hint).toLowerCase();
   if (hint) box.title = hint;   // 开关行里放不下说明文字，悬浮看
@@ -299,8 +312,14 @@ function buildItem(item, group) {
   });
   box.querySelector(".set-reset").addEventListener("click", () => {
     set(item.default);
+    if (fmtMeta) {
+      fmtMeta.format = "markdown";
+      setState.tplFormats[item.key] = fmtMeta;
+      box.querySelectorAll("[data-fmt]").forEach((b) => b.classList.toggle("on", b.dataset.fmt === "markdown"));
+      bridge.apiPost("templates/formats/save", { name: item.key, type: "markdown" }).catch(() => {});
+    }
     refresh();
-    showToast(`已填回默认值（还没保存）：${item.description}`);
+    showToast(`已填回默认值（Markdown，还没保存）：${item.description}`);
   });
   // 消息模板这一组额外挂「格式拨杆 + 编辑预览」，格式本身存侧车文件
   const fmtMeta = group.key === "templates" ? setState.tplFormats[item.key] : null;
@@ -309,8 +328,8 @@ function buildItem(item, group) {
     bar.className = "tpl-fmtbar";
     bar.innerHTML = `
       <div class="seg sm tpl-fmtseg">
-        <button data-fmt="text" class="${fmtMeta.format === "text" ? "on" : ""}">纯文本</button>
-        <button data-fmt="markdown" class="${fmtMeta.format === "markdown" ? "on" : ""}">Markdown</button>
+        <button data-fmt="text" class="${(fmtMeta.explicit === false ? "markdown" : fmtMeta.format) === "text" ? "on" : ""}">纯文本</button>
+        <button data-fmt="markdown" class="${(fmtMeta.explicit === false ? "markdown" : fmtMeta.format) === "markdown" ? "on" : ""}">Markdown</button>
         <button data-fmt="image" class="${fmtMeta.format === "image" ? "on" : ""}">图片</button>
       </div>
       <button class="btn ghost small tpl-editbtn">✎ 编辑与预览</button>`;
@@ -376,12 +395,35 @@ function renderSettings() {
 
     // 「消息模板」按描述前缀（通用 · 禁言 · 撤回 …）分子组，其余分组直接铺开
     const isTpl = group.key === "templates";
-    const TPL_SUB_ORDER = ["通用", "审核", "踢人", "禁言", "撤回", "审批", "成员", "欢迎", "其他"];
-    const tplSub = (item) => String(item.description).split("·")[0].trim() || "其他";
+    const TPL_SUB_ORDER = ["审核", "记录", "禁言", "撤回", "踢人", "审批", "欢迎", "成员", "举报", "待办", "变体检测", "管理员名单", "状态/日报", "错误/提示", "其他"];
+    const tplSub = (item) => {
+      const key = String(item.key || "");
+      // 先处理容易被子串误判的
+      if (key === "msg_report_daily") return "状态/日报";
+      if (key === "msg_report_limit" || key === "mod_report_limit") return "举报";
+      if (key === "mod_todo_muted" || key === "mod_todo_recall" || key === "mod_todo" || key === "msg_mod_todo") return "待办";
+      if (key.startsWith("mod_admin_")) return "管理员名单";
+      if (key.startsWith("mod_variant_")) return "变体检测";
+      if (key === "msg_not_admin" || key === "msg_api_error") return "错误/提示";
+      if (key.startsWith("msg_welcome")) return "欢迎";
+      if (key.startsWith("msg_records_")) return "记录";
+      if (key.includes("kick")) return "踢人";
+      if (/mute|unmute/.test(key)) return "禁言";
+      if (/recall|withdraw/.test(key)) return "撤回";
+      if (/join|approval|approve|reject|request/.test(key)) return "审批";
+      if (/member/.test(key)) return "成员";
+      if (/report/.test(key)) return "举报";
+      if (/help|group_intro|status|daily|selfcheck/.test(key)) return "状态/日报";
+      if (/mod_|basis|category|semantic|dry_run|hit|todo/.test(key)) return "审核";
+      const prefix = String(item.description).split("·")[0].trim();
+      return TPL_SUB_ORDER.includes(prefix) ? prefix : "其他";
+    };
     const tplRank = (item) => {
       const i = TPL_SUB_ORDER.indexOf(tplSub(item));
       return i < 0 ? TPL_SUB_ORDER.length : i;
     };
+    const subCounts = {};
+    group.items.forEach((it) => { const k = tplSub(it); subCounts[k] = (subCounts[k] || 0) + 1; });
     const items = isTpl
       ? group.items.map((it, i) => [it, i]).sort((a, b) => tplRank(a[0]) - tplRank(b[0]) || a[1] - b[1]).map(([it]) => it)
       : group.items;
@@ -390,17 +432,21 @@ function renderSettings() {
     let switchRow = null;      // 当前攒着的开关行
     items.forEach((item) => {
       if (isTpl) {
-        const sub = String(item.description).split("·")[0].trim() || "其他";
+        const sub = tplSub(item);
         if (sub !== lastSub) {
-          const h = document.createElement("div");
-          h.className = "set-subtitle";
-          h.textContent = "— " + sub + " —";
-          h.dataset.sub = sub;
-          body.appendChild(h);
+          const det = document.createElement("details");
+          det.className = "set-sub-details";
+          det.open = sub === "审核";
+          const sum = document.createElement("summary");
+          sum.className = "set-subtitle";
+          sum.textContent = `${sub}（${subCounts[sub] || 0}）`;
+          sum.dataset.sub = sub;
+          det.appendChild(sum);
           grid = document.createElement("div");
           grid.className = "set-items";
           grid.dataset.sub = sub;
-          body.appendChild(grid);
+          det.appendChild(grid);
+          body.appendChild(det);
           switchRow = null;
           lastSub = sub;
         }
@@ -418,10 +464,10 @@ function renderSettings() {
       }
       switchRow = null;
       // 开关行打断了网格，后面的输入项要另起一个，否则 DOM 顺序会插到开关前面
-      if (!grid || grid !== body.lastElementChild) {
+      if (!grid || (!isTpl && grid !== body.lastElementChild)) {
         grid = document.createElement("div");
         grid.className = "set-items";
-        body.appendChild(grid);
+        (isTpl ? body.lastElementChild : body).appendChild(grid);
       }
       grid.appendChild(buildItem(item, group));
     });
@@ -636,6 +682,7 @@ if (_setSubSeg) _setSubSeg.addEventListener("click", (e) => {
   if (reset) reset.addEventListener("click", () => {
     if (!_tplCur) return;
     $("tplDlgText").value = _tplCur.item.default || "";
+    setDlgFmt("markdown");
     renderTplPreview();
     showToast("已填回默认值（还没保存）");
   });
