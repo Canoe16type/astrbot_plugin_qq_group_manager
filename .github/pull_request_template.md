@@ -11,7 +11,7 @@
 
 ## 验证
 
-- [ ] `python -m unittest discover -s tests`（当前 391 例）
+- [ ] `python -m unittest discover -s tests`（当前 417 例）
 - [ ] `python -m unittest tests.test_loader_harness`（真实构造插件）
 - [ ] `python -m pyflakes main.py qgm`（无 undefined name / redefinition）
 - [ ] 涉及面板时手动走过对应页签

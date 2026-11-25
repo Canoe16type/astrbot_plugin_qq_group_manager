@@ -1518,7 +1518,7 @@ intent `1<<24`（GROUP_MEMBER_EVENT），插件通过运行时注入 `member_eve
 | --- | --- |
 | 报 Bug / 提建议 | [Issue 模板](https://github.com/Canoe16type/astrbot_plugin_qq_group_manager/issues/new/choose) |
 | 报障前该带什么 | [SUPPORT.md](../SUPPORT.md)（版本、自检输出、记录 ID、脱敏要求） |
-| 开发与测试 | [CONTRIBUTING.md](../CONTRIBUTING.md)（环境、391 例测试、代码约定） |
+| 开发与测试 | [CONTRIBUTING.md](../CONTRIBUTING.md)（环境、417 例测试、代码约定） |
 | 行为准则 | [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) |
 | 安全漏洞（私密） | [SECURITY.md](../SECURITY.md) |
 | 更新记录 | [CHANGELOG](../CHANGELOG.md) |
