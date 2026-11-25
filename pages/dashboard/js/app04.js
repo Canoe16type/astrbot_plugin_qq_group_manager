@@ -421,7 +421,7 @@ function renderSettings() {
     let switchRow = null;      // 当前攒着的开关行
     items.forEach((item) => {
       if (isTpl) {
-        const sub = String(item.description).split("·")[0].trim() || "其他";
+        const sub = tplSub(item);
         if (sub !== lastSub) {
           const det = document.createElement("details");
           det.className = "set-sub-details";
@@ -453,10 +453,10 @@ function renderSettings() {
       }
       switchRow = null;
       // 开关行打断了网格，后面的输入项要另起一个，否则 DOM 顺序会插到开关前面
-      if (!grid || grid !== body.lastElementChild) {
+      if (!grid || (!isTpl && grid !== body.lastElementChild)) {
         grid = document.createElement("div");
         grid.className = "set-items";
-        body.appendChild(grid);
+        (isTpl ? body.lastElementChild : body).appendChild(grid);
       }
       grid.appendChild(buildItem(item, group));
     });
