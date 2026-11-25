@@ -265,7 +265,11 @@ function buildItem(item, group) {
   box.className = "set-item";
   box.dataset.group = group.key;
   box.dataset.key = item.key;
-  const desc = item.description;
+  let desc = item.description;
+  if (group.key === "templates") {
+    const parts = String(desc).split("·");
+    if (parts.length > 1) desc = parts.slice(1).join("·").trim();
+  }
   const hint = item.hint || "";
   box.dataset.search = (item.description + " " + desc + " " + item.key + " " + (item.hint || "") + " " + hint).toLowerCase();
   if (hint) box.title = hint;   // 开关行里放不下说明文字，悬浮看
@@ -391,18 +395,25 @@ function renderSettings() {
 
     // 「消息模板」按描述前缀（通用 · 禁言 · 撤回 …）分子组，其余分组直接铺开
     const isTpl = group.key === "templates";
-    const TPL_SUB_ORDER = ["审核", "记录", "禁言", "撤回", "踢人", "审批", "欢迎", "成员", "举报", "帮助与状态", "其他"];
+    const TPL_SUB_ORDER = ["审核", "记录", "禁言", "撤回", "踢人", "审批", "欢迎", "成员", "举报", "待办", "变体检测", "管理员名单", "状态/日报", "错误/提示", "其他"];
     const tplSub = (item) => {
       const key = String(item.key || "");
-      if (/^msg_records_/.test(key)) return "记录";
-      if (/kick/.test(key)) return "踢人";
+      // 先处理容易被子串误判的
+      if (key === "msg_report_daily") return "状态/日报";
+      if (key === "msg_report_limit" || key === "mod_report_limit") return "举报";
+      if (key === "mod_todo_muted" || key === "mod_todo_recall" || key === "mod_todo" || key === "msg_mod_todo") return "待办";
+      if (key.startsWith("mod_admin_")) return "管理员名单";
+      if (key.startsWith("mod_variant_")) return "变体检测";
+      if (key === "msg_not_admin" || key === "msg_api_error") return "错误/提示";
+      if (key.startsWith("msg_welcome")) return "欢迎";
+      if (key.startsWith("msg_records_")) return "记录";
+      if (key.includes("kick")) return "踢人";
       if (/mute|unmute/.test(key)) return "禁言";
       if (/recall|withdraw/.test(key)) return "撤回";
       if (/join|approval|approve|reject|request/.test(key)) return "审批";
-      if (/welcome/.test(key)) return "欢迎";
       if (/member/.test(key)) return "成员";
       if (/report/.test(key)) return "举报";
-      if (/help|group_intro|status|daily|selfcheck/.test(key)) return "帮助与状态";
+      if (/help|group_intro|status|daily|selfcheck/.test(key)) return "状态/日报";
       if (/mod_|basis|category|semantic|dry_run|hit|todo/.test(key)) return "审核";
       const prefix = String(item.description).split("·")[0].trim();
       return TPL_SUB_ORDER.includes(prefix) ? prefix : "其他";
