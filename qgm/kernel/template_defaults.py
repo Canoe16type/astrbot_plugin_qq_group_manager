@@ -209,4 +209,13 @@ TEMPLATE_DEFAULTS: dict[str, str] = {'msg_not_admin': '抱歉，你没有权限�
                          '\n'
                          '- **类别**：{category_public}\n'
                          '- **严重度**：{severity_label}\n'
-                         '- **本应禁言**：{duration}'}
+                         '- **本应禁言**：{duration}',
+ 'msg_records_table': '### 插件处理记录\n\n{table}\n\n> {coverage}',
+ 'msg_records_empty': '没有找到记录。\n\n> {coverage}',
+ 'msg_records_detail': '### 记录 `{id}`\n\n{detail}\n\n> {coverage}',
+ 'msg_records_summary': '### 插件处理汇总\n\n{summary}\n\n> {coverage}',
+ 'msg_records_not_found': '没有找到这条记录。',
+ 'msg_records_need_mine': '普通成员请用：`/群管 记录 我的 [类型] [N]`',
+ 'msg_records_detail_denied': '你只能查看自己的记录。',
+ 'msg_records_summary_denied': '汇总仅管理员可用。',
+ 'msg_records_cooldown': '查询太频繁，请 5 秒后再试。'}

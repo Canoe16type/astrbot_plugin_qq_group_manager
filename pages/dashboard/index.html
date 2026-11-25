@@ -731,48 +731,6 @@ A1B2C3D4E5F6...  , 小红"></textarea>
   </div>
  </div>
 
- <div class="rec-pane" id="rec-pane-history">
- <div class="card">
- <div class="card-head">
- <h3> 禁言历史 <span class="hint">（指令 /群管 禁言历史 与 WebUI 同步展示，长期存储）</span></h3>
- <div class="log-controls">
- <select id="histGroup" class="select"><option value="all">全部群</option></select>
- <button id="btnRefreshHistory" class="btn ghost small">↻ 刷新</button>
- <button id="btnHistoryClear" class="btn danger small"> 清空</button>
- </div>
- </div>
- <div id="historyList"><div class="empty"><svg class="ico eico" aria-hidden="true"><use href="#i-records"/></svg><span>加载中…</span></div></div>
- </div>
- </div>
-
- <div class="rec-pane" id="rec-pane-recalls">
- <div class="card">
- <div class="card-head">
- <h3> 撤回历史 <span class="hint">（/群管 撤回 的原始消息留存，用于备份查验）</span></h3>
- <div class="log-controls">
- <select id="recallGroup" class="select"><option value="all">全部群</option></select>
- <button id="btnRefreshRecalls" class="btn ghost small">↻ 刷新</button>
- <button id="btnRecallsClear" class="btn danger small"> 清空</button>
- </div>
- </div>
- <div id="recallList"><div class="empty"><svg class="ico eico" aria-hidden="true"><use href="#i-recall"/></svg><span>加载中…</span></div></div>
- </div>
- </div>
-
- <!-- 判定记录 / 试跑（原「群规审核」第 4 页，独立到「记录」页） -->
-   <div class="rec-pane" id="rec-pane-kicks">
-    <div class="card">
-      <div class="card-head">
-        <h3>踢人记录 <span class="hint">（/群管 踢人 与 WebUI 同步；包含操作人、目标、理由与错误码）</span></h3>
-        <div class="log-controls">
-          <button id="btnRefreshKicks" class="btn ghost small">↻ 刷新</button>
-        </div>
-      </div>
-      <div id="kickList"><div class="empty"><span>加载中…</span></div></div>
-    </div>
-  </div>
-
-
  </section>
 
 <!-- ============ 日志 ============ -->

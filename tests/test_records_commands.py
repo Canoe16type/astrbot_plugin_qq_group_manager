@@ -44,6 +44,17 @@ def _host(admin=False):
     h._plugin_data_dir = lambda: "/tmp/nonexistent-qgm"
     h.logger = SimpleNamespace(info=lambda *a, **k: None, warning=lambda *a, **k: None,
                                debug=lambda *a, **k: None)
+    def _mod_tpl(group, key, **kw):
+        if key == "msg_records_table":
+            return f"### 插件处理记录\n\n{kw['table']}\n\n> {kw['coverage']}"
+        if key == "msg_records_empty":
+            return f"没有找到记录。\n\n> {kw['coverage']}"
+        if key == "msg_records_detail":
+            return f"### 记录 `{kw['id']}`\n\n{kw['detail']}\n\n> {kw['coverage']}"
+        if key == "msg_records_summary":
+            return f"### 汇总\n\n{kw['summary']}\n\n> {kw['coverage']}"
+        return kw.get("fallback", "")
+    h._mod_tpl = _mod_tpl
     return h
 
 

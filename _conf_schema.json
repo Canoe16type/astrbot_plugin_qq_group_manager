@@ -857,6 +857,51 @@
         "type": "string",
         "description": "语义试运行回执（Markdown）",
         "default": "**试运行（未处罚）**\n\n- **类别**：{category_public}\n- **严重度**：{severity_label}\n- **本应禁言**：{duration}"
+      },
+      "msg_records_table": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "### 插件处理记录\n\n{table}\n\n> {coverage}"
+      },
+      "msg_records_empty": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "没有找到记录。\n\n> {coverage}"
+      },
+      "msg_records_detail": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "### 记录 `{id}`\n\n{detail}\n\n> {coverage}"
+      },
+      "msg_records_summary": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "### 插件处理汇总\n\n{summary}\n\n> {coverage}"
+      },
+      "msg_records_not_found": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "没有找到这条记录。"
+      },
+      "msg_records_need_mine": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "普通成员请用：`/群管 记录 我的 [类型] [N]`"
+      },
+      "msg_records_detail_denied": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "你只能查看自己的记录。"
+      },
+      "msg_records_summary_denied": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "汇总仅管理员可用。"
+      },
+      "msg_records_cooldown": {
+        "type": "string",
+        "description": "记录查询文案（Markdown）",
+        "default": "查询太频繁，请 5 秒后再试。"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

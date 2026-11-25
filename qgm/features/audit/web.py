@@ -636,4 +636,8 @@ async def web_tpl_formats_save(host):
                 except Exception as e:
                     host.logger.warning(f"保存配置失败: {e}")
                     errors.append(f"内容写入配置文件失败: {e}")
+        host.logger.info(
+            f"templates.save saved={len(saved)} content_changed={content_changed} "
+            f"errors={len(errors)} keys={','.join(saved[:10])}"
+        )
         return json_response({"ok": bool(saved) and not errors, "saved": saved, "errors": errors})

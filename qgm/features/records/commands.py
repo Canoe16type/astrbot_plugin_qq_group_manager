@@ -43,12 +43,11 @@ def _table(rows) -> str:
         f"| `{r.display_id}` | {_when(r.ts)} | {_esc(_target(r))} | {_esc(_action(r), 22)} |"
         for r in rows
     )
-    return f"### 插件处理记录\n\n{head}\n{body}\n\n> {_COVERAGE}"
+    return f"{head}\n{body}"
 
 
 def _detail(row, is_admin: bool) -> str:
     lines = [
-        f"### 记录 `{row.display_id}`",
         f"- 时间：{_when(row.ts)}",
         f"- 目标：{_target(row)}",
         f"- 处理：{_action(row)}",
@@ -66,7 +65,6 @@ def _detail(row, is_admin: bool) -> str:
         lines.append(f"- 操作人：{row.actor_name}")
     if row.legacy:
         lines.append("- 备注：历史记录缺少目标 ID，仅管理员可按群查看")
-    lines.append(f"\n> {_COVERAGE}")
     return "\n".join(lines)
 
 
@@ -82,6 +80,13 @@ async def _send_markdown(host, event, text: str):
     except Exception as e:
         host.logger.warning(f"记录 Markdown 发送失败，降级纯文本: {e}")
         await host._reply(event, text)
+
+
+def _tpl(host, group: str, key: str, **kw) -> str:
+    try:
+        return host._mod_tpl(group, key, **kw)
+    except Exception:
+        return str(kw.get("fallback") or "")
 
 
 def _parse(args):
@@ -132,7 +137,7 @@ async def cmd_records(host, event, parts):
             host._records_cd = cd
         key = (group, sender)
         if now - cd.get(key, 0) < 5:
-            await host._reply(event, "查询太频繁，请 5 秒后再试。")
+            await host._reply(event, _tpl(host, group, "msg_records_cooldown", fallback="查询太频繁，请 5 秒后再试。"))
             return
         cd[key] = now
 
@@ -140,18 +145,22 @@ async def cmd_records(host, event, parts):
         row = get_record(host, str(opt["detail"]), group=group)
         if not row:
             host.logger.info(f"cmd.records.detail miss id={opt['detail']}")
-            await host._reply(event, "没有找到这条记录。")
+            await host._reply(event, _tpl(host, group, "msg_records_not_found", fallback="没有找到这条记录。"))
             return
         if not is_admin and sender not in row.target_ids:
             host.logger.warning(f"cmd.records.detail deny id={row.display_id} user={(sender or '-')[-6:]}")
-            await host._reply(event, "你只能查看自己的记录。")
+            await host._reply(event, _tpl(host, group, "msg_records_detail_denied", fallback="你只能查看自己的记录。"))
             return
-        await _send_markdown(host, event, _detail(row, is_admin))
+        await _send_markdown(host, event, _tpl(
+            host, group, "msg_records_detail", id=row.display_id,
+            detail=_detail(row, is_admin), coverage=_COVERAGE,
+            fallback=_detail(row, is_admin),
+        ))
         return
 
     if opt["summary"]:
         if not is_admin:
-            await host._reply(event, "汇总仅管理员可用。")
+            await host._reply(event, _tpl(host, group, "msg_records_summary_denied", fallback="汇总仅管理员可用。"))
             return
         since = time.time() - opt["days"] * 86400 if opt["days"] else 0.0
         rows = [
@@ -162,15 +171,18 @@ async def cmd_records(host, event, parts):
         for r in rows:
             counts[r.kind] = counts.get(r.kind, 0) + 1
         names = {"verdict": "判定", "mute": "禁言", "recall": "撤回", "kick": "踢人"}
-        lines = [f"### 近 {opt['days']} 天插件处理记录" if opt["days"] else "### 全部插件处理记录"]
+        lines = [f"- 近 {opt['days']} 天" if opt["days"] else "- 全部时间"]
         lines += [f"- {names.get(k, k)}：{v} 条" for k, v in counts.items()] or ["- 暂无记录"]
-        lines.append(f"\n> {_COVERAGE}")
-        await _send_markdown(host, event, "\n".join(lines))
+        await _send_markdown(host, event, _tpl(
+            host, group, "msg_records_summary", summary="\n".join(lines),
+            coverage=_COVERAGE, fallback="\n".join(lines),
+        ))
         return
 
     if not is_admin and not opt["mine"]:
         host.logger.warning(f"cmd.records deny non-mine user={(sender or '-')[-6:]}")
-        await host._reply(event, "普通成员请用：/群管 记录 我的 [类型] [N]")
+        await host._reply(event, _tpl(host, group, "msg_records_need_mine",
+                                     fallback="普通成员请用：/群管 记录 我的 [类型] [N]"))
         return
 
     target_id = sender if opt["mine"] else ""
@@ -194,10 +206,14 @@ async def cmd_records(host, event, parts):
             f"cmd.records empty group={group or '-'} kind={opt['kind'] or '*'} "
             f"target={(target_id or '-')[-6:]} days={opt['days']}"
         )
-        await host._reply(event, f"没有找到记录。\n\n{_COVERAGE}")
+        await host._reply(event, _tpl(host, group, "msg_records_empty", coverage=_COVERAGE,
+                                     fallback=f"没有找到记录。\n\n{_COVERAGE}"))
         return
     host.logger.info(
         f"cmd.records result rows={len(rows)} group={group or '-'} kind={opt['kind'] or '*'} "
         f"target={(target_id or '-')[-6:]} days={opt['days']}"
     )
-    await _send_markdown(host, event, _table(rows))
+    await _send_markdown(host, event, _tpl(
+        host, group, "msg_records_table", table=_table(rows), coverage=_COVERAGE,
+        fallback=_table(rows),
+    ))

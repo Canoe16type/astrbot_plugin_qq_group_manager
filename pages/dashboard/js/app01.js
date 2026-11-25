@@ -350,7 +350,6 @@ document.querySelectorAll(".rec-tab").forEach((btn) => {
     btn.classList.add("active");
     const pane = $("rec-pane-" + btn.dataset.recTab);
     if (pane) pane.classList.add("active");
-    if (btn.dataset.recTab === "kicks") { try { loadKicks(); } catch (e) {} }
   });
 });
 // 判定记录里的「切换群 →」：直接跳到「群规审核」选群
@@ -497,8 +496,6 @@ async function loadStatus() {
   else { badge.classList.add("hidden"); }
 
   // 记录 tab 的群筛选下拉（撤回历史那份以前漏了填充）
-  fillHistoryGroupSelect();
-  fillRecallGroupSelect();
   } catch (e) {
     console.error("[qqgm] status render failed", e);
     ["platformList", "featureList", "adminInfo", "groupList"].forEach((id) => {
