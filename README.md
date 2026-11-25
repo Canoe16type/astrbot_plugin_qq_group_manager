@@ -74,7 +74,7 @@
 | 撤回 | 引用消息撤回或按消息 ID 撤回；原始消息本地留存，超 2 分钟受官方限制 |
 | 入群审批 | 申请一提交就推群通知（`GROUP_JOIN_REQUEST` 事件为主、低频轮询兜底），通知带「通过 / 拒绝」**按钮**点一下即审批；也可用 `/群管 审批`、`/群管 审批 通过`、`/群管 审批 拒绝`；另有官方「入群自动审批策略」的列表与编辑 |
 | 欢迎语 | 审批通过的欢迎语、机器人入群自我介绍 |
-| 成员档案 | `member_openid ↔ 昵称/备注` 对照表，解决官方不给昵称的问题；退群通知从中取名 |
+| 成员档案 | `member_openid ↔ 昵称/备注` 对照表；记录入群/退群次数、最近一次时间；退群通知含当天第 N 个 |
 | 踢人 | `/群管 踢人 @成员… [理由]` 移除群成员并留档；`/群管 记录 踢人 [N]` 查记录。需手机 QQ 群设置与 q.qq.com 同时开启「移除群成员」；未开通会按 40103012 / 40103011 提示。 |
 | 退群回收 | 机器人被移出群（`GROUP_DEL_ROBOT`）后自动删掉该群的成员档案、群规、判定记录、禁言/撤回历史等；`bot_state` 二次确认，查不了（
 | 群规审核 | 引用违规消息发 `/群管 举报`，四维度判定 → 自动撤回 + 禁言 + 说明依据 |
@@ -331,7 +331,7 @@
 | 内容 | 路径（相对 AstrBot 数据目录） |
 | --- | --- |
 | 插件配置 | `config/astrbot_plugin_qq_group_manager_config.json` |
-| 群列表 / 成员档案 / 禁言历史 / 撤回历史 | `plugin_data/astrbot_plugin_qq_group_manager/` 下 `known_groups.json`、`members.json`、`mute_history.json`、`recall_history.json` |
+| 群列表 / 成员档案 / 禁言历史 / 撤回历史 | `plugin_data/astrbot_plugin_qq_group_manager/` 下 `known_groups.json`、`members.json`、`member_stats.json`、`member_daily_stats.json`、`mute_history.json`、`recall_history.json` |
 | 群规、审核设置、判定记录 | `plugin_data/astrbot_plugin_qq_group_manager/mod_*.json` |
 | 词库与启用状态 | `plugin_data/astrbot_plugin_qq_group_manager/lexicons/`、`lexicon_state.json` |
 | 文件日志 | `plugin_data/astrbot_plugin_qq_group_manager/astrbot_plugin_qq_group_manager_YYYYMMDD.log`（默认留 14 天） |

@@ -104,7 +104,7 @@ TEMPLATE_DEFAULTS: dict[str, str] = {'msg_not_admin': '抱歉，你没有权限�
                     '- **群规配置**：`/群管 群规`\n'
                     '\n'
                     '请群主为我开启「接收群全部消息」「主动发言」，并授予群管理员身份。',
- 'msg_member_remove_notify': '👋 {username}（{short}）离开了本群{extra}',
+ 'msg_member_remove_notify': '👋 {username}（{short}）离开了本群{extra}\n\n今天第 {leave_today} 个退群成员',
  'msg_join_request_auto_approved': '✅ 新成员 {username} 的入群申请已由自动审批策略通过（策略 {strategy}）',
  'msg_join_request_button_ok': '✅ 已通过 {username} 的入群申请',
  'msg_join_request_button_rejected': '🚫 已拒绝 {username} 的入群申请',
@@ -218,4 +218,9 @@ TEMPLATE_DEFAULTS: dict[str, str] = {'msg_not_admin': '抱歉，你没有权限�
  'msg_records_need_mine': '普通成员请用：`/群管 记录 我的 [类型] [N]`',
  'msg_records_detail_denied': '你只能查看自己的记录。',
  'msg_records_summary_denied': '汇总仅管理员可用。',
- 'msg_records_cooldown': '查询太频繁，请 5 秒后再试。'}
+ 'msg_records_cooldown': '查询太频繁，请 5 秒后再试。',
+ 'msg_welcome_rejoin': '🎉 欢迎 {username} 回来！\n\n- 这是第 {join_count} 次加入本群\n- 之前退群 {leave_count} 次',
+ 'msg_member_leave_rejoin': '👋 {username}（{short}）又离开了本群。\n'
+                            '\n'
+                            '- 这是第 {leave_count} 次退群\n'
+                            '- 今天第 {leave_today} 个退群成员{extra}'}

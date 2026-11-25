@@ -575,7 +575,7 @@
       "msg_member_remove_notify": {
         "description": "成员事件 · 退群通知",
         "type": "text",
-        "default": "👋 {username}（{short}）离开了本群{extra}",
+        "default": "👋 {username}（{short}）离开了本群{extra}\n\n今天第 {leave_today} 个退群成员",
         "hint": "变量：{extra}、{short}、{username}"
       },
       "msg_join_request_auto_approved": {
@@ -902,6 +902,16 @@
         "type": "string",
         "description": "记录查询文案（Markdown）",
         "default": "查询太频繁，请 5 秒后再试。"
+      },
+      "msg_welcome_rejoin": {
+        "type": "string",
+        "description": "入群/退群通知（含成员次数与当日序号）",
+        "default": "🎉 欢迎 {username} 回来！\n\n- 这是第 {join_count} 次加入本群\n- 之前退群 {leave_count} 次"
+      },
+      "msg_member_leave_rejoin": {
+        "type": "string",
+        "description": "入群/退群通知（含成员次数与当日序号）",
+        "default": "👋 {username}（{short}）又离开了本群。\n\n- 这是第 {leave_count} 次退群\n- 今天第 {leave_today} 个退群成员{extra}"
       }
     },
     "hint": "{变量} 会被替换为实际内容；留空则用默认文案"

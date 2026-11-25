@@ -57,12 +57,18 @@ class MemberRegistry:
         self.path = os.path.join(data_dir, "members.json")
         # 墓碑：记录「某群某成员在何时被删除」。平台重投退群事件时，靠它阻止档案被重建。
         self.tomb_path = os.path.join(data_dir, "member_tombstones.json")
+        self.stats_path = os.path.join(data_dir, "member_stats.json")
+        self.daily_path = os.path.join(data_dir, "member_daily_stats.json")
         self.tombstones: dict[str, float] = {}
         self.groups: dict[str, dict[str, dict]] = {}
+        self.counts: dict[str, dict[str, dict]] = {}
+        self.daily: dict[str, dict] = {}
         self._dirty = False
         self._last_flush = 0.0
         self._load()
         self._load_tombstones()
+        self._load_counts()
+        self._load_daily()
 
     # ------------------------------------------------------------------
     # 墓碑（删除后防止被重复事件重建）
@@ -175,6 +181,88 @@ class MemberRegistry:
     # ------------------------------------------------------------------
     # 记录
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # 终身次数与当日退群序号（独立于 members.json，自动删档不丢）
+    # ------------------------------------------------------------------
+    def _load_counts(self) -> None:
+        try:
+            with open(self.stats_path, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            groups = data.get("groups") or {}
+            if isinstance(groups, dict):
+                self.counts = {
+                    str(g): {str(o): dict(r) for o, r in rows.items() if isinstance(r, dict)}
+                    for g, rows in groups.items() if isinstance(rows, dict)
+                }
+        except FileNotFoundError:
+            return
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"读取 member_stats.json 失败（忽略）: {e}")
+
+    def _save_counts(self) -> None:
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            tmp = self.stats_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "groups": self.counts}, f, ensure_ascii=False)
+            os.replace(tmp, self.stats_path)
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"写入 member_stats.json 失败: {e}")
+
+    def _load_daily(self) -> None:
+        try:
+            with open(self.daily_path, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+            groups = data.get("groups") or {}
+            if isinstance(groups, dict):
+                self.daily = {str(g): dict(v) for g, v in groups.items() if isinstance(v, dict)}
+        except FileNotFoundError:
+            return
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"读取 member_daily_stats.json 失败（忽略）: {e}")
+
+    def _save_daily(self) -> None:
+        try:
+            os.makedirs(self.dir, exist_ok=True)
+            tmp = self.daily_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"version": 1, "groups": self.daily}, f, ensure_ascii=False)
+            os.replace(tmp, self.daily_path)
+        except Exception as e:  # noqa: BLE001
+            self._log("WARNING", f"写入 member_daily_stats.json 失败: {e}")
+
+    def _counter(self, group_openid: str, openid: str, rec: dict | None = None) -> dict:
+        g = str(group_openid or "")
+        o = str(openid or "")
+        if not g or not o:
+            return {}
+        row = self.counts.setdefault(g, {}).setdefault(o, {})
+        if rec is not None:
+            row.setdefault("join_count", int(rec.get("join_count") or 0))
+            row.setdefault("leave_count", int(rec.get("leave_count") or 0))
+            row.setdefault("last_join_at", float(rec.get("first_seen") or 0))
+            row.setdefault("last_leave_at", float(rec.get("left_at") or 0))
+        return row
+
+    def get_counts(self, group_openid: str, openid: str) -> dict:
+        """返回终身计数；档案已删除也仍可读。"""
+        return dict(self._counter(group_openid, openid))
+
+    def bump_leave_today(self, group_openid: str, ts: float | None = None) -> int:
+        """当前群当天第几个退群；按本地自然日重置，立即落盘。"""
+        g = str(group_openid or "")
+        if not g:
+            return 0
+        ts = float(ts or _now())
+        date = time.strftime("%Y-%m-%d", time.localtime(ts))
+        row = self.daily.get(g) or {}
+        if str(row.get("date") or "") != date:
+            row = {"date": date, "count": 0}
+        row["count"] = int(row.get("count") or 0) + 1
+        self.daily[g] = row
+        self._save_daily()
+        return int(row["count"])
+
     @staticmethod
     def _new_record(openid: str, ts: float) -> dict:
         return {
@@ -191,6 +279,7 @@ class MemberRegistry:
             "status": "active",           # active / left
             "left_at": 0.0,
             "join_count": 1,              # 进群次数（只记次数，不记任何内容）
+            "leave_count": 0,             # 退群次数（统计文件另存一份，档案删除不丢）
         }
 
     def _group(self, group_openid: str, create: bool = False) -> dict[str, dict]:
@@ -232,12 +321,20 @@ class MemberRegistry:
         # 会被当成"没有这个群"直接返回，导致第一条发言永远记不进去。
         rows = self._group(group_openid, create=True)
         rec = rows.get(oid)
+        old_counts = (self.counts.get(str(group_openid)) or {}).get(oid)
+        was_new = rec is None
+        joined_cycle = False
         if rec is None:
             rec = self._new_record(oid, now)
             rows[oid] = rec
             self._dirty = True
+            if old_counts:
+                # 档案可能被自动删除，但终身统计仍在：这是一次重新入群
+                rec["join_count"] = int(old_counts.get("join_count") or 0) + 1
+                rec["leave_count"] = int(old_counts.get("leave_count") or 0)
             self._log("INFO", f"群 {group_openid} 新成员入档: {short_id(oid)}")
-        if rec.get("status") == "left":
+        if rec.get("status") == "left" and not was_new:
+            joined_cycle = True
             # 说过话就一定在群里（重新入群，或退群事件误报）。
             # 重新入群＝新一轮在群周期：上一条周期留下的统计一律清零，
             # 否则「进群→退群→再进群→再退群」会把两次的数据累加在一起，
@@ -254,6 +351,12 @@ class MemberRegistry:
                 f"群 {group_openid} 成员 {short_id(oid)} 重新入群（第 {rec['join_count']} 次），"
                 f"发言统计按本轮重新计数（退群时已清零，上轮 {old_msgs} 条仅记录在日志里）",
             )
+        counter = self._counter(group_openid, oid, rec)
+        counter["join_count"] = int(rec.get("join_count") or 1)
+        counter["leave_count"] = max(int(counter.get("leave_count") or 0), int(rec.get("leave_count") or 0))
+        counter["last_join_at"] = now
+        if was_new or joined_cycle:
+            self._save_counts()
         rec["last_seen"] = now
         if count_msg:
             rec["msg_count"] = int(rec.get("msg_count") or 0) + 1
@@ -307,8 +410,15 @@ class MemberRegistry:
         rec = self._group(group_openid).get(str(openid or ""))
         if rec is None:
             return None
+        was_left = rec.get("status") == "left"
         rec["status"] = "left"
         rec["left_at"] = float(ts or _now())
+        if not was_left:
+            rec["leave_count"] = int(rec.get("leave_count") or 0) + 1
+            c = self._counter(group_openid, openid, rec)
+            c["leave_count"] = rec["leave_count"]
+            c["last_leave_at"] = rec["left_at"]
+            self._save_counts()
         if purge_stats:
             rec["msg_count"] = 0
             rec["last_seen"] = 0.0
@@ -323,6 +433,11 @@ class MemberRegistry:
             return {}
         rec["status"] = "left"
         rec["left_at"] = float(ts or _now())
+        rec["leave_count"] = int(rec.get("leave_count") or 0) + 1
+        c = self._counter(group_openid, openid, rec)
+        c["leave_count"] = rec["leave_count"]
+        c["last_leave_at"] = rec["left_at"]
+        self._save_counts()
         self.save()
         return rec
 

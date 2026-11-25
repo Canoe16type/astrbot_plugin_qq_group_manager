@@ -738,8 +738,8 @@ const HELP = {
           "<b>审核 / 处罚</b>：<code>{basis_detail}</code> <code>{category}</code> <code>{category_public}</code> <code>{severity_label}</code> <code>{duration}</code> <code>{punish}</code> <code>{rule}</code> <code>{rule_name}</code> <code>{reason}</code> <code>{reason_line}</code> <code>{vid}</code> <code>{verdict}</code> <code>{method}</code> <code>{days}</code> <code>{mentions}</code> <code>{next}</code><br>" +
           "<b>踢人</b>：<code>{names}</code> <code>{id}</code> <code>{error}</code> <code>{max}</code> <code>{count}</code> <code>{lines}</code><br>" +
           "<b>禁言 / 撤回</b>：<code>{username}</code> <code>{duration_text}</code> <code>{openid}</code> <code>{list}</code> <code>{count}</code> <code>{error}</code><br>" +
-          "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code><br>" +
-          "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
+          "<b>审批 / 欢迎</b>：<code>{username}</code> <code>{strategy}</code> <code>{bot_name}</code> <code>{list}</code> <code>{join_count}</code> <code>{leave_count}</code><br>" +
+          "<b>成员 / 管理员 / 日报</b>：<code>{user}</code> <code>{admins}</code> <code>{short}</code> <code>{extra}</code> <code>{join_count}</code> <code>{leave_count}</code> <code>{leave_today}</code> <code>{date}</code> <code>{time}</code> <code>{muted_count}</code> <code>{pending_count}</code><br>" +
           "<b>Markdown 专用</b>：<code>{at}</code>（真 @）、<code>{avatar}</code> / <code>{avatar:宽度}</code>（头像）；纯文本下这些变量不生成标签/图片。" },
     { id:"modes", term:"纯文本 / Markdown 显示对照", go:[],
       def:"<b>同一条模板，两种格式实际发出去的样子：</b><br><br>" +
