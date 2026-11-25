@@ -379,13 +379,14 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <!-- ② 举报设置 -->
  <section class="mod-pane" id="mod-pane-settings">
  <p class="desc">举报设置同样按群独立。修改后点底部“保存”。</p>
+ <h4 class="settings-title">核心开关</h4>
  <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-enabled" /><span>启用本群 <code>/群管 举报</code> 审核</span></label>
  <label class="field check"><input type="checkbox" id="s-dry_run" /><span><b>试运行</b>（只判定、不撤回不禁言，建议新群先开着）</span></label>
- <label class="field check"><input type="checkbox" id="s-auto_scan" /><span>隐藏开关：<b>本群自动巡检</b>（默认关，仅本群生效）</span></label>
- <label class="field check"><input type="checkbox" id="s-auto_scan_llm" /><span>巡检时调用模型（默认关，只跑零成本关键词）</span></label>
+ <label class="field check"><input type="checkbox" id="s-report_ack_enabled" /><span><b>举报受理回执</b>：收到举报先回一句「已收到，正在核对」，再给结果（关闭后仅在走模型时回执）</span></label>
  </div>
- <p class="desc">维度开关（按实现分层：语义与群规共用一次模型调用，不能只关其中一个）</p>
+ <h4 class="settings-title">审核维度</h4>
+ <p class="desc">按实现分层：语义与群规共用一次模型调用，不能只关其中一个。</p>
  <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-enable_keyword" /><span>维度：<b>关键词层</b>（词库 + 本群自定义词，零 API 成本）</span></label>
  <label class="field check"><input type="checkbox" id="s-enable_model" /><span>维度：<b>模型层</b>（语义 + 群规；关闭＝不调用模型，判定只剩关键词层）</span></label>
@@ -393,18 +394,16 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field check"><input type="checkbox" id="s-keep_context" /><span>静默留存最近消息（仅供审核取上下文，仅存本地）</span></label>
  <label class="field check"><input type="checkbox" id="s-reply_when_clean" /><span>未违规时也在群里回复一句</span></label>
  </div>
- <p class="desc">基础参数（阈值、上限、时限）</p>
+ <h4 class="settings-title">判定参数</h4>
  <div class="grid input-zone">
  <label class="field"><span>上下文条数</span><input type="number" id="s-context_size" min="0" max="20" /></label>
  <label class="field"><span>置信度阈值（低于此值不自动执行）</span><input type="number" id="s-confidence_threshold" step="0.01" min="0" max="1" /></label>
  <label class="field"><span>警告置信度下限（低于主阈值时仅警告）</span><input type="number" id="s-warn_confidence_threshold" step="0.05" min="0" max="1" title="警告不改变成员状态，风险低：置信度落在 [警告下限, 主阈值) 时只发警告；默认 0.6" /></label>
  <label class="field"><span>单次禁言上限（秒）</span><input type="number" id="s-max_mute_seconds" min="60" /></label>
  <label class="field"><span>撤回尝试时限（秒，官方硬限 120；0=不限，总是尝试）</span><input type="number" id="s-recall_max_age_seconds" min="0" /></label>
- <label class="field"><span>每人每小时举报上限（0=不限）</span><input type="number" id="s-report_limit_per_hour" min="0" /></label>
  </div>
- <p class="desc">处罚策略（先定「怎么罚」，下面两组参数再定「罚多重」）</p>
+ <h4 class="settings-title">处罚策略</h4>
  <div class="grid switch-zone">
- <label class="field check"><input type="checkbox" id="s-report_ack_enabled" /><span><b>举报受理回执</b>：收到举报先回一句「已收到，正在核对」，再给结果（关闭后仅在走模型时回执）</span></label>
  </div>
  <div class="grid switch-zone">
  <label class="field check"><input type="checkbox" id="s-smart_penalty" /><span><b>智能分级处罚</b>：轻微→警告、中度→撤回+警告、高危→禁言；高危但置信度不足→转人工待办（默认关，关闭时行为与旧版一致）</span></label>
@@ -420,8 +419,15 @@ A1B2C3D4E5F6...  , 小红"></textarea>
  <label class="field"><span>复犯：每次前科增加倍率（1＝每次翻倍）</span><input type="number" id="s-escalate_step" step="0.5" min="0" max="10" /></label>
  <label class="field"><span>复犯：倍率上限</span><input type="number" id="s-escalate_max_multiplier" step="0.5" min="1" max="20" /></label>
  </div>
+ <details class="settings-advanced">
+ <summary>高级：巡检、成本与变体</summary>
+ <div class="grid switch-zone" style="margin-top:10px">
+ <label class="field check"><input type="checkbox" id="s-auto_scan" /><span>隐藏开关：<b>本群自动巡检</b>（默认关，仅本群生效）</span></label>
+ <label class="field check"><input type="checkbox" id="s-auto_scan_llm" /><span>巡检时调用模型（默认关，只跑零成本关键词）</span></label>
+ </div>
  <p class="desc">模型成本防护（防刷屏把额度烧完、防 provider 卡住堵队列）</p>
  <div class="grid input-zone">
+ <label class="field"><span>每人每小时举报上限（0=不限）</span><input type="number" id="s-report_limit_per_hour" min="0" /></label>
   <label class="field"><span>每日模型调用上限（次，0=不限）</span><input type="number" id="s-daily_budget" step="1" min="0" /></label>
   <label class="field"><span>同群模型排队上限（条，0=不限）</span><input type="number" id="s-llm_queue_limit" step="1" min="0" title="同一群同时排队等待模型判定的消息数，超过的部分跳过模型层、只按关键词层处理" /></label>
   <label class="field"><span>单次模型超时（秒，0=不限）</span><input type="number" id="s-llm_timeout" step="1" min="0" title="provider 卡住超过该时长按失败处理，避免占住同群队列" /></label>
@@ -453,7 +459,8 @@ A1B2C3D4E5F6...  , 小红"></textarea>
   <label class="field"><span>自动禁言：冷却（小时，0＝不冷却）</span><input type="number" id="s-variant_strike_cooldown_hours" min="0" max="168" /></label>
   </div>
  </div>
- <p class="desc">名单与自定义规则</p>
+ </details>
+ <h4 class="settings-title">名单与自定义规则</h4>
  <label class="field block">
  <span>豁免成员（每行一个 openid，管理员自动豁免）</span>
  <textarea id="s-whitelist" rows="3" spellcheck="false"></textarea>

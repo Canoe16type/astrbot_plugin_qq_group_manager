@@ -391,12 +391,28 @@ function renderSettings() {
 
     // 「消息模板」按描述前缀（通用 · 禁言 · 撤回 …）分子组，其余分组直接铺开
     const isTpl = group.key === "templates";
-    const TPL_SUB_ORDER = ["通用", "审核", "踢人", "禁言", "撤回", "审批", "成员", "欢迎", "其他"];
-    const tplSub = (item) => String(item.description).split("·")[0].trim() || "其他";
+    const TPL_SUB_ORDER = ["审核", "记录", "禁言", "撤回", "踢人", "审批", "欢迎", "成员", "举报", "帮助与状态", "其他"];
+    const tplSub = (item) => {
+      const key = String(item.key || "");
+      if (/^msg_records_/.test(key)) return "记录";
+      if (/kick/.test(key)) return "踢人";
+      if (/mute|unmute/.test(key)) return "禁言";
+      if (/recall|withdraw/.test(key)) return "撤回";
+      if (/join|approval|approve|reject|request/.test(key)) return "审批";
+      if (/welcome/.test(key)) return "欢迎";
+      if (/member/.test(key)) return "成员";
+      if (/report/.test(key)) return "举报";
+      if (/help|group_intro|status|daily|selfcheck/.test(key)) return "帮助与状态";
+      if (/mod_|basis|category|semantic|dry_run|hit|todo/.test(key)) return "审核";
+      const prefix = String(item.description).split("·")[0].trim();
+      return TPL_SUB_ORDER.includes(prefix) ? prefix : "其他";
+    };
     const tplRank = (item) => {
       const i = TPL_SUB_ORDER.indexOf(tplSub(item));
       return i < 0 ? TPL_SUB_ORDER.length : i;
     };
+    const subCounts = {};
+    group.items.forEach((it) => { const k = tplSub(it); subCounts[k] = (subCounts[k] || 0) + 1; });
     const items = isTpl
       ? group.items.map((it, i) => [it, i]).sort((a, b) => tplRank(a[0]) - tplRank(b[0]) || a[1] - b[1]).map(([it]) => it)
       : group.items;
@@ -407,15 +423,19 @@ function renderSettings() {
       if (isTpl) {
         const sub = String(item.description).split("·")[0].trim() || "其他";
         if (sub !== lastSub) {
-          const h = document.createElement("div");
-          h.className = "set-subtitle";
-          h.textContent = "— " + sub + " —";
-          h.dataset.sub = sub;
-          body.appendChild(h);
+          const det = document.createElement("details");
+          det.className = "set-sub-details";
+          det.open = sub === "审核";
+          const sum = document.createElement("summary");
+          sum.className = "set-subtitle";
+          sum.textContent = `${sub}（${subCounts[sub] || 0}）`;
+          sum.dataset.sub = sub;
+          det.appendChild(sum);
           grid = document.createElement("div");
           grid.className = "set-items";
           grid.dataset.sub = sub;
-          body.appendChild(grid);
+          det.appendChild(grid);
+          body.appendChild(det);
           switchRow = null;
           lastSub = sub;
         }
